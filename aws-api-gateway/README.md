@@ -131,9 +131,11 @@ Minutes with fewer requests than the minimum are ignored, so a handful of intent
 **Rollback Lambda.** When an alarm enters `ALARM`, the Lambda:
 1. loads the deployment history and **only acts if the latest deployment is younger than the rollback window** (default 30 min) and is not itself a rollback or restore
 2. picks the target: the newest earlier deployment that is **verified** (it passed the integration tests, `verifiedAt`) and was never rolled back. It never just takes "the previous deployment", which may be untested or broken. No verified target means no rollback.
-3. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once
+3. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once, and marks it unstable (`stable=false`, no `stableFor`)
 4. downloads the target's OpenAPI spec from S3, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 5. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
+
+**Current and stable deployments.** The record the stage serves has `current=true`. Recording a new deployment (deploy, rollback or restore) moves `current` to it and, in the same transaction, marks the previous one `stable=true` with `stableFor` = seconds between its deployment and the next one. A deployment an alarm rolled back is instead left `stable=false` without `stableFor`. `npm run deployment:list` shows both.
 
 **Verified deployments.** CI runs `npm run deployment:verify -- --env <env>` after the integration tests pass. It marks the deployment the stage serves as verified, after checking that it is the latest record.
 A deployment made by hand only becomes a rollback target after you run the integration tests and then `deployment:verify`.

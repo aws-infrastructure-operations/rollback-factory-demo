@@ -4,7 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
-import { buildRecord, compactTimestamp, specKey } from '../lambda/shared/deployments.js';
+import { buildRecord, compactTimestamp, DeploymentRecord, retirement, specKey } from '../lambda/shared/deployments.js';
 
 const synth = (env: string) => {
   const app = new cdk.App();
@@ -61,5 +61,22 @@ test('builds a deployment record', () => {
     description: undefined,
     rolledBackFrom: undefined,
     verifiedAt: undefined,
+    current: true,
   });
+});
+
+const record = (deployedAt: string, extra: Partial<DeploymentRecord> = {}) => ({
+  apiName: 'api-user-dev', deployedAt, deploymentId: deployedAt, source: 'cicd', current: true, ...extra,
+} as DeploymentRecord);
+
+test('a replaced deployment is stable for the time until the next deployment', () => {
+  const previous = record('2026-10-06T10:00:00.000Z');
+  const next = record('2026-10-06T12:30:05.600Z');
+  assert.deepEqual(retirement(previous, next), { current: false, stable: true, stableFor: 9006 });
+});
+
+test('a rolled-back deployment is unstable and gets no stableFor', () => {
+  const previous = record('2026-10-06T10:00:00.000Z', { rolledBackAt: '2026-10-06T10:05:00.000Z' });
+  const next = record('2026-10-06T10:05:01.000Z', { source: 'rollback' });
+  assert.deepEqual(retirement(previous, next), { current: false, stable: false });
 });
