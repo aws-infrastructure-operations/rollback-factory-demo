@@ -11,6 +11,7 @@ const synth = (overrides: ConfigOverrides = {}) => {
   const stack = new FrontendAlarmsStack(app, 'Test', {
     config: getConfig('dev', overrides),
     distributionId: 'E2EXAMPLE',
+    mainRegion: 'eu-central-1',
     env: { region: 'us-east-1' },
   });
   return Template.fromStack(stack);
@@ -85,7 +86,8 @@ test('alarmNotifications=false keeps the alarms but turns their actions off', ()
 });
 
 test('alarmEmail subscribes an e-mail address to the topic', () => {
-  synth().resourceCountIs('AWS::SNS::Subscription', 0);
+  const emails = (t: Template) => Object.keys(t.findResources('AWS::SNS::Subscription', { Properties: { Protocol: 'email' } }));
+  assert.deepEqual(emails(synth()), []);
   synth({ alarmEmail: 'ops@example.com' }).hasResourceProperties('AWS::SNS::Subscription', {
     Protocol: 'email', Endpoint: 'ops@example.com',
   });
@@ -93,7 +95,7 @@ test('alarmEmail subscribes an e-mail address to the topic', () => {
 
 test('exports the alarm names and topic', () => {
   const outputs = synth().findOutputs('*');
-  for (const name of ['AlarmTopicArn', 'Alarm4xxName', 'Alarm5xxName']) {
+  for (const name of ['AlarmTopicArn', 'Alarm4xxName', 'Alarm5xxName', 'RollbackFunctionName']) {
     assert.deepEqual(outputs[name]?.Export, { Name: `rollback-factory-demo-frontend-${name}-dev` });
   }
 });

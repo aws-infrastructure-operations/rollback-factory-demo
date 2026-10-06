@@ -1,7 +1,12 @@
+import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
@@ -11,16 +16,19 @@ export interface FrontendAlarmsStackProps extends cdk.StackProps {
   config: EnvConfig;
   /** The distribution in the main stack (a cross-region reference). */
   distributionId: string;
+  /** Region of the main stack, where the deployments table lives. */
+  mainRegion: string;
 }
 
-/** us-east-1: CloudFront 4xx/5xx alarms + SNS topic, and the rollback Lambda (FE-08). */
+/** us-east-1: CloudFront 4xx/5xx alarms, their SNS topic and the rollback Lambda it invokes. */
 export class FrontendAlarmsStack extends cdk.Stack {
   readonly alarmTopic: sns.Topic;
   readonly alarms: cloudwatch.Alarm[];
+  readonly rollbackFunction: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: FrontendAlarmsStackProps) {
     super(scope, id, props);
-    const { config, distributionId } = props;
+    const { config, distributionId, mainRegion } = props;
     const name = config.resourceName;
 
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
@@ -81,11 +89,58 @@ export class FrontendAlarmsStack extends cdk.Stack {
       },
     }));
 
+    // --- Rollback ---------------------------------------------------------------
+    this.rollbackFunction = new NodejsFunction(this, 'RollbackFunction', {
+      functionName: name('frontend-rollback'),
+      description: `Switches ${config.frontendName} back to the previous verified release on alarm`,
+      entry: path.join(__dirname, '..', 'lambda', 'rollback', 'handler.ts'),
+      runtime: lambda.Runtime.NODEJS_24_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      // reads the history, updates the distribution and the table; doesn't wait for the deploy
+      timeout: cdk.Duration.seconds(30),
+      retryAttempts: 0,
+      environment: {
+        FRONTEND_NAME: config.frontendName,
+        DISTRIBUTION_ID: distributionId,
+        DEPLOYMENTS_TABLE: config.deploymentsTableName,
+        DEPLOYMENTS_TABLE_REGION: mainRegion,
+        ROLLBACK_WINDOW_MINUTES: String(config.rollbackWindowMinutes),
+        ALARM_NAMES: Object.values(config.alarmNames).join(','),
+      },
+      logGroup: new logs.LogGroup(this, 'RollbackLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+      bundling: { minify: true, sourceMap: true },
+    });
+    // Only this frontend's alarms trigger a rollback, even if something else publishes to the topic.
+    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction, {
+      filterPolicyWithMessageBody: {
+        AlarmName: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.stringFilter({
+          allowlist: Object.values(config.alarmNames),
+        })),
+      },
+    }));
+
+    // The table is in the main region; its name is fixed, so no cross-region reference is needed.
+    dynamodb.TableV2.fromTableArn(this, 'DeploymentsTable', cdk.Arn.format({
+      service: 'dynamodb',
+      region: mainRegion,
+      resource: 'table',
+      resourceName: config.deploymentsTableName,
+    }, this)).grantReadWriteData(this.rollbackFunction);
+    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudfront:GetDistributionConfig', 'cloudfront:UpdateDistribution', 'cloudfront:CreateInvalidation'],
+      resources: [cdk.Arn.format({ service: 'cloudfront', region: '', resource: 'distribution', resourceName: distributionId }, this)],
+    }));
+
     // --- Outputs --------------------------------------------------------------
     const out = (outputName: string, value: string) =>
       new cdk.CfnOutput(this, outputName, { value, exportName: name(`frontend-${outputName}`) });
     out('AlarmTopicArn', this.alarmTopic.topicArn);
     out('Alarm4xxName', this.alarms[0].alarmName);
     out('Alarm5xxName', this.alarms[1].alarmName);
+    out('RollbackFunctionName', this.rollbackFunction.functionName);
   }
 }
