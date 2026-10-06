@@ -11,10 +11,10 @@ const synth = (env: string) => {
   return Template.fromStack(new ApiUserStack(app, `Test-${env}`, { config: getConfig(env) }));
 };
 
-test('creates the spec bucket <api>-<account>-deployments', () => {
+test('creates the spec bucket rollback-factory-demo-<account>-deployments-<env>', () => {
   const t = synth('dev');
   t.hasResourceProperties('AWS::S3::Bucket', {
-    BucketName: { 'Fn::Join': ['', ['api-user-dev-', { Ref: 'AWS::AccountId' }, '-deployments']] },
+    BucketName: { 'Fn::Join': ['', ['rollback-factory-demo-', { Ref: 'AWS::AccountId' }, '-deployments-dev']] },
     VersioningConfiguration: { Status: 'Enabled' },
   });
 });
@@ -22,7 +22,7 @@ test('creates the spec bucket <api>-<account>-deployments', () => {
 test('creates the deployments table keyed by api and time', () => {
   const t = synth('prod');
   t.hasResourceProperties('AWS::DynamoDB::GlobalTable', {
-    TableName: 'api-user-prod-deployments',
+    TableName: 'rollback-factory-demo-deployments-prod',
     KeySchema: [
       { AttributeName: 'apiName', KeyType: 'HASH' },
       { AttributeName: 'deployedAt', KeyType: 'RANGE' },

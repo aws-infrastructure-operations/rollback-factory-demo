@@ -11,7 +11,6 @@ import { AddPermissionCommand, LambdaClient, ResourceConflictException } from '@
 import {
   claimRollback, DeploymentTarget, getSpec, listDeployments, recordDeployment,
 } from '../shared/deployments.js';
-import { alarmNamePrefix } from '../../lib/config.js';
 import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from './plan.js';
 
 const env = (name: string) => {
@@ -28,6 +27,7 @@ const target: DeploymentTarget = {
   table: env('DEPLOYMENTS_TABLE'),
 };
 const WINDOW_MINUTES = Number(env('ROLLBACK_WINDOW_MINUTES'));
+const ALARM_NAMES = env('ALARM_NAMES').split(',');
 
 const apigw = new APIGatewayClient({});
 const lambda = new LambdaClient({});
@@ -58,7 +58,7 @@ async function ensureInvokePermission(functionArn: string) {
 }
 
 export const handler = async (event: SNSEvent) => {
-  const alarms = ownAlarms(parseAlarms(event), alarmNamePrefix(target.apiName, target.stageName));
+  const alarms = ownAlarms(parseAlarms(event), ALARM_NAMES);
   if (alarms.length === 0) {
     log('no ALARM transition of this API in event, nothing to do');
     return { action: 'skip', reason: 'no ALARM transition of this API' };
