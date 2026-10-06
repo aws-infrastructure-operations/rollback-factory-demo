@@ -1,6 +1,8 @@
 import { RELEASE_ID_PATTERN } from '../lambda/shared/releases.js';
 
-export type EnvName = 'dev' | 'prod';
+/** In promotion order. Only prod keeps its data when its stacks are deleted. */
+export const ENV_NAMES = ['dev', 'testing', 'staging', 'prod'] as const;
+export type EnvName = (typeof ENV_NAMES)[number];
 
 export interface AlarmConfig {
   /** Alarm actions (SNS -> rollback Lambda) on/off. Alarms still change state either way. */
@@ -61,8 +63,8 @@ export const ALARMS_REGION = 'us-east-1';
 export const DEFAULT_REGION = 'eu-central-1';
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
-  if (envName !== 'dev' && envName !== 'prod') {
-    throw new Error(`Unknown env "${envName}". Pass -c env=dev or -c env=prod`);
+  if (!ENV_NAMES.includes(envName as EnvName)) {
+    throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}>`);
   }
   const liveReleaseId = overrides.liveReleaseId || undefined;
   if (liveReleaseId && !RELEASE_ID_PATTERN.test(liveReleaseId)) {
@@ -76,7 +78,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
   const resourceName = (resource: string) => `${PROJECT_NAME}-${resource}-${envName}`;
 
   return {
-    envName,
+    envName: envName as EnvName,
     frontendName: `frontend-user-${envName}`,
     resourceName,
     stackName: resourceName('frontend'),
