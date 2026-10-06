@@ -10,9 +10,6 @@ on:
       environment:
         type: string
         required: true
-      bake_minutes:
-        type: string
-        default: "10"
       chaos_failure_rate:
         type: string
         default: "0"
@@ -33,7 +30,6 @@ jobs:
       API_ENV: ${{ inputs.environment }}
       AWS_REGION: ${{ vars.AWS_REGION }}
       CHAOS_FAILURE_RATE: ${{ inputs.chaos_failure_rate }}
-      BAKE_MINUTES: ${{ inputs.bake_minutes }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -78,9 +74,6 @@ jobs:
         run: >-
           npm run rollback:trigger -- --env "$API_ENV" --alarm 5xx
           --reason "Integration tests failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-
-      - name: Bake - watch 4xx/5xx alarms (rollback on alarm)
-        run: npm run alarms:watch -- --env "$API_ENV" --minutes "$BAKE_MINUTES"
 
       - name: Deployment history
         if: always() && steps.integration.outcome != 'skipped'

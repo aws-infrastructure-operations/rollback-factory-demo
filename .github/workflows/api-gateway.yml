@@ -1,9 +1,9 @@
 name: api-gateway
 
 # PRs: typecheck, unit tests, synth, collection check.
-# main / manual: deploy dev -> integration tests -> bake -> deploy prod -> integration tests -> bake.
-# A failed integration test triggers the rollback Lambda; an alarm during the bake is rolled back
-# by the alarm -> SNS -> rollback Lambda path and fails the job.
+# main / manual: deploy dev -> integration tests -> deploy prod -> integration tests.
+# A failed integration test triggers the rollback Lambda. Alarms after a deploy are handled in AWS
+# (4xx/5xx alarm -> SNS -> rollback Lambda), not by the workflow.
 
 on:
   push:
@@ -21,15 +21,6 @@ on:
         description: Deploy to prod after dev is green
         type: boolean
         default: true
-      # Numbers are passed as strings: GitHub rejects expression results for number inputs of reusable workflows.
-      dev_bake_minutes:
-        description: Minutes to watch the dev alarms after deploying
-        type: string
-        default: "3"
-      prod_bake_minutes:
-        description: Minutes to watch the prod alarms after deploying
-        type: string
-        default: "10"
       dev_chaos_failure_rate:
         description: "Demo only: share of dev requests to fail with 500 (0..1)"
         type: string
@@ -80,7 +71,6 @@ jobs:
     uses: ./.github/workflows/api-gateway-deploy.yml
     with:
       environment: dev
-      bake_minutes: ${{ inputs.dev_bake_minutes || '3' }}
       chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
     secrets: inherit
 
@@ -90,5 +80,4 @@ jobs:
     uses: ./.github/workflows/api-gateway-deploy.yml
     with:
       environment: prod
-      bake_minutes: ${{ inputs.prod_bake_minutes || '10' }}
     secrets: inherit

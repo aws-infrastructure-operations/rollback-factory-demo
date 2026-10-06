@@ -18,8 +18,7 @@
     "deployment:record": "tsx scripts/record-deployment.ts",
     "deployment:list": "tsx scripts/list-deployments.ts",
     "test:integration": "tsx --test --test-concurrency=1 integration/*.test.ts",
-    "rollback:trigger": "tsx scripts/trigger-rollback.ts",
-    "alarms:watch": "tsx scripts/watch-alarms.ts"
+    "rollback:trigger": "tsx scripts/trigger-rollback.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",
@@ -28,7 +27,6 @@
   "devDependencies": {
     "@aws-sdk/client-api-gateway": "^3.1146.0",
     "@aws-sdk/client-cloudformation": "^3.1146.0",
-    "@aws-sdk/client-cloudwatch": "^3.1146.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-lambda": "^3.1146.0",

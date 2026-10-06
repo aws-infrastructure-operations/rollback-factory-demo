@@ -167,12 +167,12 @@ main / manual ─► test ─► deploy dev ────────────
                          ├ cdk deploy
                          ├ record deployment (spec -> S3, record -> DynamoDB)
                          ├ integration tests ── fail ─► rollback:trigger, job fails
-                         ├ bake: watch 4xx/5xx alarms ── ALARM ─► wait for the rollback Lambda, job fails
                          └ deployment history -> job summary
 ```
 
-Prod is deployed only when dev passes all steps, including the bake.
-A manual run (`workflow_dispatch`) can skip prod, change the bake times, or set `dev_chaos_failure_rate=1` to demo a rollback in dev.
+Prod is deployed only when every dev step passes, including the integration tests.
+The workflow does not watch the alarms after a deploy; that part is done in AWS. A 4xx or 5xx alarm notifies SNS, which invokes the rollback Lambda (see [Alarms & automatic rollback](#alarms--automatic-rollback)), whether or not a workflow is running.
+A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate=1` to demo a rollback in dev.
 
 ### Setup
 
@@ -191,7 +191,6 @@ The deploy user needs CDK deploy rights (or permission to assume the CDK bootstr
 - API Gateway `GET` (exports)
 - S3 `PutObject` on the spec bucket
 - DynamoDB on the deployments table
-- `cloudwatch:DescribeAlarms`
 - `lambda:InvokeFunction` on the rollback Lambda
 
 Add required reviewers to the `prod` environment if promotions should wait for an approval.
