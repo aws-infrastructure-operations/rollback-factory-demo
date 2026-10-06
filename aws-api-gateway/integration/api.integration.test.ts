@@ -76,6 +76,27 @@ describe(`${config.apiName} (stage ${config.stageName})`, () => {
     });
   }
 
+  test('answers CORS preflights and adds CORS headers (browser frontend)', async () => {
+    const base = outputs.ApiUrl.replace(/\/$/, '');
+    const preflight = await fetch(`${base}/messages`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.cloudfront.net',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+    assert.ok(preflight.status < 300, `preflight status ${preflight.status}`);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+    assert.match(preflight.headers.get('access-control-allow-headers') ?? '', /Authorization/i);
+
+    const get = await fetch(`${base}/users`, { headers: { Authorization: token } });
+    assert.equal(get.headers.get('access-control-allow-origin'), '*');
+    const unauthorized = await fetch(`${base}/users`);
+    assert.equal(unauthorized.status, 401);
+    assert.equal(unauthorized.headers.get('access-control-allow-origin'), '*');
+  });
+
   test('rejects requests without a token (401)', async () => {
     const res = await call('GET', '/users');
     assert.equal(res.status, 401);

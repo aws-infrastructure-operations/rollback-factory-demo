@@ -6,7 +6,8 @@ const CHAOS_FAILURE_RATE = Number(process.env.CHAOS_FAILURE_RATE ?? 0);
 
 const json = (statusCode: number, body: unknown): APIGatewayProxyResult => ({
   statusCode,
-  headers: { 'Content-Type': 'application/json' },
+  // CORS: the frontend calls the API from its CloudFront domain
+  headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
   body: JSON.stringify(body),
 });
 

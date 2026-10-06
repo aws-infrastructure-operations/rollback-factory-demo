@@ -60,3 +60,29 @@ test('names every resource rollback-factory-demo-<resource>-<env>', () => {
   t.hasResourceProperties('AWS::ApiGateway::Authorizer', { Name: 'rollback-factory-demo-cognito-prod' });
   t.hasOutput('ApiId', { Export: { Name: 'rollback-factory-demo-ApiId-prod' } });
 });
+
+test('allows browsers to call the API from any origin (CORS)', () => {
+  const t = synth('dev');
+  const methods = Object.values(t.findResources('AWS::ApiGateway::Method')) as any[];
+  const preflights = methods.filter((m) => m.Properties.HttpMethod === 'OPTIONS');
+  // root + /users + /messages; preflights must not require a token
+  assert.equal(preflights.length, 3);
+  for (const m of preflights) assert.equal(m.Properties.AuthorizationType, 'NONE');
+  t.hasResourceProperties('AWS::ApiGateway::Method', {
+    HttpMethod: 'OPTIONS',
+    Integration: Match.objectLike({
+      IntegrationResponses: Match.arrayWith([Match.objectLike({
+        ResponseParameters: Match.objectLike({
+          'method.response.header.Access-Control-Allow-Origin': "'*'",
+          'method.response.header.Access-Control-Allow-Headers': "'Authorization,Content-Type'",
+        }),
+      })]),
+    }),
+  });
+  for (const type of ['DEFAULT_4XX', 'DEFAULT_5XX']) {
+    t.hasResourceProperties('AWS::ApiGateway::GatewayResponse', {
+      ResponseType: type,
+      ResponseParameters: { 'gatewayresponse.header.Access-Control-Allow-Origin': "'*'" },
+    });
+  }
+});

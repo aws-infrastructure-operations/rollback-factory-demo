@@ -70,6 +70,7 @@ describe('stack', () => {
     const versions = Object.keys(t.findResources('AWS::Lambda::Version'));
     assert.equal(versions.length, 1);
     const uris = Object.values(t.findResources('AWS::ApiGateway::Method'))
+      .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS') // CORS preflights are mock integrations
       .map((m: any) => JSON.stringify(m.Properties.Integration.Uri));
     assert.equal(uris.length, 4);
     for (const uri of uris) assert.ok(uri.includes(`"Ref":"${versions[0]}"`), uri);
