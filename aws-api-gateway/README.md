@@ -174,6 +174,20 @@ Prod is deployed only when every dev step passes, including the integration test
 The workflow does not watch the alarms after a deploy; that part is done in AWS. A 4xx or 5xx alarm notifies SNS, which invokes the rollback Lambda (see [Alarms & automatic rollback](#alarms--automatic-rollback)), whether or not a workflow is running.
 A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate=1` to demo a rollback in dev.
 
+### Rollback demo (manual workflow)
+
+[`break-api-demo.yml`](../.github/workflows/break-api-demo.yml) (Actions → `break-api-demo` → Run workflow) demonstrates the alarm-driven rollback in **dev** without merging anything:
+
+1. **preflight:** checks that dev has a recorded deployment to roll back to (deploy `main` first)
+2. **deploy:** deploys the broken branch (`broken_ref`, default `demo/break-api`) to dev and records the deployment
+3. **traffic:** `npm run demo:traffic` sends real HTTPS requests. The console's "Test" button bypasses the stage, so it never counts toward the alarms.
+4. **rollback:** the 5xx alarm notifies SNS, which invokes the rollback Lambda
+5. **result:** the job succeeds once the rollback is recorded and the API answers 200 again, and fails if no rollback happens within `traffic_minutes`
+
+The broken branch is only checked out and deployed; the scripts come from `main`.
+A shared concurrency group stops this demo and a normal dev deploy from running at the same time.
+If `main` changes the infrastructure, rebase `demo/break-api` on `main` first, so the demo deploys the current stack plus the bug.
+
 ### Setup
 
 Create two GitHub **environments**, `dev` and `prod`, in Settings -> Environments.

@@ -1,0 +1,96 @@
+name: break-api-demo
+
+# Manual demo of the alarm-driven rollback, in dev only:
+#   1. check dev has a recorded deployment to roll back to
+#   2. deploy the broken branch (default demo/break-api) to dev and record it
+#   3. send real traffic -> 5xx alarm -> SNS -> rollback Lambda
+#   4. succeed once the rollback is recorded and the API answers 200 again
+#
+# The broken branch is only checked out and deployed, never merged. Scripts come
+# from the branch this workflow runs on (main), so the broken branch doesn't need them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      broken_ref:
+        description: Branch / ref with the broken API to deploy to dev
+        type: string
+        default: demo/break-api
+      traffic_minutes:
+        description: Max minutes to send traffic while waiting for the rollback
+        type: string
+        default: "10"
+
+concurrency:
+  group: api-gateway-deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  break-and-rollback:
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 45
+    env:
+      API_ENV: dev
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      BROKEN_REF: ${{ inputs.broken_ref }}
+      TRAFFIC_MINUTES: ${{ inputs.traffic_minutes }}
+    steps:
+      - name: Check out scripts (${{ github.ref_name }})
+        uses: actions/checkout@v7
+        with:
+          path: tools
+      - name: Check out broken API (${{ inputs.broken_ref }})
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.broken_ref }}
+          path: broken
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            tools/aws-api-gateway/package-lock.json
+            broken/aws-api-gateway/package-lock.json
+      - name: Install
+        run: |
+          npm ci --prefix tools/aws-api-gateway
+          npm ci --prefix broken/aws-api-gateway
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Preflight - dev has a deployment to roll back to
+        working-directory: tools/aws-api-gateway
+        run: npm run -s demo:traffic -- --env dev --preflight
+
+      - name: Deploy broken API to dev
+        working-directory: broken/aws-api-gateway
+        run: npx cdk deploy -c env=dev --require-approval never
+
+      - name: Record the broken deployment
+        working-directory: broken/aws-api-gateway
+        run: >-
+          npm run -s deployment:record -- --env dev
+          --description "break-api-demo: $BROKEN_REF (run $GITHUB_RUN_ID)"
+
+      - name: Send traffic until the alarm rolls it back
+        working-directory: tools/aws-api-gateway
+        run: npm run -s demo:traffic -- --env dev --minutes "$TRAFFIC_MINUTES"
+
+      - name: Deployment history
+        if: always()
+        working-directory: tools/aws-api-gateway
+        run: |
+          {
+            echo "### api-user-dev deployments"
+            echo '```'
+            npm run -s deployment:list -- --env dev --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
