@@ -5,7 +5,7 @@ import { getConfig } from '../lib/config.js';
 import { createFrontendStacks } from '../lib/frontend-app.js';
 
 test('names the frontend and its resources per environment', () => {
-  for (const env of ['dev', 'prod']) {
+  for (const env of ['dev', 'testing', 'staging', 'prod']) {
     const config = getConfig(env);
     assert.equal(config.frontendName, `frontend-user-${env}`);
     assert.equal(config.resourceName('site'), `rollback-factory-demo-site-${env}`);
@@ -13,12 +13,12 @@ test('names the frontend and its resources per environment', () => {
     assert.equal(config.alarmsStackName, `rollback-factory-demo-frontend-alarms-${env}`);
     assert.equal(config.apiStackName, `rollback-factory-demo-${env}`);
   }
-  assert.equal(getConfig('dev').retainData, false);
+  for (const env of ['dev', 'testing', 'staging']) assert.equal(getConfig(env).retainData, false);
   assert.equal(getConfig('prod').retainData, true);
 });
 
 test('rejects unknown environments', () => {
-  assert.throws(() => getConfig('staging'), /Unknown env "staging"/);
+  assert.throws(() => getConfig('qa'), /Unknown env "qa"/);
   assert.throws(() => getConfig(undefined), /Unknown env/);
 });
 

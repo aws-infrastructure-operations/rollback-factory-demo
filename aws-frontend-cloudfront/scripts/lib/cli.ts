@@ -3,7 +3,7 @@ import { EnvConfig, getConfig } from '../../lib/config.js';
 
 type Option = { type: 'string' } | { type: 'boolean'; default: false };
 
-/** Parses `--env <dev|prod>` (default: FRONTEND_ENV or dev) plus extra string / boolean options. */
+/** Parses `--env <dev|testing|staging|prod>` (default: FRONTEND_ENV or dev) plus extra string / boolean options. */
 export function parseCli<S extends string = never, B extends string = never>(
   strings: readonly S[] = [],
   booleans: readonly B[] = [],

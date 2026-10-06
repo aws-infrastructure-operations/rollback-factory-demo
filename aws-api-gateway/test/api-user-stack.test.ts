@@ -42,12 +42,18 @@ test('validates POST bodies', () => {
 });
 
 test('rejects unknown environments', () => {
-  try {
-    getConfig('staging');
-  } catch {
-    return;
+  assert.throws(() => getConfig('qa'), /Unknown env "qa"/);
+  assert.throws(() => getConfig(undefined), /Unknown env/);
+});
+
+test('accepts testing and staging, which drop their data like dev', () => {
+  for (const env of ['testing', 'staging']) {
+    const config = getConfig(env);
+    assert.equal(config.apiName, `api-user-${env}`);
+    assert.equal(config.stackName, `rollback-factory-demo-${env}`);
+    assert.equal(config.retainData, false);
   }
-  throw new Error('expected getConfig to throw');
+  assert.equal(getConfig('prod').retainData, true);
 });
 
 test('names every resource rollback-factory-demo-<resource>-<env>', () => {

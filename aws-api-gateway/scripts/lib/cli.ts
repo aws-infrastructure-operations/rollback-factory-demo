@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { EnvConfig, getConfig } from '../../lib/config.js';
 
-/** Parses `--env <dev|prod>` (default: API_ENV or dev) plus any extra string options. */
+/** Parses `--env <dev|testing|staging|prod>` (default: API_ENV or dev) plus any extra string options. */
 export function parseCli<T extends string>(extra: readonly T[] = []) {
   const options = Object.fromEntries([
     ['env', { type: 'string' }],
