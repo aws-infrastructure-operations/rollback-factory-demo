@@ -1,24 +1,21 @@
 /**
- * Sends real HTTPS traffic to the deployed API (what CloudWatch alarms see; the
- * console's "Test" button doesn't count) until the rollback Lambda records a
- * rollback, then checks the API is healthy again. Used by the break-api demo.
+ * Sends real HTTPS traffic to the deployed API for a fixed time (what CloudWatch
+ * alarms see; the console's "Test" button doesn't count) and reports the status
+ * codes every 30 s. It does not roll back or wait for a rollback: that is the
+ * job of the alarm -> SNS -> rollback Lambda path. Used by the break-api demo.
  *
  * Usage:
  *   npx tsx scripts/generate-traffic.ts --env dev --preflight          # is there a deployment to roll back to?
  *   npx tsx scripts/generate-traffic.ts --env dev [--minutes 10] [--interval 3]
- *
- * Exits 0 once a rollback happened and the API answers 200 again, 1 otherwise.
  */
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { getConfig } from '../lib/config.js';
-import { DeploymentRecord, listDeployments } from '../lambda/shared/deployments.js';
+import { listDeployments } from '../lambda/shared/deployments.js';
 import { log, run } from './lib/cli.js';
 import { deleteUser, ensureUser, getIdToken, randomPassword } from './lib/cognito.js';
 import { deploymentTarget, requireStackOutputs } from './lib/stack.js';
-
-const HEALTHY_CHECKS = 5;
 
 run(async () => {
   const { values } = parseArgs({
@@ -35,19 +32,14 @@ run(async () => {
   if (!(minutes > 0) || !(intervalMs > 0)) throw new Error('--minutes and --interval must be positive numbers');
 
   const outputs = await requireStackOutputs(config);
-  const target = deploymentTarget(config, outputs);
-  const latest = async (): Promise<DeploymentRecord | undefined> =>
-    (await listDeployments(target.table, target.apiName, 1))[0];
 
   if (values.preflight) {
-    const baseline = await latest();
+    const target = deploymentTarget(config, outputs);
+    const [baseline] = await listDeployments(target.table, target.apiName, 1);
     if (!baseline) throw new Error(`No deployment recorded for ${config.apiName} - deploy main first, nothing to roll back to`);
     log(`Rollback target available: ${baseline.deployedAt} (${baseline.source}, deployment ${baseline.deploymentId})`);
     return;
   }
-
-  const baseline = await latest();
-  log(`Latest deployment: ${baseline?.deployedAt} (${baseline?.source}) - waiting for a rollback after it`);
 
   const username = `traffic-${randomUUID()}@example.com`;
   const password = randomPassword();
@@ -63,45 +55,28 @@ run(async () => {
       }
     };
 
+    log(`Sending traffic to ${baseUrl} for ${minutes} min (one request every ${intervalMs / 1000}s)`);
     const deadline = Date.now() + minutes * 60_000;
-    const statuses = new Map<number, number>();
-    let rollback: DeploymentRecord | undefined;
+    const window = new Map<number, number>();
+    const total = new Map<number, number>();
+    const count = (m: Map<number, number>, status: number) => m.set(status, (m.get(status) ?? 0) + 1);
+    const summary = (m: Map<number, number>) => [...m].map(([s, n]) => `${s || 'network-error'}x${n}`).join(' ');
     let lastReport = Date.now();
     let i = 0;
 
-    while (Date.now() < deadline && !rollback) {
+    while (Date.now() < deadline) {
       const status = await call(i++ % 2 ? '/messages' : '/users');
-      statuses.set(status, (statuses.get(status) ?? 0) + 1);
-
+      count(window, status);
+      count(total, status);
       if (Date.now() - lastReport >= 30_000) {
-        const summary = [...statuses].map(([s, n]) => `${s}x${n}`).join(' ');
-        log(`  ${new Date().toISOString()} last 30s: ${summary}`);
-        statuses.clear();
+        log(`  ${new Date().toISOString()} last 30s: ${summary(window)}`);
+        window.clear();
         lastReport = Date.now();
-
-        const current = await latest();
-        if (current?.source === 'rollback' && current.deployedAt !== baseline?.deployedAt) rollback = current;
       }
-      await sleep(intervalMs);
+      await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
     }
-
-    if (!rollback) {
-      throw new Error(
-        `No rollback recorded within ${minutes} min - check the alarm states and the logs of ${outputs.RollbackFunctionName}`,
-      );
-    }
-    log(`Rollback recorded at ${rollback.deployedAt}: ${rollback.description}`);
-
-    // The new stage deployment can take a few seconds to serve everywhere.
-    const healthyBy = Date.now() + 2 * 60_000;
-    let healthy = 0;
-    while (healthy < HEALTHY_CHECKS && Date.now() < healthyBy) {
-      const status = await call(healthy % 2 ? '/messages' : '/users');
-      healthy = status === 200 ? healthy + 1 : 0;
-      await sleep(2_000);
-    }
-    if (healthy < HEALTHY_CHECKS) throw new Error('Rolled back, but the API still does not answer 200');
-    log(`API healthy again: ${HEALTHY_CHECKS} consecutive 200 responses`);
+    if (window.size) log(`  ${new Date().toISOString()} last ${Math.round((Date.now() - lastReport) / 1000)}s: ${summary(window)}`);
+    log(`Done: ${i} requests (${summary(total)})`);
   } finally {
     await deleteUser(outputs.UserPoolId, username);
   }

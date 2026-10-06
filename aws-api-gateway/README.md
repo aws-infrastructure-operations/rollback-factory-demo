@@ -181,9 +181,10 @@ A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate
 
 1. **preflight:** checks that dev has a recorded deployment to roll back to (deploy `main` first)
 2. **deploy:** deploys the broken branch (`broken_ref`, default `demo/break-api`) to dev and records the deployment
-3. **traffic:** `npm run demo:traffic` sends real HTTPS requests. The console's "Test" button bypasses the stage, so it never counts toward the alarms.
-4. **rollback:** the 5xx alarm notifies SNS, which invokes the rollback Lambda
-5. **result:** the job succeeds once the rollback is recorded and the API answers 200 again, and fails if no rollback happens within `traffic_minutes`
+3. **traffic:** `npm run demo:traffic` sends real HTTPS requests for `traffic_minutes` (default 10), logs the status codes every 30 s, then the job finishes. The console's "Test" button bypasses the stage, so it never counts toward the alarms.
+
+The workflow does **not** roll back and doesn't wait for a rollback. That's left to AWS: the 5xx alarm notifies SNS, which invokes the rollback Lambda, usually a few minutes into the traffic.
+You'll see it in the traffic log (502s turn back into 200s), in the alarm, in the logs of `rollback-factory-demo-rollback-dev`, and in the job summary's deployment history (a `rollback` record).
 
 The broken branch is only checked out and deployed; the scripts come from `main`.
 A shared concurrency group stops this demo and a normal dev deploy from running at the same time.
