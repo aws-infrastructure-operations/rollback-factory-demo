@@ -10,12 +10,13 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | CloudFormation stack | `rollback-factory-demo-<env>` |
 | Cognito user pool + app client | `rollback-factory-demo-users-<env>` / `rollback-factory-demo-client-<env>` |
 | Cognito authorizer | `rollback-factory-demo-cognito-<env>` (`Authorization: <ID token>`) |
-| Lambda backend (Node 24, arm64) | `rollback-factory-demo-handler-<env>` |
+| Lambda backend (Node 24, arm64) | `rollback-factory-demo-handler-<env>`, invoked through its `live` alias |
 | S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
 | DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
 | CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-4xx-rate-<env>`, `rollback-factory-demo-5xx-rate-<env>` |
 | SNS notification topic | `rollback-factory-demo-notifications-<env>` |
 | Rollback Lambda | `rollback-factory-demo-rollback-<env>` |
+| Lambda 4xx / 5xx rate alarms (block the API rollback) | `rollback-factory-demo-lambda-4xx-rate-<env>`, `rollback-factory-demo-lambda-5xx-rate-<env>` |
 | Lambda errors alarm (informational, no rollback) | `rollback-factory-demo-lambda-errors-<env>` |
 | API access logs (JSON, 30 days) | `rollback-factory-demo-api-access-logs-<env>` |
 | Saved Logs Insights queries | `rollback-factory-demo-api-5xx-by-cause-<env>`, `rollback-factory-demo-api-5xx-requests-<env>` |
@@ -130,10 +131,11 @@ Minutes with fewer requests than the minimum are ignored, so a handful of intent
 
 **Rollback Lambda.** When an alarm enters `ALARM`, the Lambda:
 1. loads the deployment history and **only acts if the latest deployment is younger than the rollback window** (default 30 min) and is not itself a rollback or restore
-2. picks the target: the newest earlier deployment that is **verified** (it passed the integration tests, `verifiedAt`) and was never rolled back. It never just takes "the previous deployment", which may be untested or broken. No verified target means no rollback.
-3. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once, and marks it unstable (`stable=false`, no `stableFor`)
-4. downloads the target's OpenAPI spec from S3, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
-5. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
+2. checks that the errors are **not the backend Lambda's fault** (see below). An API rollback can't fix those, so it is skipped
+3. picks the target: the newest earlier deployment that is **verified** (it passed the integration tests, `verifiedAt`) and was never rolled back. It never just takes "the previous deployment", which may be untested or broken. No verified target means no rollback.
+4. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once, and marks it unstable (`stable=false`, no `stableFor`)
+5. downloads the target's OpenAPI spec from S3, points its integrations at the handler's `live` alias, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
+6. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
 
 **Current and stable deployments.** The record the stage serves has `current=true`. Recording a new deployment (deploy, rollback or restore) moves `current` to it and, in the same transaction, marks the previous one `stable=true` with `stableFor` = seconds between its deployment and the next one. A deployment an alarm rolled back is instead left `stable=false` without `stableFor`. `npm run deployment:list` shows both.
 
@@ -146,7 +148,13 @@ A deployment made by hand only becomes a rollback target after you run the integ
 
 The rollback Lambda does the restore (`source=restore` in the history). A restored deployment counts as unverified until the tests pass again.
 
-**Code rollback.** The API integrates with a *published Lambda version* instead of `$LATEST`, so every exported spec pins the exact backend code it ran with. Re-importing an old spec therefore rolls back the Lambda code too. Old versions are retained, and the rollback Lambda gives API Gateway permission again to invoke the version it restores.
+**API rollbacks keep the latest code.** The API invokes the handler through its `live` alias, which every `cdk deploy` moves to the newly published version. A rollback or restore only brings back the API config (routes, authorizer, validators, integrations). Before re-importing a spec, the rollback Lambda points its integrations at the alias, including specs recorded before the alias existed, which reference a fixed version.
+
+**Is the Lambda at fault?** Each API alarm has a paired Lambda alarm with the same threshold. It counts only the 4xx / 5xx of requests that reached the Lambda: the access-log line has a `lambdaRequestId`, so the Lambda returned, threw or timed out. Errors API Gateway produced on its own (authorizer, validator, unknown route, throttling, invoke permissions) are left out. When an API alarm fires, the rollback Lambda skips the rollback if
+- the paired Lambda alarm (`rollback-factory-demo-lambda-<4xx|5xx>-rate-<env>`) is in `ALARM`, or
+- the Lambda produced at least half of the API's 4xx / 5xx in the last 3 minutes. Both alarms are evaluated independently, so the Lambda alarm may not have fired yet.
+
+A broken Lambda deploy is therefore **not** rolled back automatically. Fix it forward, or redeploy a previous commit.
 
 ### Options (CDK context)
 
@@ -155,7 +163,7 @@ The rollback Lambda does the restore (`source=restore` in the history). A restor
 | `-c alarmNotifications=false` | `true` | turn the alarm actions (SNS -> rollback) off; the alarms still change state |
 | `-c alarmEmail=ops@example.com` | – | also subscribe an e-mail to the topic |
 | `-c rollbackWindowMinutes=15` | `30` | the "X minutes" after a deployment in which rollbacks happen |
-| `-c chaosFailureRate=1` | `0` | share of requests the backend fails with 500, to demo a rollback |
+| `-c chaosFailureRate=1` | `0` | share of requests the backend fails with 500, to demo a skipped rollback (Lambda at fault) |
 
 ### Demo a rollback
 
@@ -163,8 +171,9 @@ The rollback Lambda does the restore (`source=restore` in the history). A restor
 npm run deploy:dev                                  # good deployment (recorded)
 npx cdk deploy -c env=dev -c chaosFailureRate=1 --require-approval never   && npm run deployment:record -- --env dev         # bad deployment (all 500s)
 API_ENV=dev npm run test:integration                # generate traffic -> 5xx alarm in ~2-3 min
-npm run deployment:list -- --env dev                # shows the rollback record
 ```
+
+The 500s come from the Lambda, so the `lambda-5xx-rate` alarm fires too and the rollback Lambda logs `rollback skipped: errors come from the backend Lambda`. Only an API-side failure (e.g. a broken route or integration config) is rolled back.
 
 To exercise the rollback logic without waiting for real errors, run `npm run rollback:trigger -- --env dev [--alarm 4xx|5xx] [--reason "..."]`. It invokes the rollback Lambda with an ALARM event, the same way SNS does. CI uses it when integration tests fail.
 
@@ -199,7 +208,9 @@ How to read them:
 | 500, `integrationErrorMessage` about permissions | **API Gateway** configuration, e.g. a missing invoke permission for the Lambda version |
 | no `lambdaRequestId` | the request never reached the Lambda (authorizer, validator, throttling, routing) |
 
-**2. The Lambda-errors alarm.** `rollback-factory-demo-lambda-errors-<env>` fires when the backend Lambda (any version) throws unhandled errors in 2 of 3 minutes:
+**2. The paired Lambda alarms.** `rollback-factory-demo-lambda-4xx-rate-<env>` / `-lambda-5xx-rate-<env>` fire on the same rates as the API alarms, counting only the errors of requests that reached the Lambda (metric filters on the access logs, namespace `rollback-factory-demo/api-user-<env>`). API alarm + Lambda alarm → the code; API alarm alone → API Gateway. See "Is the Lambda at fault?" above.
+
+**3. The Lambda-errors alarm.** `rollback-factory-demo-lambda-errors-<env>` fires when the backend Lambda (any version) throws unhandled errors in 2 of 3 minutes:
 - 5xx alarm + Lambda-errors alarm together → the **code** is failing.
 - 5xx alarm alone → API Gateway, a timeout, or 5xx responses the code returns on purpose.
 

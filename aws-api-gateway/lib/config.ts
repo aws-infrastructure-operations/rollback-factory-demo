@@ -25,6 +25,13 @@ export interface EnvConfig {
   resourceName: (resource: string) => string;
   /** The two alarms the rollback Lambda reacts to. */
   alarmNames: { error4xx: string; error5xx: string };
+  /**
+   * Paired with alarmNames: the same rates, counting only errors the backend Lambda
+   * produced. While one is in ALARM the rollback Lambda skips the API rollback.
+   */
+  lambdaAlarmNames: { error4xx: string; error5xx: string };
+  /** CloudWatch namespace of the metrics derived from the access logs. */
+  metricsNamespace: string;
   stageName: string;
   /** Whether stateful resources (user pool, bucket, table) survive stack deletion. */
   retainData: boolean;
@@ -63,6 +70,8 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     stackName: `${PROJECT_NAME}-${envName}`,
     resourceName,
     alarmNames: { error4xx: resourceName('4xx-rate'), error5xx: resourceName('5xx-rate') },
+    lambdaAlarmNames: { error4xx: resourceName('lambda-4xx-rate'), error5xx: resourceName('lambda-5xx-rate') },
+    metricsNamespace: `${PROJECT_NAME}/api-user-${envName}`,
     stageName: STAGE_NAME,
     retainData: envName === 'prod',
     alarms: {

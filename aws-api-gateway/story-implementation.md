@@ -107,6 +107,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 - the latest deployment is younger than **X = `-c rollbackWindowMinutes`** (default 30)
 - that deployment is not itself a rollback
 - there is an earlier deployment to go back to
+- the errors are not the backend Lambda's fault: its paired alarm (`rollback-factory-demo-lambda-<4xx|5xx>-rate-<env>`, counting only errors of requests that reached the Lambda) is not in `ALARM`, and the Lambda produced less than half of the errors in the last 3 minutes
 
 It then:
 1. marks the bad deployment's record, so the 4xx and 5xx alarms together roll back only once
@@ -114,10 +115,10 @@ It then:
 3. re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 4. records the rollback
 
-**Addition: code rollback.** The API integrates with a published, retained Lambda **version** instead of `$LATEST`, so every spec pins the backend code it ran with. Re-importing an old spec therefore rolls back the code too. The rollback Lambda gives API Gateway permission again to invoke the version it restores.
+**API rollback only.** The API invokes the backend through its `live` alias, which `cdk deploy` moves to each new version. The rollback Lambda points a restored spec's integrations at that alias, so a rollback restores the API config and keeps the latest code. A broken Lambda is not rolled back.
 
 **Demo helpers:**
-- `-c chaosFailureRate=<0..1>` makes the backend return 500s.
+- `-c chaosFailureRate=<0..1>` makes the backend return 500s (the Lambda is at fault, so the rollback is skipped).
 - `npm run rollback:trigger -- --env <env>` invokes the rollback Lambda directly, as SNS would.
 
 #### 11. GitHub workflow
