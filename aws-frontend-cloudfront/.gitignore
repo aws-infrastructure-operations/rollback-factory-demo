@@ -4,3 +4,4 @@ cdk.out/
 *.d.ts
 .cdk.staging/
 dist/
+*.local

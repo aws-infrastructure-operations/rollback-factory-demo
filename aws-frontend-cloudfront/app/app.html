@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>API · frontend-user</title>
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <header>
+      <span>Signed in as <strong id="user">…</strong></span>
+      <button id="sign-out" type="button" class="secondary">Sign out</button>
+    </header>
+    <main>
+      <h1>api-user</h1>
+      <div id="resources" class="grid"></div>
+    </main>
+    <footer>Release <span id="release">…</span></footer>
+
+    <template id="resource-template">
+      <section class="card">
+        <h2></h2>
+        <button type="button" data-get></button>
+        <form>
+          <label>Message</label>
+          <input type="text" required>
+          <button type="submit" data-post></button>
+        </form>
+        <p class="status" data-status aria-live="polite"></p>
+        <pre data-output hidden></pre>
+      </section>
+    </template>
+  </body>
+</html>

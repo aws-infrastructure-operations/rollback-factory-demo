@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in · frontend-user</title>
+    <script type="module" src="/src/login.ts"></script>
+  </head>
+  <body>
+    <main class="narrow">
+      <h1>Sign in</h1>
+      <p class="muted">Use your account in the api-user Cognito user pool.</p>
+
+      <form id="login-form" class="card">
+        <label for="email">E-mail</label>
+        <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+      </form>
+
+      <form id="new-password-form" class="card" hidden>
+        <p>Choose a new password to finish signing in.</p>
+        <label for="new-password">New password</label>
+        <input id="new-password" name="new-password" type="password" autocomplete="new-password" minlength="12" required>
+        <label for="confirm-password">Repeat new password</label>
+        <input id="confirm-password" name="confirm-password" type="password" autocomplete="new-password" minlength="12" required>
+        <button type="submit">Set password and sign in</button>
+      </form>
+
+      <p id="error" class="error" role="alert" hidden></p>
+    </main>
+    <footer>Release <span id="release">…</span></footer>
+  </body>
+</html>
