@@ -1,0 +1,190 @@
+name: cleanup
+
+# Manual: destroys the CDK stacks of one environment, for the projects you choose:
+#   api       rollback-factory-demo-<env>                                   (aws-api-gateway)
+#   frontend  rollback-factory-demo-frontend-<env> + -frontend-alarms-<env> (aws-frontend-cloudfront, us-east-1 too)
+#   lambda    rollback-factory-demo-lambda-<env>                            (aws-lambda)
+# Type "destroy <env>" to confirm. Each project's job takes that project's deploy lock, so it never
+# runs while a deploy or rollback of that environment does, and runs in the GitHub environment, so
+# required reviewers on it (e.g. prod) gate the cleanup too.
+#
+# Not removed:
+#   - the CDK bootstrap stacks (CDKToolkit), shared by every project
+#   - in prod, the data the stacks keep on deletion (RemovalPolicy.RETAIN): buckets, tables, the
+#     API user pool. They stay, and a later deploy to prod fails until they're deleted by hand,
+#     because their names are fixed. The summary lists the leftover stacks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to clean up
+        type: choice
+        options: [dev, testing, staging, prod]
+        default: dev
+      projects:
+        description: Which projects' stacks to destroy
+        type: choice
+        options: [all, api, frontend, lambda]
+        default: all
+      confirm:
+        description: 'Type "destroy <environment>" (e.g. destroy dev) to confirm'
+        type: string
+        required: true
+
+# One cleanup at a time.
+concurrency:
+  group: cleanup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation
+        env:
+          ENV_NAME: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
+          PROJECTS: ${{ inputs.projects }}
+        run: |
+          if [[ "$CONFIRM" != "destroy $ENV_NAME" ]]; then
+            echo "::error::Type exactly \"destroy $ENV_NAME\" to confirm. Nothing was destroyed."
+            exit 1
+          fi
+          echo "Destroying the $PROJECTS stack(s) of $ENV_NAME." | tee -a "$GITHUB_STEP_SUMMARY"
+
+  api:
+    if: inputs.projects == 'all' || inputs.projects == 'api'
+    needs: confirm
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    # Shared with api-gateway-deploy.yml, api-gateway-restore.yml and break-api-demo.yml.
+    concurrency:
+      group: api-gateway-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-api-gateway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-api-gateway/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      # Deleting a stack that doesn't exist is a no-op, so this is safe to re-run.
+      - name: Destroy rollback-factory-demo-${{ inputs.environment }}
+        run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
+
+  frontend:
+    if: inputs.projects == 'all' || inputs.projects == 'frontend'
+    needs: confirm
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # Deleting a CloudFront distribution means disabling it first, which takes a while.
+    timeout-minutes: 90
+    # Shared with frontend-deploy.yml, frontend-restore.yml and break-frontend-demo.yml.
+    concurrency:
+      group: frontend-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-frontend-cloudfront
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      # --all destroys the us-east-1 alarms stack first, then the main stack it depends on.
+      - name: Destroy rollback-factory-demo-frontend-${{ inputs.environment }} and -frontend-alarms-${{ inputs.environment }}
+        run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
+
+  lambda:
+    if: inputs.projects == 'all' || inputs.projects == 'lambda'
+    needs: confirm
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    # Shared with lambda-deploy.yml and the lambda rollback workflows.
+    concurrency:
+      group: lambda-release-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-lambda
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # the stack reads the service's last commit for its version description
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-lambda/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Destroy rollback-factory-demo-lambda-${{ inputs.environment }}
+        run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
+
+  summary:
+    if: always() && needs.confirm.result == 'success'
+    needs: [confirm, api, frontend, lambda]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Leftover stacks of ${{ inputs.environment }}
+        env:
+          ENV_NAME: ${{ inputs.environment }}
+          API: ${{ needs.api.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          LAMBDA: ${{ needs.lambda.result }}
+        run: |
+          {
+            echo "### cleanup of $ENV_NAME"
+            echo "| Project | Result |"
+            echo "|---|---|"
+            echo "| api | $API |"
+            echo "| frontend | $FRONTEND |"
+            echo "| lambda | $LAMBDA |"
+            echo
+            echo "rollback-factory-demo stacks of $ENV_NAME still in AWS:"
+            echo '```'
+            for region in "$AWS_REGION" us-east-1; do
+              aws cloudformation list-stacks --region "$region" --output text \
+                --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && starts_with(StackName, 'rollback-factory-demo-') && ends_with(StackName, '-$ENV_NAME')].[StackName, StackStatus]" \
+                | sed "s/^/$region  /"
+            done
+            echo '```'
+            if [[ "$ENV_NAME" == "prod" ]]; then
+              echo
+              echo "Prod keeps its buckets, tables and the API user pool when the stacks are deleted. Delete them by hand before deploying prod again."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
