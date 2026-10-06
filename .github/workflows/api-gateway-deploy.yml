@@ -1,0 +1,93 @@
+name: api-gateway-deploy
+
+# Reusable: deploys one environment of the api-user stack and verifies it.
+# Needs, per GitHub environment (dev / prod):
+#   secrets.AWS_ACCESS_KEY_ID, secrets.AWS_SECRET_ACCESS_KEY, vars.AWS_REGION
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      bake_minutes:
+        type: number
+        default: 10
+      chaos_failure_rate:
+        type: string
+        default: "0"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: aws-api-gateway
+    env:
+      API_ENV: ${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CHAOS_FAILURE_RATE: ${{ inputs.chaos_failure_rate }}
+      BAKE_MINUTES: ${{ inputs.bake_minutes }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-api-gateway/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK bootstrap (no-op when up to date)
+        run: npx cdk bootstrap -c env="$API_ENV"
+
+      - name: Create / update Bruno collection
+        run: npm run collection:sync -- --env "$API_ENV"
+
+      - name: Deploy
+        run: >-
+          npx cdk deploy -c env="$API_ENV" -c chaosFailureRate="$CHAOS_FAILURE_RATE"
+          --require-approval never
+
+      - name: Record deployment (OpenAPI spec -> S3, record -> DynamoDB)
+        run: npm run -s deployment:record -- --env "$API_ENV" --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"
+
+      - name: Upload Bruno collection
+        uses: actions/upload-artifact@v7
+        with:
+          name: bruno-${{ inputs.environment }}
+          path: aws-api-gateway/bruno/
+
+      - name: Integration tests
+        id: integration
+        run: npm run test:integration
+
+      - name: Roll back after failed integration tests
+        if: failure() && steps.integration.outcome == 'failure'
+        run: >-
+          npm run rollback:trigger -- --env "$API_ENV" --alarm 5xx
+          --reason "Integration tests failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Bake - watch 4xx/5xx alarms (rollback on alarm)
+        run: npm run alarms:watch -- --env "$API_ENV" --minutes "$BAKE_MINUTES"
+
+      - name: Deployment history
+        if: always() && steps.integration.outcome != 'skipped'
+        run: |
+          {
+            echo "### api-user-$API_ENV deployments"
+            echo '```'
+            npm run -s deployment:list -- --env "$API_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

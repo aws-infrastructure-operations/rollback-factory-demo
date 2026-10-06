@@ -147,6 +147,48 @@ API_ENV=dev npm run test:integration                # generate traffic -> 5xx al
 npm run deployment:list -- --env dev                # shows the rollback record
 ```
 
-To exercise the rollback logic without waiting for real errors, run `npm run rollback:simulate -- --env dev [--alarm 4xx|5xx]`. It invokes the rollback Lambda with a synthetic ALARM event.
+To exercise the rollback logic without waiting for real errors, run `npm run rollback:trigger -- --env dev [--alarm 4xx|5xx] [--reason "..."]`. It invokes the rollback Lambda with an ALARM event, the same way SNS does. CI uses it when integration tests fail.
 
 > After a rollback the live API config differs from what CloudFormation last applied. CloudFormation only updates the API resources whose template changed, so after rolling forward, check that the stage behaves as expected; the integration tests do that in CI.
+
+## CI/CD (GitHub Actions)
+
+[`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.yml) runs when `aws-api-gateway/**` changes. It calls [`api-gateway-deploy.yml`](../.github/workflows/api-gateway-deploy.yml) once per environment.
+
+```
+PR ───────► test (typecheck, unit tests, synth dev+prod, Bruno collection up to date)
+
+main / manual ─► test ─► deploy dev ──────────────────────────► deploy prod (same steps)
+                         ├ cdk bootstrap
+                         ├ create / update Bruno collection (uploaded as artifact)
+                         ├ cdk deploy
+                         ├ record deployment (spec -> S3, record -> DynamoDB)
+                         ├ integration tests ── fail ─► rollback:trigger, job fails
+                         ├ bake: watch 4xx/5xx alarms ── ALARM ─► wait for the rollback Lambda, job fails
+                         └ deployment history -> job summary
+```
+
+Prod is deployed only when dev passes all steps, including the bake.
+A manual run (`workflow_dispatch`) can skip prod, change the bake times, or set `dev_chaos_failure_rate=1` to demo a rollback in dev.
+
+### Setup
+
+Create two GitHub **environments**, `dev` and `prod`, in Settings -> Environments.
+Each needs:
+
+| Kind | Name | Value |
+|---|---|---|
+| secret | `AWS_ACCESS_KEY_ID` | access key of a deploy user for that account |
+| secret | `AWS_SECRET_ACCESS_KEY` | its secret key |
+| variable | `AWS_REGION` | e.g. `eu-west-1` |
+
+The deploy user needs CDK deploy rights (or permission to assume the CDK bootstrap roles), plus everything the scripts use:
+- read the CloudFormation stack outputs
+- Cognito admin user calls (create/delete the throwaway test user)
+- API Gateway `GET` (exports)
+- S3 `PutObject` on the spec bucket
+- DynamoDB on the deployments table
+- `cloudwatch:DescribeAlarms`
+- `lambda:InvokeFunction` on the rollback Lambda
+
+Add required reviewers to the `prod` environment if promotions should wait for an approval.
