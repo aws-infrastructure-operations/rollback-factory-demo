@@ -215,12 +215,16 @@ test('lets only the two distributions call the dashboard API, through its IAM-au
   for (const p of permissions.filter((p) => p.Action === 'lambda:InvokeFunction')) assert.equal(p.InvokedViaFunctionUrl, true);
 });
 
-test('gives the dashboard API read access to the API lists and stages only', () => {
+test('gives the dashboard API read access to the APIs, their stages and deployments only', () => {
   const statements = Object.values(synth('dev').findResources('AWS::IAM::Policy'))
     .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement)
     .filter((statement: any) => JSON.stringify(statement.Action).includes('apigateway'));
   assert.equal(statements.length, 1);
   assert.equal(statements[0].Action, 'apigateway:GET');
   const resources = JSON.stringify(statements[0].Resource);
-  for (const path of ['::/restapis"', '::/restapis/*/stages"', '::/apis"', '::/apis/*/stages"']) assert.ok(resources.includes(path), path);
+  const expected = ['/restapis', '/apis'].flatMap((list) =>
+    [list, `${list}/??????????`, `${list}/??????????/stages`, `${list}/??????????/deployments`]);
+  for (const path of expected) assert.ok(resources.includes(`::${path}"`), path);
+  assert.equal(statements[0].Resource.length, expected.length);
+  assert.doesNotMatch(resources, /\*/,'no wildcard that crosses into deeper paths');
 });

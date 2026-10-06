@@ -176,3 +176,18 @@ td.state { padding: 18px 10px; color: var(--muted); text-align: center; white-sp
 td.state.error { color: #b42318; }
 .count { color: var(--muted); font-weight: 400; font-size: 14px; }
 .refresh-error { margin: 0 0 8px; color: #b42318; font-size: 13px; }
+
+/* --- Selectable rows and the API details ---------------------------------------------------------- */
+tr.clickable { cursor: pointer; }
+tr.clickable:hover:not(.selected) { background: #f7f9fc; }
+.link-button { padding: 0; border: 0; background: none; color: var(--link); font: inherit; cursor: pointer; }
+.link-button:hover { text-decoration: underline; }
+.rollback:disabled { opacity: .5; cursor: not-allowed; }
+.rollback:disabled:hover { background: transparent; }
+.panel.placeholder { display: grid; place-items: center; color: var(--muted); }
+.config-list { display: grid; margin: 0; border: 1px solid var(--border); border-radius: 6px; }
+.config-list > div { display: grid; grid-template-columns: minmax(110px, 35%) 1fr; gap: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.config-list > div:last-child { border-bottom: 0; }
+.config-list dt { color: var(--muted); }
+.config-list dd { margin: 0; overflow-wrap: anywhere; }
+.stacked { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

@@ -13,11 +13,13 @@ export interface Column<T> {
 /** A row across the whole table instead of the data: loading, nothing found, or an error. */
 export interface TableMessage { text: ReactNode; error?: boolean }
 
-export function DataTable<T>({ columns, rows, rowKey, selectedKey, message }: {
+export function DataTable<T>({ columns, rows, rowKey, selectedKey, onSelect, message }: {
   columns: Column<T>[];
   rows: T[];
   rowKey: (row: T) => string;
   selectedKey?: string;
+  /** makes rows clickable (give one cell a button too, for the keyboard) */
+  onSelect?: (row: T) => void;
   message?: TableMessage;
 }) {
   return (
@@ -35,7 +37,8 @@ export function DataTable<T>({ columns, rows, rowKey, selectedKey, message }: {
             </tr>
           )}
           {!message && rows.map((row) => (
-            <tr key={rowKey(row)} className={rowKey(row) === selectedKey ? 'selected' : undefined}>
+            <tr key={rowKey(row)} onClick={onSelect && (() => onSelect(row))}
+              className={[rowKey(row) === selectedKey && 'selected', onSelect && 'clickable'].filter(Boolean).join(' ') || undefined}>
               {columns.map((c, i) => <td key={i} className={c.className}>{c.cell(row)}</td>)}
             </tr>
           ))}
@@ -61,8 +64,10 @@ export const NameLink = ({ name, healthy = true }: { name: string; healthy?: boo
   <><span className={`dot ${healthy ? 'ok' : 'muted'}`} /><a href="#">{name}</a></>
 );
 
-export const RollbackButton = () => (
-  <button type="button" className="rollback"><Icon name="rollback" size={14} />Rollback</button>
+export const RollbackButton = ({ disabledReason }: { disabledReason?: string }) => (
+  <button type="button" className="rollback" disabled={!!disabledReason} title={disabledReason}>
+    <Icon name="rollback" size={14} />Rollback
+  </button>
 );
 
 export const MoreButton = () => (

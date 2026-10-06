@@ -52,7 +52,7 @@ export class FrontendUserStack extends cdk.Stack {
     // /api/*. The function URL takes IAM auth: only CloudFront, signing through OAC, can call it.
     this.dashboardApi = new NodejsFunction(this, 'DashboardApi', {
       functionName: name('frontend-dashboard-api'),
-      description: `Read-only data for the ${config.frontendName} dashboard: lists the region's API Gateways`,
+      description: `Read-only data for the ${config.frontendName} dashboard: the region's API Gateways`,
       entry: path.join(__dirname, '..', 'lambda', 'dashboard-api', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
@@ -64,10 +64,16 @@ export class FrontendUserStack extends cdk.Stack {
       }),
       bundling: { minify: true, sourceMap: true },
     });
-    // apigateway:GET on the API lists and their stages, nothing else
+    // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
+    // API ids are 10 characters: '??????????' matches one id, where '*' would also match
+    // deeper paths (IAM wildcards cross '/'), such as stage exports.
+    const apiId = '??????????';
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['apigateway:GET'],
-      resources: ['/restapis', '/restapis/*/stages', '/apis', '/apis/*/stages'].map(
+      resources: [
+        '/restapis', `/restapis/${apiId}`, `/restapis/${apiId}/stages`, `/restapis/${apiId}/deployments`,
+        '/apis', `/apis/${apiId}`, `/apis/${apiId}/stages`, `/apis/${apiId}/deployments`,
+      ].map(
         (resource) => `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::${resource}`,
       ),
     }));
