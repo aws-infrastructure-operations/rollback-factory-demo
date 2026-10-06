@@ -9,8 +9,8 @@
     "build": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
     "cdk": "cdk",
-    "synth:dev": "cdk synth --all -c env=dev",
-    "synth:prod": "cdk synth --all -c env=prod"
+    "synth:dev": "cdk synth -c env=dev",
+    "synth:prod": "cdk synth -c env=prod"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",

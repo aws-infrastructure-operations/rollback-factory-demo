@@ -20,6 +20,23 @@ Both regions must be bootstrapped:
 npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 ```
 
+## Hosting
+
+- **Site bucket** `rollback-factory-demo-<account>-frontend-site-<env>`: private (all public access
+  blocked, HTTPS only). Only the distribution can read it, through Origin Access Control. Retained in prod.
+- **Distribution** `frontend-user-<env>` (its comment): HTTPS only (HTTP redirects), HTTP/2 + HTTP/3,
+  managed security headers, `index.html` as root object.
+- **Releases:** each release lives under `releases/<id>/`, and the distribution's **origin path**
+  (`/releases/<id>`) selects the live one. A fresh stack serves a placeholder from `releases/initial/`.
+- **`-c liveReleaseId`:** `cdk deploy` sets the origin path to this release, or to `initial` without it.
+  Always pass the live release (`npm run live:context`, FE-04), or a deploy undoes an activation or a rollback.
+- **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
+  can't list the bucket), so a broken release trips the 4xx alarm.
+- **Outputs** (exported as `rollback-factory-demo-<output>-<env>`): `DistributionId`,
+  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `LiveReleaseId`.
+- **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
+  raised without a custom domain.
+
 ## Scripts
 
 | Command | Does |
