@@ -149,4 +149,4 @@ npm run deployment:list -- --env dev                # shows the rollback record
 
 To exercise the rollback logic without waiting for real errors, run `npm run rollback:simulate -- --env dev [--alarm 4xx|5xx]`. It invokes the rollback Lambda with a synthetic ALARM event.
 
-> After a rollback the live API no longer matches the CDK template. The next `cdk deploy` that changes the API replaces it with the template again (this is intended: roll forward with a fix).
+> After a rollback the live API config differs from what CloudFormation last applied. CloudFormation only updates the API resources whose template changed, so after rolling forward, check that the stage behaves as expected; the integration tests do that in CI.
