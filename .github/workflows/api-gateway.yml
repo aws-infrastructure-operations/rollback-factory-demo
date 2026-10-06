@@ -1,0 +1,93 @@
+name: api-gateway
+
+# PRs: typecheck, unit tests, synth, collection check.
+# main / manual: deploy dev -> integration tests -> bake -> deploy prod -> integration tests -> bake.
+# A failed integration test triggers the rollback Lambda; an alarm during the bake is rolled back
+# by the alarm -> SNS -> rollback Lambda path and fails the job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - aws-api-gateway/**
+      - .github/workflows/api-gateway*.yml
+  pull_request:
+    paths:
+      - aws-api-gateway/**
+      - .github/workflows/api-gateway*.yml
+  workflow_dispatch:
+    inputs:
+      promote_to_prod:
+        description: Deploy to prod after dev is green
+        type: boolean
+        default: true
+      dev_bake_minutes:
+        description: Minutes to watch the dev alarms after deploying
+        type: number
+        default: 3
+      prod_bake_minutes:
+        description: Minutes to watch the prod alarms after deploying
+        type: number
+        default: 10
+      dev_chaos_failure_rate:
+        description: "Demo only: share of dev requests to fail with 500 (0..1)"
+        type: string
+        default: "0"
+
+concurrency:
+  group: api-gateway-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aws-api-gateway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-api-gateway/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Synth dev and prod
+        run: |
+          npx cdk synth -c env=dev -q -o cdk.out/dev
+          npx cdk synth -c env=prod -q -o cdk.out/prod
+      - name: Bruno collection matches the API
+        run: |
+          npm run collection:sync -- --env dev
+          changes=$(git status --porcelain -- bruno ':!bruno/environments')
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::Bruno requests are out of date - run 'npm run collection:sync' and commit"
+            exit 1
+          fi
+
+  deploy-dev:
+    if: github.event_name != 'pull_request'
+    needs: test
+    uses: ./.github/workflows/api-gateway-deploy.yml
+    with:
+      environment: dev
+      bake_minutes: ${{ inputs.dev_bake_minutes || 3 }}
+      chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
+    secrets: inherit
+
+  deploy-prod:
+    if: github.event_name == 'push' || inputs.promote_to_prod
+    needs: deploy-dev
+    uses: ./.github/workflows/api-gateway-deploy.yml
+    with:
+      environment: prod
+      bake_minutes: ${{ inputs.prod_bake_minutes || 10 }}
+    secrets: inherit
