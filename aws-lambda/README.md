@@ -251,5 +251,6 @@ and it never reaches `live`.
 - After a rollback, `$LATEST` no longer matches git until the next deploy that changes the service code.
 - A failure that starts long after a deploy (e.g. a downstream outage) doesn't trigger a rollback,
   because of the deployment window.
+- [Architecture diagram prompt](docs/architecture-diagram-prompt.md): text for an image model to draw this setup
 - [Cost estimate for 500 functions](docs/COSTS.md) (from the original repo; it uses the old
   single-environment names).
