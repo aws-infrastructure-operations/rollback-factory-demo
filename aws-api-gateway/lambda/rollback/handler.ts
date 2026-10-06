@@ -30,6 +30,7 @@ const target: DeploymentTarget = {
   stageName: env('STAGE_NAME'),
   specBucket: env('SPEC_BUCKET'),
   table: env('DEPLOYMENTS_TABLE'),
+  handlerFunction: env('HANDLER_FUNCTION_ARN'),
 };
 const WINDOW_MINUTES = Number(env('ROLLBACK_WINDOW_MINUTES'));
 const ALARM_NAMES = env('ALARM_NAMES').split(',');
@@ -37,7 +38,8 @@ const ALARM_PAIRS: AlarmPair[] = JSON.parse(env('ALARM_PAIRS'));
 const METRICS_NAMESPACE = env('METRICS_NAMESPACE');
 const EVALUATION_MINUTES = Number(env('EVALUATION_MINUTES'));
 const HANDLER_FUNCTION_ARN = env('HANDLER_FUNCTION_ARN');
-const HANDLER_ALIAS_ARN = env('HANDLER_ALIAS_ARN');
+/** Each stage invokes the alias its lambdaAlias stage variable names (v1: live). */
+const STAGE_ALIAS_ARN = `${HANDLER_FUNCTION_ARN}:\${stageVariables.lambdaAlias}`;
 
 const apigw = new APIGatewayClient({});
 const cloudwatch = new CloudWatchClient({});
@@ -101,12 +103,13 @@ async function ensureInvokePermission(functionArn: string) {
 
 /**
  * Re-imports a recorded deployment's spec (PutRestApi overwrite) and redeploys the stage.
- * Only the API config is restored: the backend integrations are pointed at the "live"
- * alias, so the API keeps invoking the latest Lambda code.
+ * Only the API config is restored: the backend integrations are pointed at the stage's
+ * alias (v1: live), so the API keeps invoking the latest promoted Lambda code.
  */
 async function redeploy(to: DeploymentRecord, description: string): Promise<string | undefined> {
-  const spec = pointToAlias(JSON.parse(await getSpec(to.specBucket, to.specKey)), HANDLER_FUNCTION_ARN, HANDLER_ALIAS_ARN);
-  for (const arn of lambdaArnsFromSpec(spec)) await ensureInvokePermission(arn);
+  const spec = pointToAlias(JSON.parse(await getSpec(to.specBucket, to.specKey)), HANDLER_FUNCTION_ARN, STAGE_ALIAS_ARN);
+  // the stage aliases' invoke permissions are managed by the stack
+  for (const arn of lambdaArnsFromSpec(spec).filter((a) => !a.includes('${'))) await ensureInvokePermission(arn);
 
   await apigw.send(new PutRestApiCommand({
     restApiId: target.restApiId,

@@ -1,6 +1,8 @@
 name: api-gateway-deploy
 
-# Reusable: deploys one environment of the api-user stack and verifies it.
+# Reusable: deploys one environment of the api-user stack to its "integration" stage,
+# runs the integration tests there and only then promotes it to stage v1. If the tests
+# fail, v1 is left untouched and the job stops with the failures in the summary.
 # Needs, per GitHub environment (dev / prod):
 #   secrets.AWS_ACCESS_KEY_ID, secrets.AWS_SECRET_ACCESS_KEY, vars.AWS_REGION
 
@@ -55,13 +57,20 @@ jobs:
       - name: Create / update Bruno collection
         run: npm run collection:sync -- --env "$API_ENV"
 
-      - name: Deploy
+      - name: Read what stage v1 serves
+        id: live
+        run: |
+          context="$(npm run -s live:context -- --env "$API_ENV")"
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to the integration stage (v1 and its Lambda alias stay as they are)
+        env:
+          LIVE_CONTEXT: ${{ steps.live.outputs.context }}
+        # LIVE_CONTEXT is unquoted on purpose: it holds several -c arguments
         run: >-
           npx cdk deploy -c env="$API_ENV" -c chaosFailureRate="$CHAOS_FAILURE_RATE"
+          $LIVE_CONTEXT
           --require-approval never
-
-      - name: Record deployment (OpenAPI spec -> S3, record -> DynamoDB)
-        run: npm run -s deployment:record -- --env "$API_ENV" --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"
 
       - name: Upload Bruno collection
         uses: actions/upload-artifact@v7
@@ -69,18 +78,36 @@ jobs:
           name: bruno-${{ inputs.environment }}
           path: aws-api-gateway/bruno/
 
-      - name: Integration tests
+      - name: Integration tests (stage integration)
         id: integration
-        run: npm run test:integration
+        env:
+          API_STAGE: integration
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      - name: Promote to stage v1
+        run: npm run -s deployment:promote -- --env "$API_ENV"
+
+      - name: Record deployment (OpenAPI spec -> S3, record -> DynamoDB)
+        run: npm run -s deployment:record -- --env "$API_ENV" --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"
 
       - name: Mark deployment verified (rollbacks only restore verified deployments)
         run: npm run -s deployment:verify -- --env "$API_ENV"
 
-      - name: Roll back after failed integration tests
+      - name: Integration test failures -> job summary
         if: failure() && steps.integration.outcome == 'failure'
-        run: >-
-          npm run rollback:trigger -- --env "$API_ENV" --alarm 5xx
-          --reason "Integration tests failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        run: |
+          {
+            echo "### :x: api-user-$API_ENV: integration tests failed on stage \`integration\`"
+            echo "Stage \`v1\` was not changed and nothing was promoted."
+            echo '<details open><summary>Test output (last 100 lines)</summary>'
+            echo
+            echo '```'
+            tail -n 100 integration-tests.log
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Deployment history
         if: always() && steps.integration.outcome != 'skipped'

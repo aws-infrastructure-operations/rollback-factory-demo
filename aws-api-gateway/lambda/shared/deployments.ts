@@ -11,6 +11,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { GetAliasCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 /** rollback = automatic (alarm / failed tests), restore = a deployment chosen by hand */
@@ -24,6 +25,8 @@ export interface DeploymentRecord {
   stageName: string;
   /** API Gateway deployment id the stage pointed to */
   deploymentId: string;
+  /** Backend Lambda version the stage's `live` alias pointed to */
+  lambdaVersion?: string;
   specBucket: string;
   specKey: string;
   source: DeploymentSource;
@@ -58,6 +61,8 @@ export interface DeploymentTarget {
   stageName: string;
   specBucket: string;
   table: string;
+  /** Backend Lambda (name or ARN); its `live` alias version is recorded as lambdaVersion */
+  handlerFunction?: string;
 }
 
 export interface RecordOptions {
@@ -72,6 +77,7 @@ export interface RecordOptions {
 }
 
 const apigw = new APIGatewayClient({});
+const lambda = new LambdaClient({});
 const s3 = new S3Client({});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
@@ -88,6 +94,7 @@ export function buildRecord(
   target: DeploymentTarget,
   deploymentId: string,
   opts: RecordOptions,
+  lambdaVersion?: string,
 ): DeploymentRecord {
   const now = opts.now ?? new Date();
   return {
@@ -96,6 +103,7 @@ export function buildRecord(
     restApiId: target.restApiId,
     stageName: target.stageName,
     deploymentId,
+    lambdaVersion,
     specBucket: target.specBucket,
     specKey: specKey(target.apiName, now),
     source: opts.source,
@@ -125,6 +133,17 @@ export async function getStageDeploymentId(restApiId: string, stageName: string)
   const stage = await apigw.send(new GetStageCommand({ restApiId, stageName }));
   if (!stage.deploymentId) throw new Error(`Stage ${stageName} of ${restApiId} has no deployment`);
   return stage.deploymentId;
+}
+
+/** Version a Lambda alias points to, or undefined if the alias doesn't exist. */
+export async function getAliasVersion(functionName: string, alias: string): Promise<string | undefined> {
+  try {
+    const { FunctionVersion } = await lambda.send(new GetAliasCommand({ FunctionName: functionName, Name: alias }));
+    return FunctionVersion;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ResourceNotFoundException') return undefined;
+    throw err;
+  }
 }
 
 /** OpenAPI 3 JSON of the stage, including x-amazon-apigateway-* extensions. */
@@ -159,17 +178,18 @@ export async function listDeployments(
  * Exports the stage's current spec to S3 and records the deployment as current.
  * The previous current deployment is retired in the same transaction (see retirement).
  * Returns undefined (and records nothing) when the stage still points at the
- * same deployment as the latest record, i.e. nothing was actually deployed.
+ * same deployment and Lambda version as the latest record, i.e. nothing was deployed.
  */
 export async function recordDeployment(
   target: DeploymentTarget,
   opts: RecordOptions & { force?: boolean },
 ): Promise<DeploymentRecord | undefined> {
   const deploymentId = await getStageDeploymentId(target.restApiId, target.stageName);
+  const lambdaVersion = target.handlerFunction ? await getAliasVersion(target.handlerFunction, 'live') : undefined;
   const [latest] = await listDeployments(target.table, target.apiName, 1);
-  if (!opts.force && latest?.deploymentId === deploymentId) return undefined;
+  if (!opts.force && latest?.deploymentId === deploymentId && latest.lambdaVersion === lambdaVersion) return undefined;
 
-  const record = buildRecord(target, deploymentId, opts);
+  const record = buildRecord(target, deploymentId, opts, lambdaVersion);
   const spec = await exportStageSpec(target.restApiId, target.stageName);
   await s3.send(new PutObjectCommand({
     Bucket: target.specBucket,

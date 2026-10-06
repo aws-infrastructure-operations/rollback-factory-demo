@@ -52,6 +52,7 @@ test('builds a deployment record', () => {
     restApiId: 'abc123',
     stageName: 'v1',
     deploymentId: 'dep42',
+    lambdaVersion: undefined,
     specBucket: 'bucket',
     specKey: 'api-user-dev/20261006T123005Z/openapi.json',
     source: 'cicd',

@@ -115,7 +115,7 @@ It then:
 3. re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 4. records the rollback
 
-**API rollback only.** The API invokes the backend through its `live` alias, which `cdk deploy` moves to each new version. The rollback Lambda points a restored spec's integrations at that alias, so a rollback restores the API config and keeps the latest code. A broken Lambda is not rolled back.
+**API rollback only.** Each stage invokes the backend through its own alias (stage variable `lambdaAlias`: `v1` → `live`, `integration` → `integration`). The rollback Lambda points a restored spec's integrations at the stage's alias, so a rollback restores the API config and keeps the latest promoted code. A broken Lambda is not rolled back.
 
 **Demo helpers:**
 - `-c chaosFailureRate=<0..1>` makes the backend return 500s (the Lambda is at fault, so the rollback is skipped).
@@ -130,10 +130,11 @@ Files: [`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.ym
 - **`main` / manual run:** for dev, then for prod:
   1. bootstrap
   2. Bruno collection sync
-  3. `cdk deploy`
-  4. record the deployment (spec → S3, record → DynamoDB)
-  5. integration tests. **If they fail, the workflow triggers the rollback Lambda** and the job fails.
-  6. deployment history in the job summary
+  3. `cdk deploy` to the **`integration` stage** only: stage `v1` and the `live` alias are pinned to what they serve (`npm run live:context`)
+  4. integration tests against stage `integration`. **If they fail, the job stops** with the test output in the job summary; `v1` was never touched.
+  5. promote: stage `v1` → the tested deployment, alias `live` → the tested Lambda version (`npm run deployment:promote`)
+  6. record the deployment (spec → S3, record → DynamoDB) and mark it verified
+  7. deployment history in the job summary
 - **Promotion:** prod deploys only when dev is green. Add required reviewers on the `prod` GitHub environment to gate it with an approval.
 - **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't watch alarms after a deploy.
 - **AWS auth:** access-key secrets per GitHub environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`).

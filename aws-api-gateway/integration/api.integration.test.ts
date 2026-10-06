@@ -1,5 +1,7 @@
 /**
- * Integration tests against the deployed API of API_ENV (default dev).
+ * Integration tests against the deployed API of API_ENV (default dev), on stage
+ * v1 or, with API_STAGE=integration, on the integration stage (what CI tests before
+ * promoting to v1).
  *
  * Needs AWS credentials that can read the stack and administer its user pool.
  * A throw-away Cognito user is created for the run and deleted afterwards,
@@ -16,13 +18,18 @@ import { deleteUser, ensureUser, getIdToken, randomPassword } from '../scripts/l
 import { requireStackOutputs, StackOutputs } from '../scripts/lib/stack.js';
 
 const config = getConfig(process.env.API_ENV ?? 'dev');
+const stage = process.env.API_STAGE || config.stageName;
+if (stage !== config.stageName && stage !== config.integrationStageName) {
+  throw new Error(`API_STAGE must be ${config.stageName} or ${config.integrationStageName}, got ${stage}`);
+}
 
 let outputs: StackOutputs;
+let baseUrl: string;
 let token: string;
 let cleanup: (() => Promise<void>) | undefined;
 
 const call = async (method: string, path: string, opts: { token?: string; body?: unknown } = {}) => {
-  const res = await fetch(`${outputs.ApiUrl.replace(/\/$/, '')}${path}`, {
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(opts.token && { Authorization: opts.token }),
@@ -42,6 +49,9 @@ const call = async (method: string, path: string, opts: { token?: string; body?:
 
 before(async () => {
   outputs = await requireStackOutputs(config);
+  const url = stage === config.integrationStageName ? outputs.IntegrationApiUrl : outputs.ApiUrl;
+  if (!url) throw new Error(`Stack ${config.stackName} has no URL for stage ${stage} - deploy it first`);
+  baseUrl = url.replace(/\/$/, '');
 
   let username = process.env.API_USERNAME;
   let password = process.env.API_PASSWORD;
@@ -76,7 +86,7 @@ after(async () => {
   await cleanup?.();
 });
 
-describe(`${config.apiName} (stage ${config.stageName})`, () => {
+describe(`${config.apiName} (stage ${stage})`, () => {
   for (const resource of ['users', 'messages']) {
     test(`GET /${resource} returns 200`, async () => {
       const res = await call('GET', `/${resource}`, { token });
@@ -95,7 +105,7 @@ describe(`${config.apiName} (stage ${config.stageName})`, () => {
   }
 
   test('answers CORS preflights and adds CORS headers (browser frontend)', async () => {
-    const base = outputs.ApiUrl.replace(/\/$/, '');
+    const base = baseUrl;
     const preflight = await fetch(`${base}/messages`, {
       method: 'OPTIONS',
       headers: {
