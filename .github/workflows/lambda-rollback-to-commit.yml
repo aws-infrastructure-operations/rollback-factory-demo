@@ -46,7 +46,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
     env:
       FUNCTION_NAME: service-lambda-${{ inputs.environment }}
-      TABLE_NAME: rollback-factory-demo-lambda-versions-${{ inputs.environment }}
+      TABLE_NAME: rollback-factory-demo-lambda-archive-${{ inputs.environment }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v6
         with:

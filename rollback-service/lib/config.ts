@@ -42,7 +42,11 @@ export interface EnvConfig {
   functionName: string;
   /** rollback-factory-demo-rollback-notifications-<env>, in the main region and in us-east-1 */
   topicName: string;
-  /** Lambda manager: version archive (metadata) and its packages */
+  /**
+   * Lambda manager: version archive (metadata). Not the name deploy-aws-lambda used before the
+   * rollback service existed (rollback-factory-demo-lambda-versions-<env>), so it never collides with
+   * that table, which prod keeps after the old stack resources are removed.
+   */
   versionsTableName: string;
   /** Optional e-mail subscribed to both topics (-c alarmEmail=...). */
   alarmEmail?: string;
@@ -65,7 +69,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     resourceName,
     functionName: resourceName('rollback-service'),
     topicName: resourceName('rollback-notifications'),
-    versionsTableName: resourceName('lambda-versions'),
+    versionsTableName: resourceName('lambda-archive'),
     alarmEmail: overrides.alarmEmail || undefined,
     retainData: envName === 'prod',
   };

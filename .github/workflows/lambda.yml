@@ -92,7 +92,7 @@ jobs:
     environment: dev
     env:
       FUNCTION_NAME: service-lambda-dev
-      TABLE_NAME: rollback-factory-demo-lambda-versions-dev
+      TABLE_NAME: rollback-factory-demo-lambda-archive-dev
       WORKFLOW_FILE: .github/workflows/lambda-rollback-to-commit.yml
     steps:
       - name: Check for WORKFLOW_PAT

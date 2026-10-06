@@ -8,7 +8,7 @@ test('names the function service-lambda-<env> and points at the rollback service
     assert.equal(config.functionName, `service-lambda-${env}`);
     assert.equal(config.stackName, `deploy-aws-lambda-${env}`);
     assert.equal(config.rollbackServiceFunctionName, `rollback-factory-demo-rollback-service-${env}`);
-    assert.equal(config.versionsTableName, `rollback-factory-demo-lambda-versions-${env}`);
+    assert.equal(config.versionsTableName, `rollback-factory-demo-lambda-archive-${env}`);
     assert.equal(config.rollbackTopicName, `rollback-factory-demo-rollback-notifications-${env}`);
     assert.equal(config.errorsAlarmName, `rollback-factory-demo-lambda-service-lambda-errors-${env}`);
   }

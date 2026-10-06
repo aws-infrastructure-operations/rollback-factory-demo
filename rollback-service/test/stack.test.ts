@@ -92,7 +92,7 @@ test('owns the Lambda version archive, kept in prod only', () => {
     const { main } = synth(envName);
     main.hasResource('AWS::DynamoDB::GlobalTable', {
       DeletionPolicy: policy,
-      Properties: Match.objectLike({ TableName: `rollback-factory-demo-lambda-versions-${envName}` }),
+      Properties: Match.objectLike({ TableName: `rollback-factory-demo-lambda-archive-${envName}` }),
     });
     main.hasResource('AWS::S3::Bucket', { DeletionPolicy: policy });
   }
