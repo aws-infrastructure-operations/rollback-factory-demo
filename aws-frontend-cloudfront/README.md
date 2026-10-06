@@ -32,7 +32,7 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   Always pass the live release (`npm run live:context`, FE-04), or a deploy undoes an activation or a rollback.
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
   can't list the bucket), so a broken release trips the 4xx alarm.
-- **Outputs** (exported as `rollback-factory-demo-<output>-<env>`): `DistributionId`,
+- **Outputs** (exported as `rollback-factory-demo-frontend-<output>-<env>`, so they never clash with the API stack's exports in the same region): `DistributionId`,
   `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `DeploymentsBucketName`, `DeploymentsTableName`.
 - **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
   raised without a custom domain.
