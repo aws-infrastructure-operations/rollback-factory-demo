@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -12,11 +13,12 @@ export interface FrontendUserStackProps extends cdk.StackProps {
   config: EnvConfig;
 }
 
-/** Main region: site bucket + CloudFront distribution and the deployments bucket; the deployments table follows (FE-05). */
+/** Main region: site bucket + CloudFront distribution, deployments bucket and table. */
 export class FrontendUserStack extends cdk.Stack {
   readonly siteBucket: s3.Bucket;
   readonly distribution: cloudfront.Distribution;
   readonly deploymentsBucket: s3.Bucket;
+  readonly deploymentsTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string, props: FrontendUserStackProps) {
     super(scope, id, props);
@@ -83,6 +85,17 @@ export class FrontendUserStack extends cdk.Stack {
       autoDeleteObjects: !config.retainData,
     });
 
+    // One item per activation, restore or rollback (see lambda/shared/deployments.ts):
+    // pk = frontendName, sk = deployedAt (ISO 8601), newest first via ScanIndexForward=false.
+    this.deploymentsTable = new dynamodb.TableV2(this, 'DeploymentsTable', {
+      tableName: name('frontend-deployments'),
+      partitionKey: { name: 'frontendName', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'deployedAt', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: config.retainData },
+      removalPolicy,
+    });
+
     // --- Outputs --------------------------------------------------------------
     const out = (outputName: string, value: string) =>
       new cdk.CfnOutput(this, outputName, { value, exportName: name(outputName) });
@@ -91,5 +104,6 @@ export class FrontendUserStack extends cdk.Stack {
     out('SiteUrl', `https://${this.distribution.distributionDomainName}`);
     out('SiteBucketName', this.siteBucket.bucketName);
     out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
+    out('DeploymentsTableName', this.deploymentsTable.tableName);
   }
 }

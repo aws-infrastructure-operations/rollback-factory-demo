@@ -33,7 +33,7 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
   can't list the bucket), so a broken release trips the 4xx alarm.
 - **Outputs** (exported as `rollback-factory-demo-<output>-<env>`): `DistributionId`,
-  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `DeploymentsBucketName`.
+  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `DeploymentsBucketName`, `DeploymentsTableName`.
 - **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
   raised without a custom domain.
 
@@ -90,6 +90,26 @@ rollback Lambda uses the same code.
 bucket per deployment. As for the API, it is one versioned bucket per environment with the release id in
 the key, which avoids bucket limits and keeps the history in one place.
 
+## Deployment records
+
+Every time the distribution starts serving a release, a record goes into
+`rollback-factory-demo-frontend-deployments-<env>`, keyed by `frontendName` + `deployedAt`. It
+follows the API's record model, so both histories read the same way.
+
+- **Each record holds:** `releaseId`, origin path, distribution, manifest key, invalidation id,
+  the previous release, `source` (`manual`, `cicd`, `rollback` or `restore`), actor, the commit
+  the release was built from, and the CI run link.
+- **Writers:** `deployment:record` (after `release:activate`, manual or CI), `deployment:restore`,
+  and the rollback Lambda (FE-08). `deploy:<env>` records automatically.
+- **Current / stable:** the record the distribution serves has `current=true`. When a new one is
+  recorded, the previous one gets `stable=true` plus `stableFor` (seconds until the next deployment)
+  and `stableForHumanReadable`. A deployment an alarm rolled back is `stable=false`.
+- **Verified:** `deployment:verify` sets `verifiedAt` once the integration tests pass. The rollback
+  Lambda only goes back to verified deployments. A restore isn't verified until the tests pass again.
+- **Checks:** `deployment:record` and `deployment:verify` check what the distribution really serves,
+  so a record never describes a release that isn't live.
+- **Limitation:** changing the origin path in the CloudFront console is not recorded.
+
 ## Scripts
 
 | Command | Does |
@@ -104,6 +124,10 @@ the key, which avoids bucket limits and keeps the history in one place.
 | `npm run release:upload -- --env <env>` | upload it + store its manifest |
 | `npm run release:activate -- --env <env> --release <id> [--wait]` | make a release live |
 | `npm run live:context -- --env <env>` | print `-c liveReleaseId=<id>` for `cdk deploy` |
+| `npm run deployment:record -- --env <env> [--release <id>]` | record the release the distribution serves |
+| `npm run deployment:verify -- --env <env> [--release <id>]` | mark the live deployment verified (after the integration tests) |
+| `npm run deployment:list -- --env <env> [--limit 10]` | deployment history |
+| `npm run deployment:restore -- --env <env> --release <id> [--wait]` | activate any release with a manifest and record a `restore` |
 
 ## Context options
 

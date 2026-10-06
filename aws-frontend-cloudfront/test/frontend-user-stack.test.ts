@@ -101,9 +101,29 @@ test('keeps build manifests in a versioned, private deployments bucket', () => {
   });
 });
 
+test('records deployments in a DynamoDB table keyed by frontendName + deployedAt', () => {
+  for (const env of ['dev', 'prod']) {
+    const t = synth(env);
+    t.hasResource('AWS::DynamoDB::GlobalTable', {
+      DeletionPolicy: env === 'prod' ? 'Retain' : 'Delete',
+      Properties: Match.objectLike({
+        TableName: `rollback-factory-demo-frontend-deployments-${env}`,
+        BillingMode: 'PAY_PER_REQUEST',
+        KeySchema: [
+          { AttributeName: 'frontendName', KeyType: 'HASH' },
+          { AttributeName: 'deployedAt', KeyType: 'RANGE' },
+        ],
+        Replicas: [Match.objectLike({
+          PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: env === 'prod' },
+        })],
+      }),
+    });
+  }
+});
+
 test('exports the outputs later scripts read', () => {
   const outputs = synth('dev').findOutputs('*');
-  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName']) {
+  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName']) {
     assert.ok(outputs[name], `missing output ${name}`);
     assert.deepEqual(outputs[name].Export, { Name: `rollback-factory-demo-${name}-dev` });
   }
