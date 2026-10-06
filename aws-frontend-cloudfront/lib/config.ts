@@ -39,6 +39,8 @@ export interface EnvConfig {
   /** Whether stateful resources (buckets, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
+  /** In the main stack; the rollback Lambda in us-east-1 writes to it by name. */
+  deploymentsTableName: string;
   /** The two CloudFront error-rate alarms the rollback Lambda reacts to. */
   alarmNames: { error4xx: string; error5xx: string };
   /** The rollback Lambda only acts if the latest release is younger than this. */
@@ -93,6 +95,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
       evaluationPeriods: 3,
       datapointsToAlarm: 2,
     },
+    deploymentsTableName: resourceName('frontend-deployments'),
     alarmNames: { error4xx: resourceName('frontend-4xx-rate'), error5xx: resourceName('frontend-5xx-rate') },
     rollbackWindowMinutes,
   };

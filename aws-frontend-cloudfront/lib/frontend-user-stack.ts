@@ -88,7 +88,7 @@ export class FrontendUserStack extends cdk.Stack {
     // One item per activation, restore or rollback (see lambda/shared/deployments.ts):
     // pk = frontendName, sk = deployedAt (ISO 8601), newest first via ScanIndexForward=false.
     this.deploymentsTable = new dynamodb.TableV2(this, 'DeploymentsTable', {
-      tableName: name('frontend-deployments'),
+      tableName: config.deploymentsTableName,
       partitionKey: { name: 'frontendName', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'deployedAt', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),

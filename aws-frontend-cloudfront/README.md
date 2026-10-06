@@ -130,6 +130,35 @@ In `rollback-factory-demo-frontend-alarms-<env>` (us-east-1, where CloudFront pu
 - **Delay:** CloudFront metrics arrive a few minutes late, so expect an alarm roughly 3–6 minutes
   after the errors start.
 
+## Rollback Lambda
+
+`rollback-factory-demo-frontend-rollback-<env>` lives in us-east-1, next to the alarms. It is
+subscribed to the topic and only accepts its own two alarms.
+
+**When it acts.** On an `ALARM`, it rolls back only if all of these hold:
+- the latest deployment is younger than **X = `-c rollbackWindowMinutes`** (default 30)
+- that deployment is not itself a rollback or a restore, and wasn't already rolled back
+- the distribution really serves the latest recorded release (no unrecorded console change)
+- a target exists: the newest earlier deployment of **another release** that is **verified** and
+  whose release was never rolled back
+
+**What it does:**
+1. marks the bad deployment `rolledBackAt` with a conditional write, so the 4xx and 5xx alarms
+   together roll back only once
+2. switches the origin path to the target release and invalidates `/*` (the same code as `release:activate`)
+3. records a `rollback` deployment. It inherits the target's `verifiedAt`, since it is the same
+   release. The bad deployment is retired as `stable=false`.
+
+**What it doesn't do.** It doesn't wait for the distribution to deploy, which takes a few minutes,
+so its timeout is 30 s. The decision (rolled back, or skipped and why) is logged as JSON.
+
+**Access.**
+- **Deployments table:** the table is in the main region, and the Lambda writes to it by its fixed
+  name with a client for that region.
+- **IAM:** it may only read, update and invalidate this distribution, and read and write this table.
+
+**Demo:** `npm run rollback:trigger -- --env dev` invokes it with a fake alarm, exactly as SNS would.
+
 ## Integration tests
 
 `FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set
@@ -173,6 +202,7 @@ activating one.
 | `npm run deployment:verify -- --env <env> [--release <id>]` | mark the live deployment verified (after the integration tests) |
 | `npm run deployment:list -- --env <env> [--limit 10]` | deployment history |
 | `npm run deployment:restore -- --env <env> --release <id> [--wait]` | activate any release with a manifest and record a `restore` |
+| `npm run rollback:trigger -- --env <env> [--alarm 4xx\|5xx]` | invoke the rollback Lambda as SNS would (demo) |
 
 ## Context options
 
