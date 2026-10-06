@@ -31,6 +31,7 @@ test('stores manifests under <frontendName>/<releaseId>/', () => {
 test('serves HTML uncached and hashed assets for a year', () => {
   assert.equal(cacheControlFor('index.html'), 'no-cache');
   assert.equal(cacheControlFor('assets/app-Bbx963EB.js'), 'public, max-age=31536000, immutable');
+  assert.equal(cacheControlFor('favicon.svg'), 'public, max-age=3600');
   assert.equal(contentTypeFor('app.html'), 'text/html; charset=utf-8');
   assert.equal(contentTypeFor('assets/page-BwW5LA7K.css'), 'text/css; charset=utf-8');
   assert.equal(contentTypeFor('assets/app.JS'), 'text/javascript; charset=utf-8');

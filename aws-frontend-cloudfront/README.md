@@ -110,12 +110,37 @@ follows the API's record model, so both histories read the same way.
   so a record never describes a release that isn't live.
 - **Limitation:** changing the origin path in the CloudFront console is not recorded.
 
+## Integration tests
+
+`FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set
+`FRONTEND_RELEASE=<id>` to fail unless that release is live, which is what CI does right after
+activating one.
+
+- **Smoke** ([`integration/smoke.integration.test.ts`](integration/smoke.integration.test.ts)):
+  - `/` is the live release's `index.html` (sha256 against the manifest) over HTTPS, and HTTP redirects
+  - every manifest file loads through CloudFront with its sha256, content type and `Cache-Control`
+  - an unknown path is a 403/404, not `index.html`
+  - a direct S3 request is refused
+- **End to end** ([`integration/e2e.integration.test.ts`](integration/e2e.integration.test.ts),
+  headless Chromium with Playwright):
+  - creates a throw-away user in the API's user pool, and deletes it afterwards
+  - `app.html` without a session redirects to the login page, and the footer shows the live release
+  - signs in, then `GET` and `POST` on `/users` and `/messages` through the page, then signs out
+  - any console error, failed request or HTTP error fails the step it happened in
+- **Needs:**
+  - AWS credentials that can read both stacks, the distribution and the deployments bucket, and
+    administer the user pool
+  - Chromium for Playwright: `npx playwright install chromium`; in CI, `--with-deps`
+- **4xx alarm:** a run makes one intentional 4xx through CloudFront (the unknown path). The app has
+  a favicon, so browsers don't add a 403 for `/favicon.ico` on every page view.
+
 ## Scripts
 
 | Command | Does |
 |---|---|
 | `npm run build` | typecheck (CDK app and frontend app) |
 | `npm test` | unit tests |
+| `FRONTEND_ENV=<env> npm run test:integration` | smoke + end-to-end tests against the deployed site |
 | `npm run synth:dev` / `synth:prod` | synthesize both stacks |
 | `npm run app:dev` | run the app locally (reads `app/.env.local`) |
 | `npm run app:build` | build the app into `dist/` (reads `VITE_*` from the environment or `app/.env.local`) |
