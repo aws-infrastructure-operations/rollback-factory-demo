@@ -193,6 +193,28 @@ Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
   `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`), the same as the API. The api-user stack must
   already exist in the environment.
 
+## Demo: break the frontend
+
+[`break-frontend-demo.yml`](../.github/workflows/break-frontend-demo.yml) is a manual workflow that
+runs in dev only.
+
+1. **Preflight:** checks that dev has a verified release to roll back to (deploy `main` through CI
+   first).
+2. **Broken release:** builds a release and uploads it with `--break missing-assets`, which uploads
+   the HTML but none of `assets/`. It is activated and recorded but not tested, so it is never
+   verified. Every page then loads, but its scripts and styles answer 403.
+3. **Traffic:** `demo:traffic` loads both pages and everything they reference, as a browser would,
+   for `traffic_minutes` (default 12). Every 30 s it logs the status codes, the 4xx share and the
+   release the distribution points at.
+
+The workflow never rolls back. The 4xx alarm should fire after about 3–6 minutes, and the rollback
+Lambda switches dev back. The traffic log shows the origin path switching, and later the 403s
+stopping once the invalidation is done. The job summary says which release dev serves at the end,
+next to the deployment history with the `rollback` record.
+
+To demo without breaking anything, `npm run rollback:trigger -- --env dev` sends the Lambda a fake
+alarm. It only rolls back if the latest deployment is within the rollback window.
+
 ## Integration tests
 
 `FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set
@@ -237,6 +259,7 @@ activating one.
 | `npm run deployment:list -- --env <env> [--limit 10]` | deployment history |
 | `npm run deployment:restore -- --env <env> --release <id> [--wait]` | activate any release with a manifest and record a `restore` |
 | `npm run rollback:trigger -- --env <env> [--alarm 4xx\|5xx]` | invoke the rollback Lambda as SNS would (demo) |
+| `npm run demo:traffic -- --env <env> [--minutes 10] [--preflight]` | load the site like a browser and report status codes + the live release (demo) |
 
 ## Context options
 
