@@ -9,9 +9,9 @@
  * USER_POOL_CLIENT_ID  skips the CloudFormation lookup of the app client id
  */
 import { parseArgs } from 'node:util';
-import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { getConfig } from '../lib/config.js';
 import { log, run } from './lib/cli.js';
+import { getIdToken } from './lib/cognito.js';
 import { upsertDotenv } from './lib/dotenv.js';
 import { BRUNO_DOTENV } from './lib/paths.js';
 import { requireStackOutputs } from './lib/stack.js';
@@ -30,21 +30,12 @@ run(async () => {
   if (!username || !password) throw new Error('Set API_USERNAME (or --username) and API_PASSWORD');
 
   const clientId = process.env.USER_POOL_CLIENT_ID ?? (await requireStackOutputs(config)).UserPoolClientId;
-  const { AuthenticationResult, ChallengeName } = await new CognitoIdentityProviderClient({}).send(
-    new InitiateAuthCommand({
-      AuthFlow: 'USER_PASSWORD_AUTH',
-      ClientId: clientId,
-      AuthParameters: { USERNAME: username, PASSWORD: password },
-    }),
-  );
-  if (!AuthenticationResult?.IdToken) {
-    throw new Error(`No token returned${ChallengeName ? ` (challenge: ${ChallengeName})` : ''}`);
-  }
+  const token = await getIdToken(clientId, username, password);
 
   const envKey = `ID_TOKEN_${config.envName.toUpperCase()}`;
   if (values['write-env']) {
-    upsertDotenv(BRUNO_DOTENV, envKey, AuthenticationResult.IdToken);
+    upsertDotenv(BRUNO_DOTENV, envKey, token);
     log(`Stored ${envKey} in bruno/.env`);
   }
-  process.stdout.write(`${AuthenticationResult.IdToken}\n`);
+  process.stdout.write(`${token}\n`);
 });
