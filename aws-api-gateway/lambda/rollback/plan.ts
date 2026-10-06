@@ -64,6 +64,62 @@ export interface RestoreRequest {
 export const isRestoreRequest = (event: unknown): event is RestoreRequest =>
   typeof (event as RestoreRequest)?.restore?.deployedAt === 'string';
 
+/** An API alarm and its paired alarm counting only the errors the backend Lambda produced. */
+export interface AlarmPair {
+  apiAlarm: string;
+  lambdaAlarm: string;
+  /** AWS/ApiGateway metric of the API alarm, e.g. 5XXError */
+  apiMetric: string;
+  /** access-log metric of the Lambda alarm, e.g. Lambda5XXError */
+  lambdaMetric: string;
+}
+
+export interface LambdaEvidence {
+  /** state of the paired Lambda alarm */
+  lambdaAlarmState?: string;
+  /** errors in the alarm's evaluation window: all of them, and those the Lambda produced */
+  apiErrors: number;
+  lambdaErrors: number;
+}
+
+/**
+ * Why the errors behind an API alarm are the backend Lambda's fault, or undefined if
+ * they are not. Then an API rollback would not help, since the API always invokes the
+ * latest Lambda. The paired Lambda alarm is checked first; as both alarms are evaluated
+ * independently it may not be in ALARM yet, so the Lambda is also at fault when it
+ * produced at least half of the errors in the evaluation window.
+ */
+export function lambdaFault(pair: AlarmPair, evidence: LambdaEvidence): string | undefined {
+  if (evidence.lambdaAlarmState === 'ALARM') return `${pair.lambdaAlarm} is in ALARM`;
+  const { apiErrors, lambdaErrors } = evidence;
+  if (apiErrors > 0 && lambdaErrors * 2 >= apiErrors) {
+    return `the Lambda produced ${lambdaErrors} of the ${apiErrors} ${pair.apiMetric} responses`;
+  }
+  return undefined;
+}
+
+/**
+ * Points every integration of the backend function in a spec at its "live" alias,
+ * whatever version or alias the spec was recorded with, so an API rollback keeps
+ * the latest code. Integrations of other functions are left alone.
+ */
+export function pointToAlias(spec: any, functionArn: string, aliasArn: string): any {
+  const copy = structuredClone(spec);
+  for (const methods of Object.values<any>(copy.paths ?? {})) {
+    for (const op of Object.values<any>(methods)) {
+      const integration = op?.['x-amazon-apigateway-integration'];
+      const uri: unknown = integration?.uri;
+      const match = typeof uri === 'string' ? uri.match(/\/functions\/(arn:[^/]+)\/invocations$/) : null;
+      if (!match) continue;
+      const arn = match[1];
+      if (arn === functionArn || arn.startsWith(`${functionArn}:`)) {
+        integration.uri = (uri as string).replace(arn, aliasArn);
+      }
+    }
+  }
+  return copy;
+}
+
 /** Lambda function ARNs (incl. version qualifier) used by the spec's integrations. */
 export function lambdaArnsFromSpec(spec: any): string[] {
   const arns = new Set<string>();
