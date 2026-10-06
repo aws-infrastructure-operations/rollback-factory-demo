@@ -103,10 +103,11 @@ The tests cover:
 - `GET` and `POST` on `/users` and `/messages` with a valid token (200 / 201, echoed message, caller email)
 - requests with no token or an invalid token get 401
 - a `POST` body without `message` gets 400 from the request validator
+- CORS: `OPTIONS` preflights answer with `Access-Control-Allow-Origin: *`, and so do normal responses and API Gateway's own errors (the browser frontend needs this)
 
 For each run, the suite creates a throwaway Cognito user with a random password and deletes it afterwards, so CI needs only AWS credentials.
 To test as an existing user instead, set `API_USERNAME` and `API_PASSWORD`.
-The 3 negative tests do add to the API's 4XXError metric, so keep them few.
+The 4 intentional 4xx calls do add to the API's 4XXError metric, so keep them few.
 
 ## Alarms & automatic rollback
 

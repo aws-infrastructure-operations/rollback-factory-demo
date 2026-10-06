@@ -96,7 +96,24 @@ export class ApiUserStack extends cdk.Stack {
         authorizer,
         authorizationType: apigw.AuthorizationType.COGNITO,
       },
+      // The frontend calls the API from its CloudFront domain. Any origin is fine:
+      // the token is sent in the Authorization header, never as a cookie.
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigw.Cors.ALL_ORIGINS,
+        allowMethods: ['GET', 'POST', 'OPTIONS'],
+        allowHeaders: ['Authorization', 'Content-Type'],
+        maxAge: cdk.Duration.hours(1),
+      },
     });
+
+    // Errors produced by API Gateway itself (401 from the authorizer, 400 from the
+    // validator, 5xx) need CORS headers too, or the browser hides them from the app.
+    for (const [id, type] of [['Cors4xx', apigw.ResponseType.DEFAULT_4XX], ['Cors5xx', apigw.ResponseType.DEFAULT_5XX]] as const) {
+      this.api.addGatewayResponse(id, {
+        type,
+        responseHeaders: { 'Access-Control-Allow-Origin': "'*'" },
+      });
+    }
 
     const messageModel = this.api.addModel('MessageModel', {
       modelName: 'Message',
