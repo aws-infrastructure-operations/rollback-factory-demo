@@ -1,0 +1,19 @@
+#!/usr/bin/env node
+import * as cdk from 'aws-cdk-lib';
+import { getConfig } from '../lib/config.js';
+import { ApiUserStack } from '../lib/api-user-stack.js';
+
+const app = new cdk.App();
+const config = getConfig(app.node.tryGetContext('env') ?? process.env.API_ENV ?? 'dev');
+
+new ApiUserStack(app, `ApiUserStack-${config.envName}`, {
+  config,
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+  description: `${config.apiName} REST API with Cognito authorizer`,
+});
+
+cdk.Tags.of(app).add('project', 'rollback-factory-demo');
+cdk.Tags.of(app).add('environment', config.envName);
