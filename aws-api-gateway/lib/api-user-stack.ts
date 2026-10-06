@@ -2,8 +2,10 @@ import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import { EnvConfig } from './config.js';
@@ -16,6 +18,8 @@ export class ApiUserStack extends cdk.Stack {
   readonly api: apigw.RestApi;
   readonly userPool: cognito.UserPool;
   readonly userPoolClient: cognito.UserPoolClient;
+  readonly specBucket: s3.Bucket;
+  readonly deploymentsTable: dynamodb.TableV2;
 
   constructor(scope: Construct, id: string, props: ApiUserStackProps) {
     super(scope, id, props);
@@ -108,6 +112,28 @@ export class ApiUserStack extends cdk.Stack {
       });
     }
 
+    // --- Deployment tracking ----------------------------------------------------
+    // One OpenAPI export per deployment, stored under specs/<timestamp>/ (see lambda/shared/deployments.ts).
+    this.specBucket = new s3.Bucket(this, 'SpecBucket', {
+      bucketName: `${config.apiName}-${cdk.Aws.ACCOUNT_ID}-deployments`,
+      versioned: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      removalPolicy,
+      autoDeleteObjects: !config.retainData,
+    });
+
+    // One item per deployment: pk = apiName, sk = deployedAt (ISO 8601), newest first via ScanIndexForward=false.
+    this.deploymentsTable = new dynamodb.TableV2(this, 'DeploymentsTable', {
+      tableName: `${config.apiName}-deployments`,
+      partitionKey: { name: 'apiName', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'deployedAt', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: config.retainData },
+      removalPolicy,
+    });
+
     // --- Outputs --------------------------------------------------------------
     const out = (name: string, value: string) =>
       new cdk.CfnOutput(this, name, { value, exportName: `${config.apiName}-${name}` });
@@ -116,5 +142,7 @@ export class ApiUserStack extends cdk.Stack {
     out('StageName', config.stageName);
     out('UserPoolId', this.userPool.userPoolId);
     out('UserPoolClientId', this.userPoolClient.userPoolClientId);
+    out('SpecBucketName', this.specBucket.bucketName);
+    out('DeploymentsTableName', this.deploymentsTable.tableName);
   }
 }

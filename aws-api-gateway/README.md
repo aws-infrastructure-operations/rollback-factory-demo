@@ -10,6 +10,8 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | Cognito user pool + app client | `api-user-<env>-users` / `api-user-<env>-client` |
 | Cognito authorizer | `api-user-<env>-cognito` (`Authorization: <ID token>`) |
 | Lambda backend (Node 24, arm64) | `api-user-<env>-handler` |
+| S3 bucket (versioned) for OpenAPI specs | `api-user-<env>-<account>-deployments` |
+| DynamoDB deployments table | `api-user-<env>-deployments` |
 
 ### Endpoints
 
@@ -28,13 +30,13 @@ All methods need a Cognito ID token in the `Authorization` header.
 npm ci
 npm test                 # CDK assertion tests
 npm run synth:dev        # cdk synth -c env=dev
-npm run deploy:dev       # cdk deploy -c env=dev
-npm run deploy:prod      # cdk deploy -c env=prod
+npm run deploy:dev       # collection sync -> cdk deploy -> record deployment
+npm run deploy:prod
 ```
 
 The first deploy to an account/region needs `npx cdk bootstrap`.
 
-Stack outputs (exported as `api-user-<env>-<Name>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`.
+Stack outputs (exported as `api-user-<env>-<Name>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`.
 
 ## Bruno collection & Cognito token
 
@@ -58,3 +60,26 @@ npm run token -- --env dev --write-env         # also writes ID_TOKEN_DEV to bru
 ```
 
 Then open `bruno/` in Bruno, or use the CLI: `cd bruno && npx @usebruno/cli run --env dev`.
+
+## Deployment history
+
+Every deployment of stage `v1` is recorded by `npm run deployment:record -- --env <env>`. `deploy:<env>` runs it automatically, and CI will run it too. The script:
+
+1. reads the deployment id the stage currently points to (if it matches the latest record, nothing changed and nothing is recorded; `--force` overrides)
+2. exports the stage as OpenAPI 3 JSON **with API Gateway extensions** (integrations, authorizers, validators), so it can be re-imported for a rollback
+3. uploads it to `s3://api-user-<env>-<account>-deployments/specs/<yyyymmddThhmmssZ>/openapi.json`
+4. writes an item to `api-user-<env>-deployments`:
+
+| Attribute | Example |
+|---|---|
+| `apiName` (PK) | `api-user-dev` |
+| `deployedAt` (SK) | `2026-10-06T12:30:05.123Z` |
+| `deploymentId`, `restApiId`, `stageName` | API Gateway ids |
+| `specBucket`, `specKey` | where the spec lives |
+| `source` | `manual`, `cicd` (inside GitHub Actions) or `rollback` |
+| `actor` | caller's IAM ARN, or `github:<actor>` |
+| `commitSha`, `runUrl`, `description`, `rolledBackFrom` | optional context |
+
+`npm run deployment:list -- --env dev` shows the latest records. The logic lives in [`lambda/shared/deployments.ts`](lambda/shared/deployments.ts) so the rollback Lambda can reuse it.
+
+> Deployments made outside these scripts (e.g. "Deploy API" in the console) are not recorded.
