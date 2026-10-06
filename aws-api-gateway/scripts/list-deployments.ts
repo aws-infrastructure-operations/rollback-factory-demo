@@ -3,21 +3,16 @@
  *
  * Usage: npx tsx scripts/list-deployments.ts --env dev [--limit 10]
  */
-import { DeploymentRecord, listDeployments } from '../lambda/shared/deployments.js';
+import { DeploymentRecord, formatDuration, listDeployments } from '../lambda/shared/deployments.js';
 import { parseCli, run } from './lib/cli.js';
 import { deploymentTarget, requireStackOutputs } from './lib/stack.js';
 
-/** 9006 -> 2h 30m 6s */
-const duration = (seconds: number) => {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  return [h && `${h}h`, (h || m) && `${m}m`, `${s}s`].filter(Boolean).join(' ');
-};
-
 const stability = (r: DeploymentRecord) => {
   if (r.stable === undefined) return '';
-  return r.stable ? `stable ${r.stableFor === undefined ? '' : duration(r.stableFor)}`.trim() : 'unstable';
+  if (!r.stable) return 'unstable';
+  // records written before stableFor was human-readable hold seconds
+  const stableFor = typeof r.stableFor === 'number' ? formatDuration(r.stableFor) : r.stableFor;
+  return `stable ${stableFor ?? ''}`.trim();
 };
 
 run(async () => {

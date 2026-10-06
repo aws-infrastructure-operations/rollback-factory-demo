@@ -138,7 +138,7 @@ Minutes with fewer requests than the minimum are ignored, so a handful of intent
 5. downloads the target's OpenAPI spec from S3, points its integrations at the stage's alias (`live` for `v1`), re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 6. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
 
-**Current and stable deployments.** The record the stage serves has `current=true`. Recording a new deployment (deploy, rollback or restore) moves `current` to it and, in the same transaction, marks the previous one `stable=true` with `stableFor` = seconds between its deployment and the next one. A deployment an alarm rolled back is instead left `stable=false` without `stableFor`. `npm run deployment:list` shows both.
+**Current and stable deployments.** The record the stage serves has `current=true`. Recording a new deployment (deploy, rollback or restore) moves `current` to it and, in the same transaction, marks the previous one `stable=true` with `stableFor` = the time between its deployment and the next one, human-readable (e.g. `2 days 3 hours 15 minutes`; seconds only below a minute). A deployment an alarm rolled back is instead left `stable=false` without `stableFor`. `npm run deployment:list` shows both.
 
 **Verified deployments.** CI runs `npm run deployment:verify -- --env <env>` after the integration tests pass. It marks the deployment the stage serves as verified, after checking that it is the latest record.
 A deployment made by hand only becomes a rollback target after you run the integration tests and then `deployment:verify`.
