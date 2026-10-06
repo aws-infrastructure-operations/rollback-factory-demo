@@ -77,28 +77,11 @@ jobs:
       environment: dev
       chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
     secrets: inherit
-  
-  deploy-testing:
-    if: github.event_name != 'pull_request'
-    needs: deploy-dev
-    uses: ./.github/workflows/api-gateway-deploy.yml
-    with:
-      environment: testing
-      chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
-    secrets: inherit
-  
-  deploy-staging:
-    if: github.event_name != 'pull_request'
-    needs: deploy-testing
-    uses: ./.github/workflows/api-gateway-deploy.yml
-    with:
-      environment: staging
-      chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
-    secrets: inherit
+
 
   deploy-prod:
     if: github.event_name == 'push' || inputs.promote_to_prod
-    needs: deploy-staging
+    needs: deploy-dev
     uses: ./.github/workflows/api-gateway-deploy.yml
     with:
       environment: prod
