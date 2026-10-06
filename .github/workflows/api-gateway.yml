@@ -11,10 +11,12 @@ on:
     paths:
       - aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
+      - "!**/*.md"
   pull_request:
     paths:
       - aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
+      - "!**/*.md"
   workflow_dispatch:
     inputs:
       promote_to_prod:
