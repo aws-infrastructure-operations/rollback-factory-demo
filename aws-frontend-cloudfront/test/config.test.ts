@@ -8,6 +8,7 @@ test('names the frontend and its resources per environment', () => {
   for (const env of ['dev', 'testing', 'staging', 'prod']) {
     const config = getConfig(env);
     assert.equal(config.frontendName, `frontend-user-${env}`);
+    assert.equal(config.integrationName, `frontend-user-${env}-integration`);
     assert.equal(config.resourceName('site'), `rollback-factory-demo-site-${env}`);
     assert.equal(config.stackName, `rollback-factory-demo-frontend-${env}`);
     assert.equal(config.alarmsStackName, `rollback-factory-demo-frontend-alarms-${env}`);
@@ -28,11 +29,13 @@ test('parses overrides from CDK context strings', () => {
     alarmEmail: 'ops@example.com',
     rollbackWindowMinutes: '15',
     liveReleaseId: '20261006T123005Z',
+    integrationReleaseId: '20261006T124500Z',
   });
   assert.equal(config.alarms.notificationsEnabled, false);
   assert.equal(config.alarms.email, 'ops@example.com');
   assert.equal(config.rollbackWindowMinutes, 15);
   assert.equal(config.liveReleaseId, '20261006T123005Z');
+  assert.equal(config.integrationReleaseId, '20261006T124500Z');
 
   const defaults = getConfig('dev', { liveReleaseId: '' });
   assert.equal(defaults.alarms.notificationsEnabled, true);
@@ -43,6 +46,7 @@ test('parses overrides from CDK context strings', () => {
 
 test('rejects invalid overrides', () => {
   assert.throws(() => getConfig('dev', { liveReleaseId: '../other' }), /liveReleaseId/);
+  assert.throws(() => getConfig('dev', { integrationReleaseId: 'latest' }), /integrationReleaseId/);
   assert.throws(() => getConfig('dev', { rollbackWindowMinutes: 'soon' }), /rollbackWindowMinutes/);
   assert.throws(() => getConfig('dev', { rollbackWindowMinutes: 0 }), /rollbackWindowMinutes/);
 });

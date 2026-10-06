@@ -52,7 +52,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 | 9 | Integration steps | Done | #26 |
 | 10 | 4xx and 5xx alarms with optional SNS notification | Done | #27 |
 | 11 | SNS → rollback Lambda (within X minutes, previous release, invalidate) | Done | #28 |
-| 12 | GitHub workflow: deploy, test, promote to prod, rollback | Done | #29, this PR (demo) |
+| 12 | GitHub workflow: deploy, test, promote to prod, rollback | Done | #29, #31 (demo), FE-11 (integration distribution) |
 
 #### 1-2. CDK app and naming
 
@@ -79,7 +79,9 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 - **Releases:** each build goes to `releases/<yyyymmddThhmmssZ>/` and is never overwritten. The
   origin path selects the live one. `release:activate` checks the files against the manifest,
   switches the origin path (conditional on the ETag) and invalidates `/*`.
-- **Keeping the live release:** `cdk deploy` always gets `-c liveReleaseId=<live release>`
+- **Integration distribution:** `frontend-user-<env>-integration` reads the same bucket and has no
+  alarms. CI makes each release live there first and tests it, like the API's `integration` stage.
+- **Keeping the live releases:** `cdk deploy` always gets `-c liveReleaseId=<id> -c integrationReleaseId=<id>`
   (`live:context`), so a deploy never undoes an activation or a rollback.
 
 #### 7. Build manifest
@@ -131,10 +133,10 @@ back, invalidates `/*`, and records a `rollback`.
 
 - **[`frontend.yml`](../.github/workflows/frontend.yml):** PR checks. On `main`, dev then prod through
   [`frontend-deploy.yml`](../.github/workflows/frontend-deploy.yml): cdk deploy (live release kept),
-  build against the env's API, upload + manifest, activate (timed), record, integration tests, verify.
-- **Failed tests:** the environment is switched back to the previous release and prod isn't deployed.
-  A release can only be tested once it is live (private bucket, one origin path), unlike the API's
-  separate `integration` stage.
+  build against the env's API, upload + manifest, make it live on the integration distribution,
+  integration tests there, make the same release live on `frontend-user-<env>` (timed), record, verify.
+- **Failed tests:** the job stops, `frontend-user-<env>` was never touched, and the next environments
+  aren't deployed.
 - **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda).
 - **[`frontend-restore.yml`](../.github/workflows/frontend-restore.yml):** restores a chosen release,
   tests it and marks it verified.
@@ -148,8 +150,9 @@ back, invalidates `/*`, and records a `rollback`.
   reset. A `cdk deploy` without it would go back to the placeholder.
 - **Unrecorded changes:** changing the origin path in the console is not recorded. The rollback
   Lambda then refuses to act, because the live release isn't the latest record.
-- **Testing after going live:** a broken release is live for the length of the integration tests,
-  plus the switch back, before the workflow restores the previous one.
+- **Two switches per deploy:** a release is switched twice, first on the integration distribution
+  and then on the real one. Each switch is a distribution update plus an invalidation, so a deploy
+  takes a few minutes longer than with one distribution.
 - **Rollback speed:** a rollback takes the alarm delay (CloudFront metrics arrive a few minutes late,
   and 2 of 3 minutes must breach), then the distribution update and the invalidation (a few minutes
   each). Deploy runs report the activation timing in their job summary. Measure the full alarm-to-restored

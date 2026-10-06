@@ -10,6 +10,7 @@ const config = getConfig(ctx('env') ?? process.env.FRONTEND_ENV ?? 'dev', {
   alarmEmail: ctx('alarmEmail'),
   rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
   liveReleaseId: ctx('liveReleaseId'),
+  integrationReleaseId: ctx('integrationReleaseId'),
 });
 
 createFrontendStacks(app, config, {

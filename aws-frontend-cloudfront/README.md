@@ -23,17 +23,26 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 ## Hosting
 
 - **Site bucket** `rollback-factory-demo-<account>-frontend-site-<env>`: private (all public access
-  blocked, HTTPS only). Only the distribution can read it, through Origin Access Control. Retained in prod.
-- **Distribution** `frontend-user-<env>` (its comment): HTTPS only (HTTP redirects), HTTP/2 + HTTP/3,
+  blocked, HTTPS only). Only the two distributions can read it, through Origin Access Control. Retained in prod.
+- **Two distributions**, configured the same way: HTTPS only (HTTP redirects), HTTP/2 + HTTP/3,
   managed security headers, `index.html` as root object.
-- **Releases:** each release lives under `releases/<id>/`, and the distribution's **origin path**
-  (`/releases/<id>`) selects the live one. A fresh stack serves a placeholder from `releases/initial/`.
-- **`-c liveReleaseId`:** `cdk deploy` sets the origin path to this release, or to `initial` without it.
-  Always pass the live release (`npm run live:context`, FE-04), or a deploy undoes an activation or a rollback.
+
+  | Distribution (comment) | Used by | Alarms / rollback |
+  |---|---|---|
+  | `frontend-user-<env>` | clients | yes |
+  | `frontend-user-<env>-integration` | CI: each release is made live and tested here first | no, so test traffic never counts toward a rollback |
+
+- **Releases:** each release lives under `releases/<id>/`, and each distribution's **origin path**
+  (`/releases/<id>`) selects the release it serves. Both read the same bucket, so the release that
+  passed on integration is exactly what clients get. A fresh stack serves a placeholder from
+  `releases/initial/`.
+- **`-c liveReleaseId` / `-c integrationReleaseId`:** `cdk deploy` sets each origin path to this
+  release, or to `initial` without it. Always pass both (`npm run live:context`), or a deploy undoes an
+  activation or a rollback.
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
   can't list the bucket), so a broken release trips the 4xx alarm.
 - **Outputs** (exported as `rollback-factory-demo-frontend-<output>-<env>`, so they never clash with the API stack's exports in the same region): `DistributionId`,
-  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `DeploymentsBucketName`, `DeploymentsTableName`.
+  `DistributionDomainName`, `SiteUrl`, `IntegrationDistributionId`, `IntegrationSiteUrl`, `SiteBucketName`, `DeploymentsBucketName`, `DeploymentsTableName`.
 - **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
   raised without a custom domain.
 
@@ -169,21 +178,20 @@ Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
   these workflows. Changes to `.md` files alone don't trigger a run.
 - **Pull requests:** typecheck, unit tests, app build with dummy settings, synth dev and prod.
   No AWS credentials are needed.
-- **`main` / manual run:** for dev, then for prod:
+- **`main` / manual run:** for each environment in turn (dev → testing → staging → prod):
   1. bootstrap the main region and us-east-1
-  2. `cdk deploy --all`, keeping the live release (`live:context`)
+  2. `cdk deploy --all`, both distributions keeping their release (`live:context`)
   3. `release:build` against that environment's api-user stack, then `release:upload` (release + manifest)
-  4. `release:activate --wait`, then `deployment:record`
-  5. integration tests, with `FRONTEND_RELEASE` set to the new release
-  6. `deployment:verify`
+  4. `release:activate --target integration --wait`: the release goes live on
+     `frontend-user-<env>-integration` only
+  5. integration tests there (`FRONTEND_TARGET=integration`, `FRONTEND_RELEASE` = the new release)
+  6. `release:activate --wait`: the same release goes live on `frontend-user-<env>`, then
+     `deployment:record` and `deployment:verify`
   7. activation timing (distribution deployed / invalidation completed) and the deployment
      history in the job summary
-- **Failed tests:** the environment is switched back to the release it served before
-  (`deployment:restore`, recorded as a `restore`). The job fails with the test output in the summary,
-  and prod isn't deployed. A release can only be tested once it is live, because the bucket is
-  private and the distribution has one origin path, so the switch back is the workflow's safety net.
-  On the very first deploy there is nothing to switch back to.
-- **Promotion:** prod deploys only when dev is green. Prod gets its own build, with the prod API
+- **Failed tests:** the job stops with the test output in the summary. `frontend-user-<env>` was never
+  touched, and the next environments aren't deployed. This is the same as the API's integration stage.
+- **Promotion:** each environment deploys only when the previous one is green. Prod gets its own build, with the prod API
   and user pool. Add required reviewers on the `prod` GitHub environment to gate it with an approval.
 - **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't
   watch alarms after a deploy.
@@ -217,9 +225,10 @@ alarm. It only rolls back if the latest deployment is within the rollback window
 
 ## Integration tests
 
-`FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set
-`FRONTEND_RELEASE=<id>` to fail unless that release is live, which is what CI does right after
-activating one.
+`FRONTEND_ENV=<env> npm run test:integration` tests the release `frontend-user-<env>` serves.
+- **`FRONTEND_TARGET=integration`** tests `frontend-user-<env>-integration` instead, which is what CI
+  does before promoting.
+- **`FRONTEND_RELEASE=<id>`** makes the run fail unless that release is the one served.
 
 - **Smoke** ([`integration/smoke.integration.test.ts`](integration/smoke.integration.test.ts)):
   - `/` is the live release's `index.html` (sha256 against the manifest) over HTTPS, and HTTP redirects
@@ -236,8 +245,9 @@ activating one.
   - AWS credentials that can read both stacks, the distribution and the deployments bucket, and
     administer the user pool
   - Chromium for Playwright: `npx playwright install chromium`; in CI, `--with-deps`
-- **4xx alarm:** a run makes one intentional 4xx through CloudFront (the unknown path). The app has
-  a favicon, so browsers don't add a 403 for `/favicon.ico` on every page view.
+- **4xx alarm:** a run makes one intentional 4xx through CloudFront (the unknown path). On the
+  integration distribution it can't count toward anything, since that distribution has no alarms.
+  The app has a favicon, so browsers don't add a 403 for `/favicon.ico` on every page view.
 
 ## Scripts
 
@@ -249,11 +259,11 @@ activating one.
 | `npm run synth:dev` / `synth:prod` | synthesize both stacks |
 | `npm run app:dev` | run the app locally (reads `app/.env.local`) |
 | `npm run app:build` | build the app into `dist/` (reads `VITE_*` from the environment or `app/.env.local`) |
-| `npm run deploy:dev` / `deploy:prod` | live context → `cdk deploy --all` → build → upload → activate (waits) |
+| `npm run deploy:dev` / `deploy:prod` | manual deploy without tests: live context → `cdk deploy --all` → build → upload → activate on `frontend-user-<env>` (waits) → record |
 | `npm run release:build -- --env <env>` | build a new release against the API stack outputs |
 | `npm run release:upload -- --env <env>` | upload it + store its manifest |
-| `npm run release:activate -- --env <env> --release <id> [--wait]` | make a release live |
-| `npm run live:context -- --env <env>` | print `-c liveReleaseId=<id>` for `cdk deploy` |
+| `npm run release:activate -- --env <env> --release <id> [--target live\|integration] [--wait]` | make a release live on `frontend-user-<env>` (default) or on the integration distribution |
+| `npm run live:context -- --env <env>` | print `-c liveReleaseId=<id> -c integrationReleaseId=<id>` for `cdk deploy` |
 | `npm run deployment:record -- --env <env> [--release <id>]` | record the release the distribution serves |
 | `npm run deployment:verify -- --env <env> [--release <id>]` | mark the live deployment verified (after the integration tests) |
 | `npm run deployment:list -- --env <env> [--limit 10]` | deployment history |
@@ -265,7 +275,8 @@ activating one.
 
 | Option | Default | Used by |
 |---|---|---|
-| `liveReleaseId` | – | origin path the distribution keeps (FE-02, FE-04) |
+| `liveReleaseId` | – | origin path `frontend-user-<env>` keeps (FE-02, FE-04) |
+| `integrationReleaseId` | – | origin path `frontend-user-<env>-integration` keeps (FE-11) |
 | `alarmNotifications` | `true` | alarm actions on/off (FE-07) |
 | `alarmEmail` | – | e-mail subscription on the alarm topic (FE-07) |
 | `rollbackWindowMinutes` | `30` | rollback Lambda window (FE-08) |

@@ -12,7 +12,7 @@ import { strict as assert } from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 import { before, describe, test } from 'node:test';
 import { releasePrefix } from '../lambda/shared/releases.js';
-import { config, LiveSite, liveSite } from './lib/site.js';
+import { config, LiveSite, liveSite, target } from './lib/site.js';
 
 let site: LiveSite;
 
@@ -22,7 +22,7 @@ before(async () => {
 
 const sha256 = (body: ArrayBuffer) => createHash('sha256').update(Buffer.from(body)).digest('hex');
 
-describe(`${config.frontendName} smoke`, () => {
+describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''} smoke`, () => {
   test('serves the live release\'s index.html at / over HTTPS', async () => {
     const res = await fetch(`${site.siteUrl}/`);
     assert.equal(res.status, 200);

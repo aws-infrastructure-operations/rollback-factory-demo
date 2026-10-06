@@ -7,6 +7,8 @@ export interface FrontendOutputs {
   DistributionId: string;
   DistributionDomainName: string;
   SiteUrl: string;
+  IntegrationDistributionId: string;
+  IntegrationSiteUrl: string;
   SiteBucketName: string;
   DeploymentsBucketName: string;
   DeploymentsTableName: string;
@@ -60,7 +62,10 @@ export const getFrontendOutputs = async (config: EnvConfig) =>
 export const requireFrontendOutputs = (config: EnvConfig) =>
   requireOutputs<FrontendOutputs>(
     config.stackName,
-    ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName'],
+    [
+      'DistributionId', 'DistributionDomainName', 'SiteUrl', 'IntegrationDistributionId', 'IntegrationSiteUrl',
+      'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName',
+    ],
     `Deploy it first: npx cdk deploy --all -c env=${config.envName}`,
   );
 
@@ -81,3 +86,19 @@ export const requireApiOutputs = (config: EnvConfig) =>
 
 export const deploymentStore = (config: EnvConfig, outputs: FrontendOutputs) =>
   createDeploymentStore({ table: outputs.DeploymentsTableName, frontendName: config.frontendName });
+
+/**
+ * Which distribution a script acts on: `live` is frontend-user-<env> (what clients use, what
+ * gets recorded and rolled back), `integration` is frontend-user-<env>-integration (where CI
+ * tests a release before it goes live).
+ */
+export type Target = 'live' | 'integration';
+
+export function parseTarget(value: string | undefined): Target {
+  if (value === undefined || value === 'live' || value === 'integration') return value ?? 'live';
+  throw new Error(`--target must be live or integration, got "${value}"`);
+}
+
+export const targetDistribution = (config: EnvConfig, outputs: FrontendOutputs, target: Target) => (target === 'live'
+  ? { name: config.frontendName, distributionId: outputs.DistributionId, siteUrl: outputs.SiteUrl }
+  : { name: config.integrationName, distributionId: outputs.IntegrationDistributionId, siteUrl: outputs.IntegrationSiteUrl });
