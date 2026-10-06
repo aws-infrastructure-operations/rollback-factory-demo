@@ -36,8 +36,6 @@ export interface EnvConfig {
   /** Alarms, SNS topic and rollback Lambda. CloudFront only publishes metrics in us-east-1. */
   alarmsStackName: string;
   alarmsRegion: string;
-  /** The api-user stack of the same environment; the app is built with its outputs. */
-  apiStackName: string;
   /**
    * The release the distribution serves right now (from scripts/live-context.ts).
    * `cdk deploy` keeps the origin path on it, so a deploy never undoes a rollback.
@@ -98,7 +96,6 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     stackName: resourceName('frontend'),
     alarmsStackName: resourceName('frontend-alarms'),
     alarmsRegion: ALARMS_REGION,
-    apiStackName: `${PROJECT_NAME}-${envName}`,
     liveReleaseId,
     integrationReleaseId,
     retainData: envName === 'prod',

@@ -22,13 +22,6 @@ export interface AlarmsOutputs {
   RollbackFunctionName: string;
 }
 
-/** The outputs of rollback-factory-demo-<env> (the api-user stack) a release is built with. */
-export interface ApiOutputs {
-  ApiUrl: string;
-  UserPoolId: string;
-  UserPoolClientId: string;
-}
-
 const cfn = new CloudFormationClient({});
 const cfnAlarmsRegion = new CloudFormationClient({ region: ALARMS_REGION });
 
@@ -77,12 +70,6 @@ export const requireAlarmsOutputs = (config: EnvConfig) =>
     cfnAlarmsRegion,
   );
 
-export const requireApiOutputs = (config: EnvConfig) =>
-  requireOutputs<ApiOutputs>(
-    config.apiStackName,
-    ['ApiUrl', 'UserPoolId', 'UserPoolClientId'],
-    'Deploy the API first (aws-api-gateway).',
-  );
 
 export const deploymentStore = (config: EnvConfig, outputs: FrontendOutputs) =>
   createDeploymentStore({ table: outputs.DeploymentsTableName, frontendName: config.frontendName });

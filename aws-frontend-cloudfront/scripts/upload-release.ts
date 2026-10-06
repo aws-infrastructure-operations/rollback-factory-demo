@@ -67,9 +67,6 @@ run(async () => {
     env: config.envName,
     builtAt: release.builtAt,
     ...context,
-    apiUrl: release.apiUrl,
-    userPoolId: release.userPoolId,
-    userPoolClientId: release.userPoolClientId,
     broken: values.break,
     files,
   };

@@ -3,14 +3,13 @@ name: frontend-deploy
 # Reusable: deploys one environment of frontend-user, testing each release on the integration
 # distribution before clients get it (like the API's integration stage):
 #   cdk deploy (both stacks; both distributions keep the release they serve) -> build a release
-#   against the API stack outputs -> upload it + its manifest -> make it live on
+#   -> upload it + its manifest -> make it live on
 #   frontend-user-<env>-integration -> integration tests there -> make the same release live on
 #   frontend-user-<env> -> record -> mark verified.
 # If the tests fail, the job stops with the test output in the summary and frontend-user-<env>
 # was never touched.
 # Needs, per GitHub environment:
 #   secrets.AWS_ACCESS_KEY_ID, secrets.AWS_SECRET_ACCESS_KEY, vars.AWS_REGION
-# and the api-user stack (aws-api-gateway) deployed in that environment.
 
 on:
   workflow_call:
@@ -70,7 +69,7 @@ jobs:
         # LIVE_CONTEXT is unquoted on purpose: it holds up to two -c arguments
         run: npx cdk deploy --all -c env="$FRONTEND_ENV" $LIVE_CONTEXT --require-approval never
 
-      - name: Build the release against the api-user stack outputs
+      - name: Build the release
         id: build
         run: |
           release="$(npm run -s release:build -- --env "$FRONTEND_ENV")"

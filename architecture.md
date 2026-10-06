@@ -111,9 +111,9 @@ branch to dev and sends traffic, to show an alarm rollback.
 
 No diagram yet. In short:
 
-- **Hosting:** a Vite + TypeScript app is served by the CloudFront distribution `frontend-user-<env>`
-  from a private S3 bucket, through Origin Access Control and HTTPS only. It signs in with the API's
-  user pool and calls the API.
+- **Hosting:** a simple Vite + TypeScript page is served by the CloudFront distribution `frontend-user-<env>`
+  from a private S3 bucket, through Origin Access Control and HTTPS only. It shows the environment and
+  the release it serves. Sign-in and calling the API are out of scope for now.
 - **Releases:** each build is uploaded once to `releases/<yyyymmddThhmmssZ>/`, and its build manifest
   goes to S3. The distribution's **origin path** selects the live release.
 - **Pipeline:** CI makes a release live on the integration distribution `frontend-user-<env>-integration`
