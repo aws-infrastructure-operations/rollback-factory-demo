@@ -1,0 +1,14 @@
+{
+  "maxConsecutiveRollbacks": 2,
+  "deploymentWindowMinutes": 10,
+  "functions": [
+    {
+      "name": "service-lambda-<env>",
+      "enabled": true,
+      "alias": "live",
+      "alarms": [
+        "rollback-factory-demo-service-lambda-errors-<env>"
+      ]
+    }
+  ]
+}
