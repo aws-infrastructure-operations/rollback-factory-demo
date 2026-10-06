@@ -1,5 +1,6 @@
 import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
 import { EnvConfig } from '../../lib/config.js';
+import { DeploymentTarget } from '../../lambda/shared/deployments.js';
 
 export interface StackOutputs {
   ApiId: string;
@@ -7,6 +8,8 @@ export interface StackOutputs {
   StageName: string;
   UserPoolId: string;
   UserPoolClientId: string;
+  SpecBucketName: string;
+  DeploymentsTableName: string;
 }
 
 const cfn = new CloudFormationClient({});
@@ -32,3 +35,11 @@ export async function requireStackOutputs(config: EnvConfig): Promise<StackOutpu
   if (!outputs) throw new Error(`Stack ${config.stackName} is not deployed`);
   return outputs;
 }
+
+export const deploymentTarget = (config: EnvConfig, outputs: StackOutputs): DeploymentTarget => ({
+  apiName: config.apiName,
+  restApiId: outputs.ApiId,
+  stageName: outputs.StageName,
+  specBucket: outputs.SpecBucketName,
+  table: outputs.DeploymentsTableName,
+});
