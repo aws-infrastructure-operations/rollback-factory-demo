@@ -243,6 +243,12 @@ alarm. It only rolls back if the latest deployment is within the rollback window
   integration distribution it can't count toward anything, since that distribution has no alarms.
   The app has a favicon, so browsers don't add a 403 for `/favicon.ico` on every page view.
 
+## Diagram
+
+[`docs/architecture-diagram-prompt.md`](docs/architecture-diagram-prompt.md) has a prompt for an image
+model to draw this setup: the two distributions, the release bucket, the deploy flow and the
+rollback in us-east-1.
+
 ## Scripts
 
 | Command | Does |

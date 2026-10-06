@@ -110,7 +110,7 @@ branch to dev and sends traffic, to show an alarm rollback.
 
 ## Lambda (`service-lambda-<env>`)
 
-No diagram yet. In short:
+No diagram yet: generate one from [`aws-lambda/docs/architecture-diagram-prompt.md`](aws-lambda/docs/architecture-diagram-prompt.md). In short:
 
 - **Deploy:** `cdk deploy` publishes a new version to the `integration` alias while `live` stays
   pinned. CI invokes `service-lambda-<env>:integration` in the integration tests, and only then
@@ -129,7 +129,7 @@ See the [Lambda README](aws-lambda/README.md) for details.
 
 ## Frontend (`frontend-user-<env>`)
 
-No diagram yet. In short:
+No diagram yet: generate one from [`aws-frontend-cloudfront/docs/architecture-diagram-prompt.md`](aws-frontend-cloudfront/docs/architecture-diagram-prompt.md). In short:
 
 - **Hosting:** a simple Vite + TypeScript page is served by the CloudFront distribution `frontend-user-<env>`
   from a private S3 bucket, through Origin Access Control and HTTPS only. It shows the environment and
