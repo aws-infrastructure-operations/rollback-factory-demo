@@ -70,7 +70,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 #### 6. OpenAPI spec in S3
 
 - **How:** after each deploy, `npm run deployment:record` exports stage `v1` as OpenAPI 3 JSON, including the API Gateway extensions, so the spec can be imported again for a rollback.
-- **Where:** `s3://rollback-factory-demo-<account>-deployments-<env>/specs/<yyyymmddThhmmssZ>/openapi.json`
+- **Where:** `s3://rollback-factory-demo-<account>-deployments-<env>/<apiName>/<yyyymmddThhmmssZ>/openapi.json`, e.g. `api-user-dev/20261006T123005Z/openapi.json`
 - **Deviation:** one versioned bucket per environment, with the timestamp in the object key. A new bucket per deployment, as the story's name suggests, would hit AWS bucket limits and scatter the history.
 - **Deviation:** the spec is stored right *after* the deploy, not before. API Gateway can only export a stage that is already deployed. Every deployment still gets its own spec, which is what rollback needs.
 

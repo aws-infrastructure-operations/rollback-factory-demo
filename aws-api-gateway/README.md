@@ -73,7 +73,7 @@ Every deployment of stage `v1` is recorded by `npm run deployment:record -- --en
 
 1. reads the deployment id the stage currently points to (if it matches the latest record, nothing changed and nothing is recorded; `--force` overrides)
 2. exports the stage as OpenAPI 3 JSON **with API Gateway extensions** (integrations, authorizers, validators), so it can be re-imported for a rollback
-3. uploads it to `s3://rollback-factory-demo-<account>-deployments-<env>/specs/<yyyymmddThhmmssZ>/openapi.json`
+3. uploads it to `s3://rollback-factory-demo-<account>-deployments-<env>/<apiName>/<yyyymmddThhmmssZ>/openapi.json` (one folder per API, e.g. `api-user-dev/`, holding one folder per deployment)
 4. writes an item to `rollback-factory-demo-deployments-<env>`:
 
 | Attribute | Example |

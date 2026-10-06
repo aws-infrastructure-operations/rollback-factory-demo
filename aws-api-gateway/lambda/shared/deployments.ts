@@ -3,7 +3,7 @@
  *
  * Every deployment of a stage gets:
  *   - its OpenAPI 3 export (with API Gateway extensions, so it can be re-imported)
- *     stored at s3://<apiName>-<account>-deployments/specs/<timestamp>/openapi.json
+ *     stored at s3://<spec bucket>/<apiName>/<timestamp>/openapi.json
  *   - a record in the <apiName>-deployments DynamoDB table
  */
 import { APIGatewayClient, GetExportCommand, GetStageCommand } from '@aws-sdk/client-api-gateway';
@@ -62,7 +62,8 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
 export const compactTimestamp = (date: Date) =>
   date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 
-export const specKey = (date: Date) => `specs/${compactTimestamp(date)}/openapi.json`;
+/** <apiName>/<timestamp>/openapi.json - one "folder" per API, one per deployment inside it. */
+export const specKey = (apiName: string, date: Date) => `${apiName}/${compactTimestamp(date)}/openapi.json`;
 
 export function buildRecord(
   target: DeploymentTarget,
@@ -77,7 +78,7 @@ export function buildRecord(
     stageName: target.stageName,
     deploymentId,
     specBucket: target.specBucket,
-    specKey: specKey(now),
+    specKey: specKey(target.apiName, now),
     source: opts.source,
     actor: opts.actor,
     commitSha: opts.commitSha,
