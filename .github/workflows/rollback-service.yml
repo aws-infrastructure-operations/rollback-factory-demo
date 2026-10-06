@@ -1,7 +1,7 @@
 name: rollback-service
 
 # PRs: typecheck, unit tests, synth.
-# main / manual, per environment (dev -> testing -> staging -> prod): deploy the rollback service
+# main / manual, per environment (dev -> prod): deploy the rollback service
 # (us-east-1 topic, then the main stack) -> integration tests -> move to the next environment.
 # Deploy it before the projects: their alarms publish to its topics, and deploy-aws-lambda's deploy
 # invokes it to sync.

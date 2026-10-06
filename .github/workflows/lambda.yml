@@ -1,7 +1,7 @@
 name: lambda
 
 # PRs: typecheck, unit tests, synth.
-# main / manual, per environment (dev -> testing -> staging -> prod): deploy to the integration
+# main / manual, per environment (dev -> prod): deploy to the integration
 # alias -> integration tests -> promote live. Failed tests stop the run with live untouched.
 # Alarms after a deploy are handled in AWS (errors alarm -> SNS -> rollback function), not here.
 # After dev, the "lambda rollback to commit" dropdown is refreshed from dev's deployed commits.
