@@ -4,7 +4,13 @@ import { getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 
 const app = new cdk.App();
-const config = getConfig(app.node.tryGetContext('env') ?? process.env.API_ENV ?? 'dev');
+const ctx = (key: string) => app.node.tryGetContext(key);
+const config = getConfig(ctx('env') ?? process.env.API_ENV ?? 'dev', {
+  alarmNotifications: ctx('alarmNotifications'),
+  alarmEmail: ctx('alarmEmail'),
+  rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
+  chaosFailureRate: ctx('chaosFailureRate'),
+});
 
 new ApiUserStack(app, config.stackName, {
   config,

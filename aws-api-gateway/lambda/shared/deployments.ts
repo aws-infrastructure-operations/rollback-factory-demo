@@ -8,8 +8,8 @@
  */
 import { APIGatewayClient, GetExportCommand, GetStageCommand } from '@aws-sdk/client-api-gateway';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 export type DeploymentSource = 'manual' | 'cicd' | 'rollback';
 
@@ -30,6 +30,8 @@ export interface DeploymentRecord {
   description?: string;
   /** For rollbacks: the deployedAt of the record that was rolled back */
   rolledBackFrom?: string;
+  /** Set on a deployment once a rollback has claimed it (see claimRollback) */
+  rolledBackAt?: string;
 }
 
 export interface DeploymentTarget {
@@ -147,4 +149,30 @@ export async function recordDeployment(
     ConditionExpression: 'attribute_not_exists(deployedAt)',
   }));
   return record;
+}
+
+export async function getSpec(bucket: string, key: string): Promise<string> {
+  const { Body } = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!Body) throw new Error(`Empty spec s3://${bucket}/${key}`);
+  return Body.transformToString('utf8');
+}
+
+/**
+ * Marks a deployment as being rolled back. Returns false if another rollback
+ * already claimed it, so concurrent alarms (4xx + 5xx) roll back only once.
+ */
+export async function claimRollback(table: string, record: DeploymentRecord, now = new Date()) {
+  try {
+    await ddb.send(new UpdateCommand({
+      TableName: table,
+      Key: { apiName: record.apiName, deployedAt: record.deployedAt },
+      UpdateExpression: 'SET rolledBackAt = :now',
+      ConditionExpression: 'attribute_exists(deployedAt) AND attribute_not_exists(rolledBackAt)',
+      ExpressionAttributeValues: { ':now': now.toISOString() },
+    }));
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
 }
