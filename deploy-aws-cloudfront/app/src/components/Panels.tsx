@@ -51,23 +51,26 @@ export function ListPanel({
 }
 
 /**
- * Right column: the selected resource. The tabs only change which one is highlighted for now;
- * every tab shows the first tab's table until the panels get real data.
+ * Right column: the selected resource. `children` as a function renders the active tab; as plain
+ * content (the sample-data sections) every tab shows it and the tabs only change the highlight.
  */
-export function DetailPanel({ icon, tint, name, badge, subtitle, tabs, children }: ServiceIconProps & {
+export function DetailPanel({ id, icon, tint, name, badge, subtitle, tabs, state, children }: ServiceIconProps & {
+  id?: string;
   name: string;
-  badge: string;
+  badge?: string;
   subtitle: ReactNode;
   tabs: string[];
-  children: ReactNode;
+  /** data-state, for tests: 'loading', 'ready' or 'error' */
+  state?: string;
+  children: ReactNode | ((tab: string) => ReactNode);
 }) {
   const [active, setActive] = useState(tabs[0]);
   return (
-    <section className="panel detail" aria-label={`${name} details`}>
+    <section className="panel detail" id={id} aria-label={`${name} details`} data-state={state}>
       <div className="panel-header">
         <ServiceIcon icon={icon} tint={tint} />
         <div className="panel-title">
-          <h2>{name} <span className="badge"><Icon name="check" size={12} />{badge}</span></h2>
+          <h2>{name} {badge && <span className="badge"><Icon name="check" size={12} />{badge}</span>}</h2>
           <p className="subtitle">{subtitle}</p>
         </div>
       </div>
@@ -79,7 +82,7 @@ export function DetailPanel({ icon, tint, name, badge, subtitle, tabs, children 
           </button>
         ))}
       </div>
-      {children}
+      {typeof children === 'function' ? children(active) : children}
     </section>
   );
 }

@@ -69,4 +69,20 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     const rows = await page.locator('#api-gateways tbody tr:not(:has(td.state))').count();
     assert.equal(rows, body.apis.length);
   });
+
+  test('shows the selected API\'s stages from the dashboard API', async (t) => {
+    const { apis } = await (await page.request.get(`${site.siteUrl}/api/api-gateways`)).json();
+    if (!apis.length) return t.skip('no API Gateway in the region');
+    const [first] = apis;
+    const response = await page.request.get(`${site.siteUrl}/api/api-gateways/${first.id}?type=${first.type}`);
+    assert.equal(response.status(), 200);
+    const details = await response.json();
+    assert.equal(details.id, first.id);
+    assert.deepEqual(details.stages.map((s: { name: string }) => s.name), first.stages);
+    // the first API is selected and its details loaded without errors
+    await page.locator('#api-gateway-details:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#api-gateway-details').getAttribute('data-state'), 'ready');
+    assert.match((await page.locator('#api-gateway-details h2').textContent()) ?? '', new RegExp(first.name));
+    assert.deepEqual(problems.splice(0), []);
+  });
 });

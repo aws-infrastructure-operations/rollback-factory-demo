@@ -42,9 +42,10 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   activation or a rollback.
 - **Dashboard API** at `/api/*` on both distributions: a Lambda (`rollback-factory-demo-frontend-dashboard-api-<env>`,
   [`lambda/dashboard-api`](lambda/dashboard-api)) behind a function URL with IAM auth, which only these two
-  distributions can call (Origin Access Control). Never cached. It reads, and can only read, the API Gateway
-  lists and stages of the stack's region (`apigateway:GET`). It has no sign-in: anyone with the site URL
-  can see the API names and stages.
+  distributions can call (Origin Access Control). Never cached. It reads, and can only read, the stack region's
+  API Gateways: the API list, each API, and its stages and deployments (`apigateway:GET`, one API id per
+  path, so no stage exports). It has no sign-in: anyone with the site URL can see the API names, stages and
+  deployments.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -58,7 +59,10 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 
 Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Control Center dashboard.
 - **API Gateways** is live: the region's REST, HTTP and WebSocket APIs with their stages and latest
-  deployment, from `GET /api/api-gateways` (the dashboard API). Search filters the list, refresh reloads it.
+  deployment, from `GET /api/api-gateways` (the dashboard API). Search filters the list, refresh reloads it
+  (and the selected API). Next to it, the selected API's **stages** (and the deployment each serves), its latest
+  **deployments** and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`.
+  The Rollback buttons are disabled until the dashboard has sign-in.
 - **Lambda Functions** and **CloudFront Distributions** are still **sample data**
   ([`app/src/mock-data.ts`](app/src/mock-data.ts)); their tabs and rollback buttons are visual only.
 
