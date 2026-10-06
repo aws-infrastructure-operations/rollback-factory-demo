@@ -170,3 +170,9 @@ td.wrap { white-space: normal; min-width: 140px; }
   .panel-tools { width: 100%; }
   .search { flex: 1; width: auto; }
 }
+
+/* --- Loading, empty and error rows --------------------------------------------------------------- */
+td.state { padding: 18px 10px; color: var(--muted); text-align: center; white-space: normal; }
+td.state.error { color: #b42318; }
+.count { color: var(--muted); font-weight: 400; font-size: 14px; }
+.refresh-error { margin: 0 0 8px; color: #b42318; font-size: 13px; }

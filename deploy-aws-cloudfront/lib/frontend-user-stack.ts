@@ -3,6 +3,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
@@ -23,6 +27,7 @@ export class FrontendUserStack extends cdk.Stack {
   readonly integrationDistribution: cloudfront.Distribution;
   readonly deploymentsBucket: s3.Bucket;
   readonly deploymentsTable: dynamodb.TableV2;
+  readonly dashboardApi: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: FrontendUserStackProps) {
     super(scope, id, props);
@@ -41,6 +46,32 @@ export class FrontendUserStack extends cdk.Stack {
       removalPolicy,
       autoDeleteObjects: !config.retainData,
     });
+
+    // --- Dashboard API ------------------------------------------------------------
+    // Read-only data for the dashboard (lambda/dashboard-api), served by both distributions at
+    // /api/*. The function URL takes IAM auth: only CloudFront, signing through OAC, can call it.
+    this.dashboardApi = new NodejsFunction(this, 'DashboardApi', {
+      functionName: name('frontend-dashboard-api'),
+      description: `Read-only data for the ${config.frontendName} dashboard: lists the region's API Gateways`,
+      entry: path.join(__dirname, '..', 'lambda', 'dashboard-api', 'handler.ts'),
+      runtime: lambda.Runtime.NODEJS_24_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(20),
+      memorySize: 256,
+      logGroup: new logs.LogGroup(this, 'DashboardApiLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+      bundling: { minify: true, sourceMap: true },
+    });
+    // apigateway:GET on the API lists and their stages, nothing else
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['apigateway:GET'],
+      resources: ['/restapis', '/restapis/*/stages', '/apis', '/apis/*/stages'].map(
+        (resource) => `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::${resource}`,
+      ),
+    }));
+    const dashboardApiUrl = this.dashboardApi.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.AWS_IAM });
 
     // --- Distributions ------------------------------------------------------------
     // The origin path selects the release a distribution serves. `cdk deploy` keeps both on
@@ -63,10 +94,30 @@ export class FrontendUserStack extends cdk.Stack {
           responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
           compress: true,
         },
+        additionalBehaviors: {
+          // the dashboard API: never cached, and the query string and headers reach the Lambda
+          // (all but Host, which has to be the function URL's for the signature)
+          '/api/*': {
+            origin: origins.FunctionUrlOrigin.withOriginAccessControl(dashboardApiUrl),
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+          },
+        },
         // No SPA fallback (403/404 -> index.html): the app has two real HTML pages, and a
         // missing file has to stay a 4xx so the 4xx alarm can see a broken release.
       });
       cdk.Tags.of(distribution).add('Name', comment);
+      // FunctionUrlOrigin grants lambda:InvokeFunctionUrl; function URLs also need
+      // lambda:InvokeFunction, limited here to calls made through the URL
+      this.dashboardApi.addPermission(`InvokeFrom${id}`, {
+        principal: new iam.ServicePrincipal('cloudfront.amazonaws.com'),
+        action: 'lambda:InvokeFunction',
+        sourceArn: distribution.distributionArn,
+        invokedViaFunctionUrl: true,
+      });
       return distribution;
     };
     // What clients use. Only this one has alarms and is rolled back (alarms stack).

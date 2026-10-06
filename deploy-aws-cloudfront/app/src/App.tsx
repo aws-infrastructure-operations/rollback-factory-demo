@@ -1,7 +1,9 @@
-// The dashboard layout (development/dashboard.png) on sample data: no AWS calls or actions yet.
+// The dashboard layout (development/dashboard.png). API Gateways load from the dashboard API;
+// Lambda and CloudFront are still sample data, and no action does anything yet.
 // It also shows which environment and release this site is, so an activation or a rollback is visible.
 import type { AppConfig } from './config.js';
-import { ApiGatewaySection, CloudFrontSection, LambdaSection } from './components/Sections.js';
+import { ApiGatewaySection } from './components/ApiGateways.js';
+import { CloudFrontSection, LambdaSection } from './components/Sections.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
 

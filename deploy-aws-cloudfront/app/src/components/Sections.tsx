@@ -1,37 +1,8 @@
-// The three service rows of the dashboard, on sample data (mock-data.ts).
-import {
-  apis, apiStages, distributionDeployments, distributions, lambdas, lambdaVersions,
-} from '../mock-data.js';
+// The Lambda and CloudFront rows of the dashboard, still on sample data (mock-data.ts).
+// API Gateways load real data: see ApiGateways.tsx.
+import { distributionDeployments, distributions, lambdas, lambdaVersions } from '../mock-data.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, EnvTags, MoreButton, NameLink, RollbackButton, RowChevron, Status } from './ui.js';
-
-export function ApiGatewaySection() {
-  return (
-    <div className="panel-row">
-      <ListPanel id="api-gateways" icon="apiGateway" tint="tint-api" title="API Gateways" searchPlaceholder="Search APIs..."
-        description="View your API Gateway APIs, stages and deployments. Rollback to a previous deployment.">
-        <DataTable rows={apis} rowKey={(a) => a.id} selectedKey={apis[0].id} columns={[
-          { header: 'Name', cell: (a) => <NameLink name={a.name} /> },
-          { header: 'API ID', cell: (a) => a.id },
-          { header: 'Type', cell: (a) => a.type },
-          { header: 'Stages', cell: (a) => <EnvTags envs={a.stages} /> },
-          { header: 'Last Deployed', cell: (a) => a.lastDeployed },
-          { header: '', cell: () => <RowChevron /> },
-        ]} />
-      </ListPanel>
-      <DetailPanel icon="apiGateway" tint="tint-api" name="farm-management-api" badge="Active"
-        subtitle={<>a1b2c3d4e5 &nbsp; REST API</>} tabs={['Stages', 'Deployments', 'Configuration']}>
-        <DataTable rows={apiStages} rowKey={(s) => s.stage} columns={[
-          { header: 'Stage Name', cell: (s) => <NameLink name={s.stage} healthy={s.healthy} /> },
-          { header: 'Deployment ID', cell: (s) => s.deploymentId },
-          { header: 'Deployed At', cell: (s) => s.deployedAt },
-          { header: 'Actions', cell: () => <RollbackButton /> },
-          { header: '', cell: () => <MoreButton /> },
-        ]} />
-      </DetailPanel>
-    </div>
-  );
-}
 
 export function LambdaSection() {
   return (

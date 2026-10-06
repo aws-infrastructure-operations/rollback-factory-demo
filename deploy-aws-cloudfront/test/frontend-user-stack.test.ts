@@ -36,7 +36,11 @@ test('keeps the construct id of the existing distribution, so it is updated in p
 test('serves both distributions the same way', () => {
   const t = synth('dev');
   // everything but the comment and the generated origin id
-  const comparable = (config: any) => ({ ...config, Comment: undefined, Origins: undefined, DefaultCacheBehavior: { ...config.DefaultCacheBehavior, TargetOriginId: undefined } });
+  const comparable = (config: any) => ({
+    ...config, Comment: undefined, Origins: undefined,
+    DefaultCacheBehavior: { ...config.DefaultCacheBehavior, TargetOriginId: undefined },
+    CacheBehaviors: config.CacheBehaviors.map((behavior: any) => ({ ...behavior, TargetOriginId: undefined })),
+  });
   const { Origins: liveOrigins, ...live } = distributionConfig(t);
   const { Origins: integrationOrigins, ...integration } = distributionConfig(t, 'IntegrationDistribution');
   assert.deepEqual(comparable(integration), comparable(live));
@@ -67,10 +71,10 @@ test('keeps the site bucket private and HTTPS only', () => {
 test('reads the bucket through Origin Access Control, for these two distributions only', () => {
   const t = synth('dev');
   // one per distribution, so the existing distribution's resources stay untouched
-  t.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
-  t.hasResourceProperties('AWS::CloudFront::OriginAccessControl', {
-    OriginAccessControlConfig: { OriginAccessControlOriginType: 's3', SigningBehavior: 'always' },
-  });
+  const s3Controls = Object.values(t.findResources('AWS::CloudFront::OriginAccessControl', {
+    Properties: { OriginAccessControlConfig: { OriginAccessControlOriginType: 's3', SigningBehavior: 'always' } },
+  }));
+  assert.equal(s3Controls.length, 2);
   for (const id of ['Distribution', 'IntegrationDistribution']) {
     const [origin] = distributionConfig(t, id).Origins;
     assert.ok(origin.OriginAccessControlId, `${id} uses OAC`);
@@ -170,4 +174,53 @@ test('never exports a name the api-user stack in the same region could use', () 
     const exportName = (output as any).Export?.Name;
     if (exportName) assert.match(exportName, /^rollback-factory-demo-frontend-/, name);
   }
+});
+
+test('serves the dashboard API at /api/* on both distributions, uncached and signed with OAC', () => {
+  const t = synth('dev');
+  for (const id of ['Distribution', 'IntegrationDistribution']) {
+    const config = distributionConfig(t, id);
+    const [site, api] = config.Origins;
+    assert.ok(site.S3OriginConfig, 'the site bucket stays the first origin');
+    assert.ok(api.CustomOriginConfig && api.OriginAccessControlId, `${id}: function URL origin with OAC`);
+    assert.equal(api.OriginPath, undefined, 'only the site origin has a release path');
+    const [behavior] = config.CacheBehaviors;
+    assert.equal(behavior.PathPattern, '/api/*');
+    assert.equal(behavior.TargetOriginId, api.Id);
+    assert.equal(behavior.ViewerProtocolPolicy, 'https-only');
+    assert.deepEqual(behavior.AllowedMethods, ['GET', 'HEAD']);
+    // the managed CachingDisabled policy
+    assert.equal(behavior.CachePolicyId, '4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
+  }
+  t.resourceCountIs('AWS::CloudFront::OriginAccessControl', 4);
+  t.hasResourceProperties('AWS::CloudFront::OriginAccessControl', {
+    OriginAccessControlConfig: { OriginAccessControlOriginType: 'lambda', SigningBehavior: 'always' },
+  });
+});
+
+test('lets only the two distributions call the dashboard API, through its IAM-auth function URL', () => {
+  const t = synth('dev');
+  t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'rollback-factory-demo-frontend-dashboard-api-dev' });
+  t.hasResourceProperties('AWS::Lambda::Url', { AuthType: 'AWS_IAM' });
+  const permissions = Object.values(t.findResources('AWS::Lambda::Permission')).map((p: any) => p.Properties);
+  for (const action of ['lambda:InvokeFunctionUrl', 'lambda:InvokeFunction']) {
+    const granted = permissions.filter((p) => p.Action === action);
+    assert.equal(granted.length, 2, action);
+    for (const p of granted) assert.equal(p.Principal, 'cloudfront.amazonaws.com');
+    const sources = JSON.stringify(granted.map((p) => p.SourceArn));
+    for (const id of Object.keys(t.findResources('AWS::CloudFront::Distribution'))) {
+      assert.match(sources, new RegExp(`"Ref":"${id}"`), `${action} for ${id}`);
+    }
+  }
+  for (const p of permissions.filter((p) => p.Action === 'lambda:InvokeFunction')) assert.equal(p.InvokedViaFunctionUrl, true);
+});
+
+test('gives the dashboard API read access to the API lists and stages only', () => {
+  const statements = Object.values(synth('dev').findResources('AWS::IAM::Policy'))
+    .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement)
+    .filter((statement: any) => JSON.stringify(statement.Action).includes('apigateway'));
+  assert.equal(statements.length, 1);
+  assert.equal(statements[0].Action, 'apigateway:GET');
+  const resources = JSON.stringify(statements[0].Resource);
+  for (const path of ['::/restapis"', '::/restapis/*/stages"', '::/apis"', '::/apis/*/stages"']) assert.ok(resources.includes(path), path);
 });

@@ -40,6 +40,13 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 - **`-c liveReleaseId` / `-c integrationReleaseId`:** `cdk deploy` sets each origin path to this
   release, or to `initial` without it. Always pass both (`npm run live:context`), or a deploy undoes an
   activation or a rollback.
+- **Dashboard API** at `/api/*` on both distributions: a Lambda (`rollback-factory-demo-frontend-dashboard-api-<env>`,
+  [`lambda/dashboard-api`](lambda/dashboard-api)) behind a function URL with IAM auth, which only these two
+  distributions can call (Origin Access Control). Never cached. It reads, and can only read, the API Gateway
+  lists and stages of the stack's region (`apigateway:GET`). It has no sign-in: anyone with the site URL
+  can see the API names and stages.
+- **Release switches touch the site origin only:** activations, restores and the rollback service
+  set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
   can't list the bucket), so a broken release trips the 4xx alarm.
 - **Outputs** (exported as `rollback-factory-demo-frontend-<output>-<env>`, so they never clash with the API stack's exports in the same region): `DistributionId`,
@@ -49,9 +56,12 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 
 ## App
 
-Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Control Center dashboard
-(API Gateways, Lambda Functions, CloudFront Distributions) laid out on **sample data**
-([`app/src/mock-data.ts`](app/src/mock-data.ts)). There are no AWS calls yet, and the buttons and tabs are visual only.
+Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Control Center dashboard.
+- **API Gateways** is live: the region's REST, HTTP and WebSocket APIs with their stages and latest
+  deployment, from `GET /api/api-gateways` (the dashboard API). Search filters the list, refresh reloads it.
+- **Lambda Functions** and **CloudFront Distributions** are still **sample data**
+  ([`app/src/mock-data.ts`](app/src/mock-data.ts)); their tabs and rollback buttons are visual only.
+
 The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"
 - the release id again in the footer, so an activation or a rollback is visible
@@ -62,12 +72,13 @@ Cognito user pool and called `GET`/`POST` on `/users` and `/messages`. It's in g
 
 - **Config:** read at build time from `VITE_ENV`, `VITE_RELEASE_ID` and `VITE_BUILT_AT`
   (`release:build` sets them). Without them the page shows `local`.
-- **No API dependency:** the frontend doesn't need the api-user stack to build or deploy.
+- **No API dependency:** the frontend doesn't need the api-user stack to build or deploy; the
+  dashboard lists whatever APIs the region has.
 
-Local run:
+Local run (`/api` only works with `DASHBOARD_API_URL` set to a deployed site, which it is proxied to):
 
 ```sh
-npm run app:dev
+DASHBOARD_API_URL=https://dxxxxxxxxxxxxx.cloudfront.net npm run app:dev
 ```
 
 ## Releases

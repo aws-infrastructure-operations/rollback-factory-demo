@@ -50,10 +50,16 @@ const cloudfront = {
   send: async (command: any) => {
     calls.push(command);
     if (command instanceof GetDistributionConfigCommand) {
-      return { ETag: 'etag', DistributionConfig: { Origins: { Quantity: 1, Items: [{ Id: 's3', OriginPath: `/releases/${live}` }] } } };
+      // the dashboard API's origin comes first: the rollback must switch the site origin and leave it alone
+      return { ETag: 'etag', DistributionConfig: { Origins: { Quantity: 2, Items: [
+        { Id: 'api', DomainName: 'abc123.lambda-url.eu-central-1.on.aws', OriginPath: '' },
+        { Id: 's3', DomainName: 'site.s3.eu-central-1.amazonaws.com', OriginPath: `/releases/${live}` },
+      ] } } };
     }
     if (command instanceof UpdateDistributionCommand) {
-      live = command.input.DistributionConfig!.Origins!.Items![0].OriginPath!.split('/').pop()!;
+      const [api, site] = command.input.DistributionConfig!.Origins!.Items!;
+      assert.equal(api.OriginPath, '', 'the API origin keeps its path');
+      live = site.OriginPath!.split('/').pop()!;
       return {};
     }
     if (command instanceof CreateInvalidationCommand) return { Invalidation: { Id: 'INV' } };
