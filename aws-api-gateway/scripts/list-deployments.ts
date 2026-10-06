@@ -10,9 +10,9 @@ import { deploymentTarget, requireStackOutputs } from './lib/stack.js';
 const stability = (r: DeploymentRecord) => {
   if (r.stable === undefined) return '';
   if (!r.stable) return 'unstable';
-  // records written before stableFor was human-readable hold seconds
-  const stableFor = typeof r.stableFor === 'number' ? formatDuration(r.stableFor) : r.stableFor;
-  return `stable ${stableFor ?? ''}`.trim();
+  // older records only have stableFor (seconds)
+  const stableFor = r.stableForHumanReadable ?? (r.stableFor === undefined ? '' : formatDuration(r.stableFor));
+  return `stable ${stableFor}`.trim();
 };
 
 run(async () => {

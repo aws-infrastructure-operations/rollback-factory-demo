@@ -73,7 +73,9 @@ const record = (deployedAt: string, extra: Partial<DeploymentRecord> = {}) => ({
 test('a replaced deployment is stable for the time until the next deployment', () => {
   const previous = record('2026-10-06T10:00:00.000Z');
   const next = record('2026-10-06T12:30:05.600Z');
-  assert.deepEqual(retirement(previous, next), { current: false, stable: true, stableFor: '2 hours 30 minutes' });
+  assert.deepEqual(retirement(previous, next), {
+    current: false, stable: true, stableFor: 9006, stableForHumanReadable: '2 hours 30 minutes',
+  });
 });
 
 test('formats durations in days, hours and minutes', () => {
@@ -85,7 +87,7 @@ test('formats durations in days, hours and minutes', () => {
   assert.equal(formatDuration(90_061), '1 day 1 hour 1 minute');
 });
 
-test('a rolled-back deployment is unstable and gets no stableFor', () => {
+test('a rolled-back deployment is unstable and gets no stableFor(HumanReadable)', () => {
   const previous = record('2026-10-06T10:00:00.000Z', { rolledBackAt: '2026-10-06T10:05:00.000Z' });
   const next = record('2026-10-06T10:05:01.000Z', { source: 'rollback' });
   assert.deepEqual(retirement(previous, next), { current: false, stable: false });
