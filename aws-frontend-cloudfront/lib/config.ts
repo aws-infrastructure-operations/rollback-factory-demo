@@ -1,3 +1,5 @@
+import { RELEASE_ID_PATTERN } from '../lambda/shared/releases.js';
+
 export type EnvName = 'dev' | 'prod';
 
 export interface AlarmConfig {
@@ -44,10 +46,6 @@ export const PROJECT_NAME = 'rollback-factory-demo';
 export const ALARMS_REGION = 'us-east-1';
 /** Where the API is deployed; only used when the app runs outside the CDK CLI (which always sets CDK_DEFAULT_REGION). */
 export const DEFAULT_REGION = 'eu-central-1';
-/** Placeholder release a fresh stack serves until the first real release is activated. */
-export const INITIAL_RELEASE_ID = 'initial';
-/** Release ids are UTC timestamps, e.g. 20261006T123005Z, or the placeholder `initial`. */
-export const RELEASE_ID_PATTERN = /^(\d{8}T\d{6}Z|initial)$/;
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
   if (envName !== 'dev' && envName !== 'prod') {

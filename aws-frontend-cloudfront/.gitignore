@@ -5,3 +5,4 @@ cdk.out/
 .cdk.staging/
 dist/
 *.local
+release.json

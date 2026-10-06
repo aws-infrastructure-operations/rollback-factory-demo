@@ -5,19 +5,18 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import { EnvConfig, INITIAL_RELEASE_ID } from './config.js';
+import { EnvConfig } from './config.js';
+import { INITIAL_RELEASE_ID, originPathFor, releasePrefix } from '../lambda/shared/releases.js';
 
 export interface FrontendUserStackProps extends cdk.StackProps {
   config: EnvConfig;
 }
 
-/** S3 prefix of a release; the distribution's origin path points at one of them. */
-export const releasePrefix = (releaseId: string) => `releases/${releaseId}`;
-
-/** Main region: site bucket + CloudFront distribution; deployments bucket and table follow (FE-04, FE-05). */
+/** Main region: site bucket + CloudFront distribution and the deployments bucket; the deployments table follows (FE-05). */
 export class FrontendUserStack extends cdk.Stack {
   readonly siteBucket: s3.Bucket;
   readonly distribution: cloudfront.Distribution;
+  readonly deploymentsBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props: FrontendUserStackProps) {
     super(scope, id, props);
@@ -48,7 +47,7 @@ export class FrontendUserStack extends cdk.Stack {
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket, {
-          originPath: `/${releasePrefix(liveReleaseId)}`,
+          originPath: originPathFor(liveReleaseId),
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
@@ -71,6 +70,19 @@ export class FrontendUserStack extends cdk.Stack {
       prune: false,
     });
 
+    // --- Deployment tracking ----------------------------------------------------
+    // One build manifest per release, under <frontendName>/<releaseId>/manifest.json
+    // (see lambda/shared/releases.ts). Versioned, like the API's deployments bucket.
+    this.deploymentsBucket = new s3.Bucket(this, 'DeploymentsBucket', {
+      bucketName: name(`${cdk.Aws.ACCOUNT_ID}-frontend-deployments`),
+      versioned: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      removalPolicy,
+      autoDeleteObjects: !config.retainData,
+    });
+
     // --- Outputs --------------------------------------------------------------
     const out = (outputName: string, value: string) =>
       new cdk.CfnOutput(this, outputName, { value, exportName: name(outputName) });
@@ -78,6 +90,6 @@ export class FrontendUserStack extends cdk.Stack {
     out('DistributionDomainName', this.distribution.distributionDomainName);
     out('SiteUrl', `https://${this.distribution.distributionDomainName}`);
     out('SiteBucketName', this.siteBucket.bucketName);
-    out('LiveReleaseId', liveReleaseId);
+    out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
   }
 }

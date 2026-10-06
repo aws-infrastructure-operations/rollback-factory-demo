@@ -84,14 +84,26 @@ test('deploys the placeholder into releases/initial/ without pruning other relea
   });
 });
 
-test('retains the site bucket in prod only', () => {
-  synth('prod').hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
-  synth('dev').hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
+test('retains the buckets in prod only', () => {
+  const deletionPolicies = (env: string) =>
+    Object.values(synth(env).findResources('AWS::S3::Bucket')).map((b: any) => b.DeletionPolicy);
+  assert.deepEqual(deletionPolicies('prod'), ['Retain', 'Retain']);
+  assert.deepEqual(deletionPolicies('dev'), ['Delete', 'Delete']);
+});
+
+test('keeps build manifests in a versioned, private deployments bucket', () => {
+  const t = synth('dev');
+  t.resourceCountIs('AWS::S3::Bucket', 2);
+  t.hasResourceProperties('AWS::S3::Bucket', {
+    BucketName: { 'Fn::Join': ['', ['rollback-factory-demo-', { Ref: 'AWS::AccountId' }, '-frontend-deployments-dev']] },
+    VersioningConfiguration: { Status: 'Enabled' },
+    PublicAccessBlockConfiguration: Match.objectLike({ BlockPublicPolicy: true, RestrictPublicBuckets: true }),
+  });
 });
 
 test('exports the outputs later scripts read', () => {
   const outputs = synth('dev').findOutputs('*');
-  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'LiveReleaseId']) {
+  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName']) {
     assert.ok(outputs[name], `missing output ${name}`);
     assert.deepEqual(outputs[name].Export, { Name: `rollback-factory-demo-${name}-dev` });
   }

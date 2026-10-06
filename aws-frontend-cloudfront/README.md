@@ -33,7 +33,7 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
   can't list the bucket), so a broken release trips the 4xx alarm.
 - **Outputs** (exported as `rollback-factory-demo-<output>-<env>`): `DistributionId`,
-  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `LiveReleaseId`.
+  `DistributionDomainName`, `SiteUrl`, `SiteBucketName`, `DeploymentsBucketName`.
 - **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
   raised without a custom domain.
 
@@ -61,6 +61,35 @@ cp app/.env.example app/.env.local   # fill in the dev stack outputs
 npm run app:dev
 ```
 
+## Releases
+
+A release is one build of the app for one environment, identified by its UTC build time
+(`20261006T123005Z`). Releases are never overwritten, so any older one can be switched back to.
+
+1. **`release:build`** reads `ApiUrl`, `UserPoolId` and `UserPoolClientId` from
+   `rollback-factory-demo-<env>`, builds the app into `dist/` and writes `release.json`.
+2. **`release:upload`**:
+   - uploads `dist/` to `s3://<site bucket>/releases/<id>/`. HTML gets `Cache-Control: no-cache`,
+     the hashed assets are cached for a year.
+   - stores the **build manifest** (release id, commit, actor, CI run, API settings, and every file
+     with size, sha256, content type) at
+     `s3://rollback-factory-demo-<account>-frontend-deployments-<env>/frontend-user-<env>/<id>/manifest.json`.
+   - fails if the release prefix already exists.
+3. **`release:activate`**:
+   - checks every manifest file is in the bucket
+   - points the distribution's origin path at `/releases/<id>`, conditional on the ETag so a
+     concurrent change isn't overwritten
+   - invalidates `/*`
+   - `--wait` waits for both and prints how long they took. The result is printed as JSON
+     (`previousReleaseId`, `invalidationId`, ...).
+
+The origin-path switch lives in [`lambda/shared/releases.ts`](lambda/shared/releases.ts), so the
+rollback Lambda uses the same code.
+
+**Deviation:** the story's bucket name (`frontendname-awsaccount-deployments-datetimestamp`) suggests one
+bucket per deployment. As for the API, it is one versioned bucket per environment with the release id in
+the key, which avoids bucket limits and keeps the history in one place.
+
 ## Scripts
 
 | Command | Does |
@@ -70,6 +99,11 @@ npm run app:dev
 | `npm run synth:dev` / `synth:prod` | synthesize both stacks |
 | `npm run app:dev` | run the app locally (reads `app/.env.local`) |
 | `npm run app:build` | build the app into `dist/` (reads `VITE_*` from the environment or `app/.env.local`) |
+| `npm run deploy:dev` / `deploy:prod` | live context → `cdk deploy --all` → build → upload → activate (waits) |
+| `npm run release:build -- --env <env>` | build a new release against the API stack outputs |
+| `npm run release:upload -- --env <env>` | upload it + store its manifest |
+| `npm run release:activate -- --env <env> --release <id> [--wait]` | make a release live |
+| `npm run live:context -- --env <env>` | print `-c liveReleaseId=<id>` for `cdk deploy` |
 
 ## Context options
 
