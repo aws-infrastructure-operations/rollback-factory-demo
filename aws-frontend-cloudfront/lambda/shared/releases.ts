@@ -51,10 +51,6 @@ export interface ReleaseManifest {
   commit?: string;
   actor?: string;
   runUrl?: string;
-  /** What the release was built against (from the api-user stack outputs). */
-  apiUrl: string;
-  userPoolId: string;
-  userPoolClientId: string;
   /** Set on releases broken on purpose by the break-frontend demo (release:upload --break). */
   broken?: string;
   /** What was uploaded (for a broken release: without the files it leaves out). */

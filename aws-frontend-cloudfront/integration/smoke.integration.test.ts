@@ -57,7 +57,7 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
   test('HTML is revalidated, hashed assets are immutable', () => {
     const html = site.manifest.files.filter((f) => f.path.endsWith('.html'));
     const assets = site.manifest.files.filter((f) => f.path.startsWith('assets/'));
-    assert.deepEqual(html.map((f) => f.path).sort(), ['app.html', 'index.html']);
+    assert.deepEqual(html.map((f) => f.path), ['index.html']);
     assert.ok(assets.length > 0, 'the release has assets');
     assert.ok(html.every((f) => f.cacheControl === 'no-cache'));
     assert.ok(assets.every((f) => f.cacheControl.includes('immutable')));

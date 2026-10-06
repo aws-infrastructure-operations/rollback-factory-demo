@@ -48,25 +48,22 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 
 ## App
 
-Vite + plain TypeScript in [`app/`](app), no framework and no Amplify.
+Vite + plain TypeScript in [`app/`](app), no framework. **One static page** (`index.html`) that shows
+which environment and release it is:
+- the name (`frontend-user-<env>`), the environment, the release id and the build time
+- the release id again in the footer, so an activation or a rollback is visible
 
-- **`index.html`:** sign-in with the API's Cognito user pool (`USER_PASSWORD_AUTH`), including the
-  "set a new password" step for users an admin created.
-- **`app.html`:** `GET` and `POST` on `/users` and `/messages` of `api-user-<env>`, with the status
-  code and body of each response. It sends the raw ID token in `Authorization` (what the API's Cognito
-  authorizer expects) and refreshes it shortly before it expires.
-- **Footer:** shows the release id, so an activation or a rollback is visible.
-- **Session:** tokens are kept in `sessionStorage` (per tab, gone when the tab closes). Fine for a demo;
-  a production app would use the Hosted UI with PKCE and keep the refresh token out of JavaScript.
-  Sign out only forgets the tokens locally.
-- **Config:** read at build time from `VITE_API_URL`, `VITE_USER_POOL_ID`, `VITE_USER_POOL_CLIENT_ID`,
-  `VITE_REGION` (the `ApiUrl`, `UserPoolId` and `UserPoolClientId` outputs of `rollback-factory-demo-<env>`)
-  and `VITE_RELEASE_ID`. A build without the first four fails.
+**Sign-in and the API page are out of scope for now.** The earlier version signed in with the API's
+Cognito user pool and called `GET`/`POST` on `/users` and `/messages`. It's in git history
+(PR #23) for when they come back.
 
-Local run against the dev API (create a user with `npm run user:create` in `aws-api-gateway`):
+- **Config:** read at build time from `VITE_ENV`, `VITE_RELEASE_ID` and `VITE_BUILT_AT`
+  (`release:build` sets them). Without them the page shows `local`.
+- **No API dependency:** the frontend doesn't need the api-user stack to build or deploy.
+
+Local run:
 
 ```sh
-cp app/.env.example app/.env.local   # fill in the dev stack outputs
 npm run app:dev
 ```
 
@@ -75,8 +72,8 @@ npm run app:dev
 A release is one build of the app for one environment, identified by its UTC build time
 (`20261006T123005Z`). Releases are never overwritten, so any older one can be switched back to.
 
-1. **`release:build`** reads `ApiUrl`, `UserPoolId` and `UserPoolClientId` from
-   `rollback-factory-demo-<env>`, builds the app into `dist/` and writes `release.json`.
+1. **`release:build`** builds the app into `dist/` with the environment, release id and build time,
+   and writes `release.json`.
 2. **`release:upload`**:
    - uploads `dist/` to `s3://<site bucket>/releases/<id>/`. HTML gets `Cache-Control: no-cache`,
      the hashed assets are cached for a year.
@@ -181,7 +178,7 @@ Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
 - **`main` / manual run:** for each environment in turn (dev → testing → staging → prod):
   1. bootstrap the main region and us-east-1
   2. `cdk deploy --all`, both distributions keeping their release (`live:context`)
-  3. `release:build` against that environment's api-user stack, then `release:upload` (release + manifest)
+  3. `release:build`, then `release:upload` (release + manifest)
   4. `release:activate --target integration --wait`: the release goes live on
      `frontend-user-<env>-integration` only
   5. integration tests there (`FRONTEND_TARGET=integration`, `FRONTEND_RELEASE` = the new release)
@@ -191,15 +188,14 @@ Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
      history in the job summary
 - **Failed tests:** the job stops with the test output in the summary. `frontend-user-<env>` was never
   touched, and the next environments aren't deployed. This is the same as the API's integration stage.
-- **Promotion:** each environment deploys only when the previous one is green. Prod gets its own build, with the prod API
-  and user pool. Add required reviewers on the `prod` GitHub environment to gate it with an approval.
+- **Promotion:** each environment deploys only when the previous one is green, and gets its own build.
+  Add required reviewers on the `prod` GitHub environment to gate it with an approval.
 - **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't
   watch alarms after a deploy.
 - **Restore:** `frontend-restore` (manual) restores a release you choose, runs the integration
   tests against it and marks it verified if they pass.
 - **AWS auth:** access-key secrets per GitHub environment (`AWS_ACCESS_KEY_ID`,
-  `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`), the same as the API. The api-user stack must
-  already exist in the environment.
+  `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`), the same as the API.
 
 ## Demo: break the frontend
 
@@ -237,13 +233,11 @@ alarm. It only rolls back if the latest deployment is within the rollback window
   - a direct S3 request is refused
 - **End to end** ([`integration/e2e.integration.test.ts`](integration/e2e.integration.test.ts),
   headless Chromium with Playwright):
-  - creates a throw-away user in the API's user pool, and deletes it afterwards
-  - `app.html` without a session redirects to the login page, and the footer shows the live release
-  - signs in, then `GET` and `POST` on `/users` and `/messages` through the page, then signs out
-  - any console error, failed request or HTTP error fails the step it happened in
+  - the page loads with its scripts and styles
+  - it shows the environment and the release the distribution serves
+  - any console error, failed request or HTTP error fails the test
 - **Needs:**
-  - AWS credentials that can read both stacks, the distribution and the deployments bucket, and
-    administer the user pool
+  - AWS credentials that can read the stack, the distributions and the deployments bucket
   - Chromium for Playwright: `npx playwright install chromium`; in CI, `--with-deps`
 - **4xx alarm:** a run makes one intentional 4xx through CloudFront (the unknown path). On the
   integration distribution it can't count toward anything, since that distribution has no alarms.
@@ -260,7 +254,7 @@ alarm. It only rolls back if the latest deployment is within the rollback window
 | `npm run app:dev` | run the app locally (reads `app/.env.local`) |
 | `npm run app:build` | build the app into `dist/` (reads `VITE_*` from the environment or `app/.env.local`) |
 | `npm run deploy:dev` / `deploy:prod` | manual deploy without tests: live context → `cdk deploy --all` → build → upload → activate on `frontend-user-<env>` (waits) → record |
-| `npm run release:build -- --env <env>` | build a new release against the API stack outputs |
+| `npm run release:build -- --env <env>` | build a new release |
 | `npm run release:upload -- --env <env>` | upload it + store its manifest |
 | `npm run release:activate -- --env <env> --release <id> [--target live\|integration] [--wait]` | make a release live on `frontend-user-<env>` (default) or on the integration distribution |
 | `npm run live:context -- --env <env>` | print `-c liveReleaseId=<id> -c integrationReleaseId=<id>` for `cdk deploy` |

@@ -1,7 +1,6 @@
 /**
- * Builds the app for one environment as a new release: reads the api-user stack outputs
- * (API URL, user pool, client), runs the Vite build into dist/ and writes release.json
- * for release:upload.
+ * Builds the app for one environment as a new release: runs the Vite build into dist/ with the
+ * environment, release id and build time, and writes release.json for release:upload.
  *
  * Usage: npx tsx scripts/build-release.ts --env dev [--release 20261006T123005Z]
  */
@@ -11,16 +10,12 @@ import * as path from 'node:path';
 import { assertReleaseId, releaseIdFor } from '../lambda/shared/releases.js';
 import { log, parseCli, run } from './lib/cli.js';
 import { PROJECT_ROOT, RELEASE_FILE } from './lib/paths.js';
-import { requireApiOutputs } from './lib/stack.js';
 
 export interface BuiltRelease {
   releaseId: string;
   env: string;
   frontendName: string;
   builtAt: string;
-  apiUrl: string;
-  userPoolId: string;
-  userPoolClientId: string;
 }
 
 run(async () => {
@@ -28,11 +23,7 @@ run(async () => {
   const now = new Date();
   const releaseId = values.release ?? releaseIdFor(now);
   assertReleaseId(releaseId);
-
-  const api = await requireApiOutputs(config);
-  // User pool ids are "<region>_<id>"; the app talks to Cognito in that region.
-  const region = api.UserPoolId.split('_')[0];
-  log(`Building ${config.frontendName} release ${releaseId} against ${api.ApiUrl}`);
+  log(`Building ${config.frontendName} release ${releaseId}`);
 
   const vite = spawnSync(
     process.execPath,
@@ -43,11 +34,9 @@ run(async () => {
       stdio: ['ignore', 2, 'inherit'],
       env: {
         ...process.env,
-        VITE_API_URL: api.ApiUrl,
-        VITE_USER_POOL_ID: api.UserPoolId,
-        VITE_USER_POOL_CLIENT_ID: api.UserPoolClientId,
-        VITE_REGION: region,
+        VITE_ENV: config.envName,
         VITE_RELEASE_ID: releaseId,
+        VITE_BUILT_AT: now.toISOString(),
       },
     },
   );
@@ -58,9 +47,6 @@ run(async () => {
     env: config.envName,
     frontendName: config.frontendName,
     builtAt: now.toISOString(),
-    apiUrl: api.ApiUrl,
-    userPoolId: api.UserPoolId,
-    userPoolClientId: api.UserPoolClientId,
   };
   await writeFile(RELEASE_FILE, `${JSON.stringify(release, null, 2)}\n`);
   log(`Built release ${releaseId} into dist/ (details in release.json)`);

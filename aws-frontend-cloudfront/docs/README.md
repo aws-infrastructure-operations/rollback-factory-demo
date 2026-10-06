@@ -18,6 +18,7 @@ Each ticket is one branch cut from `origin/main` and one PR.
 | [FE-09](FE-09-github-workflow.md) | GitHub workflow: deploy, test, promote to prod | 12 | FE-05, FE-06 | `feature/frontend-workflow` |
 | [FE-10](FE-10-demo-and-docs.md) | Break-frontend demo, README, story status | – | FE-08, FE-09 | `feature/frontend-demo` |
 | [FE-11](FE-11-integration-distribution.md) | Integration distribution: test each release before clients get it | 9, 12 | FE-09 | `feature/frontend-integration-distribution` |
+| [FE-12](FE-12-simple-page.md) | Simple page instead of sign-in + API page | 3, 4 (out of scope for now) | FE-11 | `feature/frontend-simple-page` |
 
 FE-02 and FE-03 can run in parallel; so can FE-05/FE-06/FE-07 once FE-04 is in.
 
@@ -36,6 +37,7 @@ These apply to every ticket.
 - **API:** CORS already allows `*`, and the user pool client (`rollback-factory-demo-client-<env>`)
   is public with `USER_PASSWORD_AUTH` and SRP enabled. No API change is needed.
 - **Inputs from the API stack** (`rollback-factory-demo-<env>` outputs): `ApiUrl`, `UserPoolId`, `UserPoolClientId`.
+  Not used since FE-12 (sign-in out of scope).
 - **Rollback:** alarm → SNS → rollback Lambda does alarm rollbacks. Workflows only switch back when
   their own integration tests fail.
 - **SNS:** topics with `enforceSSL: true` need an explicit allow for `cloudwatch.amazonaws.com`.

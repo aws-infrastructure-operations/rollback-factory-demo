@@ -1,7 +1,6 @@
 /**
  * Sends real browser-like traffic to the deployed site for a fixed time (what the CloudFront
- * alarms see): each round loads index.html and app.html and everything they reference, as a
- * browser would. Every 30 s it reports the status codes, the 4xx share and the release the
+ * alarms see): each round loads index.html and everything it references, as a browser would. Every 30 s it reports the status codes, the 4xx share and the release the
  * distribution points at, so a rollback shows up in the log. It never rolls back or waits for
  * one: that is the alarm -> SNS -> rollback Lambda path. Used by the break-frontend demo.
  *
@@ -68,7 +67,7 @@ run(async () => {
   };
 
   while (Date.now() < deadline) {
-    for (const page of ['/index.html', '/app.html']) {
+    for (const page of ['/index.html']) {
       const { status, body } = await get(page);
       window.add(status);
       total.add(status);

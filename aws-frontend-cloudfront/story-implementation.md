@@ -43,8 +43,8 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 |---|---|---|---|
 | 1 | AWS CDK with TypeScript | Done | #21 |
 | 2 | Frontend name `frontend-user-dev` / `frontend-user-prod` | Done | #21, #22 |
-| 3 | Login page + page calling the API GET and POST endpoints | Done | #23 |
-| 4 | Cognito sign-in using the API's user pool | Done | #23 |
+| 3 | Login page + page calling the API GET and POST endpoints | Out of scope for now (built in #23, replaced by a simple page in FE-12) | #23 |
+| 4 | Cognito sign-in using the API's user pool | Out of scope for now (built in #23, removed in FE-12) | #23 |
 | 5 | Private S3 bucket behind CloudFront (OAC, HTTPS only) | Done | #22 |
 | 6 | Versioned releases selected by origin path | Done | #22, #24 |
 | 7 | Build manifest stored in S3 | Done (with a deviation) | #24 |
@@ -63,13 +63,12 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 #### 3-4. App
 
 - **Stack:** Vite + plain TypeScript in [`app/`](app), no framework and no Amplify.
-- **Pages:** a login page and an API page with `GET`/`POST` on `/users` and `/messages`. They are two
-  real HTML pages, with no single-page-app fallback.
-- **Auth:** sign-in against the API's user pool with `USER_PASSWORD_AUTH`, including the
-  first-sign-in "new password" step. The raw ID token goes in `Authorization`, and it is refreshed
-  before it expires.
-- **Config:** the API URL and user pool come from the api-user stack outputs at build time.
-- **Footer:** shows the release id, so an activation or a rollback is visible.
+- **Now (FE-12):** one static page showing the environment, the release id and the build time, so
+  an activation or a rollback is visible. Sign-in and the API page are out of scope for now, so the
+  frontend no longer depends on the api-user stack.
+- **Before (#23, in git history):** a login page against the API's user pool (`USER_PASSWORD_AUTH`,
+  including the first-sign-in "new password" step) and an API page with `GET`/`POST` on `/users`
+  and `/messages`, sending the raw ID token in `Authorization`.
 
 #### 5-6. Hosting and releases
 
@@ -104,8 +103,8 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 
 - **Smoke:** the live release byte for byte (sha256 vs. manifest) with the right headers, HTTP →
   HTTPS, a 4xx for unknown paths, and a private bucket.
-- **End to end:** headless Chromium with a throw-away Cognito user: sign in, the four API calls
-  through the page, sign out. Any console error or failed request fails the step.
+- **End to end:** headless Chromium loads the page with its scripts and styles and checks it shows
+  the environment and the release served. Any console error or failed request fails the test.
 
 #### 10. Alarms + SNS
 
@@ -159,5 +158,5 @@ back, invalidates `/*`, and records a `rollback`.
   time with the break-frontend demo.
 - **A failed switch after the claim:** if the distribution update fails after the rollback Lambda
   claimed the bad deployment, later alarms skip it. Recover with `deployment:restore` or `frontend-restore`.
-- **Tokens:** the demo app keeps Cognito tokens in `sessionStorage`. A production app would use the
-  hosted UI with PKCE.
+- **No sign-in:** the page is public and doesn't call the API. Bringing login back means restoring
+  #23's app, its build inputs (the API stack outputs) and its end-to-end test.

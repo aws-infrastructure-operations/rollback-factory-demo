@@ -12,7 +12,6 @@ test('names the frontend and its resources per environment', () => {
     assert.equal(config.resourceName('site'), `rollback-factory-demo-site-${env}`);
     assert.equal(config.stackName, `rollback-factory-demo-frontend-${env}`);
     assert.equal(config.alarmsStackName, `rollback-factory-demo-frontend-alarms-${env}`);
-    assert.equal(config.apiStackName, `rollback-factory-demo-${env}`);
   }
   for (const env of ['dev', 'testing', 'staging']) assert.equal(getConfig(env).retainData, false);
   assert.equal(getConfig('prod').retainData, true);

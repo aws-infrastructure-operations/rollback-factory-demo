@@ -57,10 +57,7 @@ jobs:
         run: npm test
       - name: App build
         env:
-          VITE_API_URL: https://example.execute-api.eu-central-1.amazonaws.com/v1/
-          VITE_USER_POOL_ID: eu-central-1_EXAMPLE
-          VITE_USER_POOL_CLIENT_ID: example
-          VITE_REGION: eu-central-1
+          VITE_ENV: ci
           VITE_RELEASE_ID: ci
         run: npm run app:build
       - name: Synth dev and prod
