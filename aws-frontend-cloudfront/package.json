@@ -13,7 +13,11 @@
     "synth:prod": "cdk synth -c env=prod",
     "app:dev": "vite app",
     "app:build": "vite build app",
-    "app:preview": "vite preview app"
+    "app:preview": "vite preview app",
+    "deployment:record": "tsx scripts/record-deployment.ts",
+    "deployment:verify": "tsx scripts/verify-deployment.ts",
+    "deployment:list": "tsx scripts/list-deployments.ts",
+    "deployment:restore": "tsx scripts/restore-deployment.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",
@@ -22,8 +26,10 @@
   "devDependencies": {
     "@aws-sdk/client-cloudformation": "^3.1146.0",
     "@aws-sdk/client-cloudfront": "^3.1146.0",
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-s3": "^3.1146.0",
     "@aws-sdk/client-sts": "^3.1146.0",
+    "@aws-sdk/lib-dynamodb": "^3.1146.0",
     "@types/node": "^26.6.4",
     "aws-cdk": "^2.1144.0",
     "tsx": "^4.23.15",

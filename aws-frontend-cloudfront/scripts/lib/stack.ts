@@ -1,5 +1,6 @@
 import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
 import { EnvConfig } from '../../lib/config.js';
+import { createDeploymentStore } from '../../lambda/shared/deployments.js';
 
 /** Outputs of rollback-factory-demo-frontend-<env>. */
 export interface FrontendOutputs {
@@ -8,6 +9,7 @@ export interface FrontendOutputs {
   SiteUrl: string;
   SiteBucketName: string;
   DeploymentsBucketName: string;
+  DeploymentsTableName: string;
 }
 
 /** The outputs of rollback-factory-demo-<env> (the api-user stack) a release is built with. */
@@ -44,7 +46,7 @@ export const getFrontendOutputs = async (config: EnvConfig) =>
 export const requireFrontendOutputs = (config: EnvConfig) =>
   requireOutputs<FrontendOutputs>(
     config.stackName,
-    ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName'],
+    ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName'],
     `Deploy it first: npx cdk deploy --all -c env=${config.envName}`,
   );
 
@@ -54,3 +56,6 @@ export const requireApiOutputs = (config: EnvConfig) =>
     ['ApiUrl', 'UserPoolId', 'UserPoolClientId'],
     'Deploy the API first (aws-api-gateway).',
   );
+
+export const deploymentStore = (config: EnvConfig, outputs: FrontendOutputs) =>
+  createDeploymentStore({ table: outputs.DeploymentsTableName, frontendName: config.frontendName });

@@ -1,7 +1,7 @@
 /**
  * A manual deploy of one environment, end to end:
  *   live context -> cdk deploy --all (keeps the live release) -> release:build ->
- *   release:upload -> release:activate --wait
+ *   release:upload -> release:activate --wait -> deployment:record
  *
  * Usage: npx tsx scripts/deploy.ts --env dev   (npm run deploy:dev)
  */
@@ -40,5 +40,9 @@ run(async () => {
   const releaseId = step('Build', 'scripts/build-release.ts', env);
   step('Upload', 'scripts/upload-release.ts', env);
   const activation = JSON.parse(step('Activate', 'scripts/activate-release.ts', [...env, '--release', releaseId, '--wait']));
+  step('Record', 'scripts/record-deployment.ts', [
+    ...env, '--release', releaseId, '--invalidation', activation.invalidationId,
+    ...(activation.previousReleaseId ? ['--previous', activation.previousReleaseId] : []),
+  ]);
   log(`\n${config.frontendName} serves release ${releaseId} at ${activation.siteUrl}`);
 });
