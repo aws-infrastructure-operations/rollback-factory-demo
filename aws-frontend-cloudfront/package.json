@@ -6,11 +6,14 @@
     "app": "bin/app.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && tsc -p app",
     "test": "tsx --test test/*.test.ts",
     "cdk": "cdk",
     "synth:dev": "cdk synth -c env=dev",
-    "synth:prod": "cdk synth -c env=prod"
+    "synth:prod": "cdk synth -c env=prod",
+    "app:dev": "vite app",
+    "app:build": "vite build app",
+    "app:preview": "vite preview app"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",
@@ -20,6 +23,7 @@
     "@types/node": "^26.6.4",
     "aws-cdk": "^2.1144.0",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.3"
   }
 }

@@ -1,0 +1,110 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2024;
+  --muted: #5d6670;
+  --border: #d5d9de;
+  --accent: #1f5fbf;
+  --accent-text: #ffffff;
+  --ok: #1a7f37;
+  --error: #c62828;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181c;
+    --surface: #1e2227;
+    --text: #e6e9ec;
+    --muted: #9aa3ad;
+    --border: #353b42;
+    --accent: #6ea2f0;
+    --accent-text: #0d1117;
+    --ok: #56c26e;
+    --error: #ff7b72;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+main { flex: 1; width: 100%; max-width: 64rem; margin: 0 auto; padding: 1.5rem 1rem; }
+main.narrow { max-width: 26rem; }
+footer { padding: 1rem; text-align: center; color: var(--muted); font-size: 0.875rem; }
+
+h1 { margin: 0 0 0.5rem; }
+h2 { margin: 0 0 0.75rem; font-size: 1.125rem; font-family: ui-monospace, monospace; }
+.muted { color: var(--muted); margin-top: 0; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+.grid form { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
+
+label { font-weight: 600; font-size: 0.875rem; }
+
+input {
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+button {
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: 0.6; cursor: progress; }
+
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.status { margin: 0.5rem 0 0; font-family: ui-monospace, monospace; font-size: 0.875rem; }
+.status.ok { color: var(--ok); }
+.status.failed { color: var(--error); }
+.error { color: var(--error); font-weight: 600; }
+
+pre {
+  margin: 0;
+  padding: 0.75rem;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 0.8125rem;
+}

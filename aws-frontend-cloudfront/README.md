@@ -37,13 +37,39 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 - **TLS:** the default `*.cloudfront.net` certificate is used, so the minimum TLS version can't be
   raised without a custom domain.
 
+## App
+
+Vite + plain TypeScript in [`app/`](app), no framework and no Amplify.
+
+- **`index.html`:** sign-in with the API's Cognito user pool (`USER_PASSWORD_AUTH`), including the
+  "set a new password" step for users an admin created.
+- **`app.html`:** `GET` and `POST` on `/users` and `/messages` of `api-user-<env>`, with the status
+  code and body of each response. It sends the raw ID token in `Authorization` (what the API's Cognito
+  authorizer expects) and refreshes it shortly before it expires.
+- **Footer:** shows the release id, so an activation or a rollback is visible.
+- **Session:** tokens are kept in `sessionStorage` (per tab, gone when the tab closes). Fine for a demo;
+  a production app would use the Hosted UI with PKCE and keep the refresh token out of JavaScript.
+  Sign out only forgets the tokens locally.
+- **Config:** read at build time from `VITE_API_URL`, `VITE_USER_POOL_ID`, `VITE_USER_POOL_CLIENT_ID`,
+  `VITE_REGION` (the `ApiUrl`, `UserPoolId` and `UserPoolClientId` outputs of `rollback-factory-demo-<env>`)
+  and `VITE_RELEASE_ID`. A build without the first four fails.
+
+Local run against the dev API (create a user with `npm run user:create` in `aws-api-gateway`):
+
+```sh
+cp app/.env.example app/.env.local   # fill in the dev stack outputs
+npm run app:dev
+```
+
 ## Scripts
 
 | Command | Does |
 |---|---|
-| `npm run build` | typecheck |
+| `npm run build` | typecheck (CDK app and frontend app) |
 | `npm test` | unit tests |
 | `npm run synth:dev` / `synth:prod` | synthesize both stacks |
+| `npm run app:dev` | run the app locally (reads `app/.env.local`) |
+| `npm run app:build` | build the app into `dist/` (reads `VITE_*` from the environment or `app/.env.local`) |
 
 ## Context options
 

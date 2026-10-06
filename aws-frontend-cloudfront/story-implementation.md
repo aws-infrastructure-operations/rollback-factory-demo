@@ -32,10 +32,10 @@ The work is split into tickets FE-01 to FE-10 in [docs/](docs/README.md).
 | # | Requirement | Status | PR |
 |---|---|---|---|
 | 1 | AWS CDK with TypeScript | Done (FE-01) | #21 |
-| 2 | Frontend name `frontend-user-dev` / `frontend-user-prod` | Done (FE-01, FE-02) | #21 |
-| 3 | Login page + page calling the API GET and POST endpoints | Not started | |
-| 4 | Cognito sign-in using the API's user pool | Not started | |
-| 5 | Private S3 bucket behind CloudFront (OAC, HTTPS only) | Done (FE-02) | |
+| 2 | Frontend name `frontend-user-dev` / `frontend-user-prod` | Done (FE-01, FE-02) | #21, #22 |
+| 3 | Login page + page calling the API GET and POST endpoints | Done (FE-03) | |
+| 4 | Cognito sign-in using the API's user pool | Done (FE-03) | |
+| 5 | Private S3 bucket behind CloudFront (OAC, HTTPS only) | Done (FE-02) | #22 |
 | 6 | Versioned releases selected by origin path | In progress: origin path from `-c liveReleaseId` (FE-02); release upload and switch in FE-04 | |
 | 7 | Build manifest stored in S3 | Not started | |
 | 8 | DynamoDB table recording each deployment | Not started | |
