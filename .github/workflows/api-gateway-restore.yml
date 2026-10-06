@@ -23,6 +23,11 @@ on:
         type: string
         default: manual restore
 
+# One run of this workflow at a time; a new run waits for the running one.
+concurrency:
+  group: api-gateway-restore
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
