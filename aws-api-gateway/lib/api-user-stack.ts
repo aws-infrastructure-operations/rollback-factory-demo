@@ -183,6 +183,20 @@ export class ApiUserStack extends cdk.Stack {
     ];
     for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
 
+    // enforceSSL gives the topic its own resource policy, which replaces the default
+    // one that let the account publish - so CloudWatch must be allowed explicitly
+    // (only for this API's two alarms in this account, to avoid confused-deputy access).
+    this.alarmTopic.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowCloudWatchAlarms',
+      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+      actions: ['sns:Publish'],
+      resources: [this.alarmTopic.topicArn],
+      conditions: {
+        StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
+        ArnLike: { 'aws:SourceArn': alarms.map((a) => a.alarmArn) },
+      },
+    }));
+
     this.rollbackFunction = new NodejsFunction(this, 'RollbackFunction', {
       functionName: name('rollback'),
       description: `Rolls ${config.apiName}/${config.stageName} back to the previous deployment's spec on alarm`,
