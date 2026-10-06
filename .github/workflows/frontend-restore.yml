@@ -1,0 +1,89 @@
+name: frontend-restore
+
+# Manual recovery: make a recorded release of frontend-user live again (origin path +
+# invalidation), run the integration tests against it and mark it verified if they pass.
+# Find the release id with `npm run deployment:list -- --env <env>` or in a deploy run's
+# job summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to restore
+        type: choice
+        options: [dev, prod]
+        default: dev
+      release:
+        description: Release id to restore (e.g. 20261006T123005Z)
+        type: string
+        required: true
+      reason:
+        description: Why (stored in the deployment record)
+        type: string
+        default: manual restore
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    name: restore ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    # same group as the deploys: never restore while a deploy to this environment runs
+    concurrency:
+      group: frontend-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-frontend-cloudfront
+    env:
+      FRONTEND_ENV: ${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      RELEASE: ${{ inputs.release }}
+      REASON: ${{ inputs.reason }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Restore the release (waits for the distribution and the invalidation)
+        run: npm run -s deployment:restore -- --env "$FRONTEND_ENV" --release "$RELEASE" --reason "$REASON" --wait
+
+      - name: Playwright browser cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('aws-frontend-cloudfront/package-lock.json') }}
+
+      - name: Install Chromium for the end-to-end test
+        run: npx playwright install --with-deps chromium
+
+      - name: Integration tests
+        env:
+          FRONTEND_RELEASE: ${{ inputs.release }}
+        run: npm run test:integration
+
+      - name: Mark the restored release verified
+        run: npm run -s deployment:verify -- --env "$FRONTEND_ENV" --release "$RELEASE"
+
+      - name: Deployment history
+        if: always()
+        run: |
+          {
+            echo "### frontend-user-$FRONTEND_ENV deployments"
+            echo '```'
+            npm run -s deployment:list -- --env "$FRONTEND_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

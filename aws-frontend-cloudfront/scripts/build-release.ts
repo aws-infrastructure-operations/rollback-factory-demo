@@ -39,7 +39,8 @@ run(async () => {
     [path.join(PROJECT_ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', 'app'],
     {
       cwd: PROJECT_ROOT,
-      stdio: ['ignore', 'inherit', 'inherit'],
+      // Vite's output goes to stderr: stdout only carries the release id (for CI and deploy.ts)
+      stdio: ['ignore', 2, 'inherit'],
       env: {
         ...process.env,
         VITE_API_URL: api.ApiUrl,

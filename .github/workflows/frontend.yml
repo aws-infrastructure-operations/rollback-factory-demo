@@ -1,0 +1,83 @@
+name: frontend
+
+# PRs: typecheck, unit tests, app build, synth.
+# main / manual, per environment (dev, then prod): cdk deploy (keeps the live release) ->
+# build + upload a release -> activate it -> integration tests -> verified. If the tests fail,
+# the environment is switched back to the release it served before and the run stops.
+# Alarms after a deploy are handled in AWS (4xx/5xx alarm -> SNS -> rollback Lambda), not here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - aws-frontend-cloudfront/**
+      - .github/workflows/frontend*.yml
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - aws-frontend-cloudfront/**
+      - .github/workflows/frontend*.yml
+      - "!**/*.md"
+  workflow_dispatch:
+    inputs:
+      promote_to_prod:
+        description: Deploy to prod after dev is green
+        type: boolean
+        default: true
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aws-frontend-cloudfront
+    env:
+      # no credentials here: synth only needs a region, so the cross-region reference is exercised
+      AWS_REGION: eu-central-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: App build
+        env:
+          VITE_API_URL: https://example.execute-api.eu-central-1.amazonaws.com/v1/
+          VITE_USER_POOL_ID: eu-central-1_EXAMPLE
+          VITE_USER_POOL_CLIENT_ID: example
+          VITE_REGION: eu-central-1
+          VITE_RELEASE_ID: ci
+        run: npm run app:build
+      - name: Synth dev and prod
+        run: |
+          npx cdk synth -c env=dev -q -o cdk.out/dev
+          npx cdk synth -c env=prod -q -o cdk.out/prod
+
+  deploy-dev:
+    if: github.event_name != 'pull_request'
+    needs: test
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: dev
+    secrets: inherit
+
+  deploy-prod:
+    if: github.event_name == 'push' || inputs.promote_to_prod
+    needs: deploy-dev
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: prod
+    secrets: inherit

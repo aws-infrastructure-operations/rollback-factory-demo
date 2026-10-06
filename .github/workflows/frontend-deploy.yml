@@ -1,0 +1,174 @@
+name: frontend-deploy
+
+# Reusable: deploys one environment of frontend-user:
+#   cdk deploy (both stacks, the live release kept) -> build a release against the API stack
+#   outputs -> upload it + its manifest -> activate it (origin path + invalidation) -> record ->
+#   integration tests -> mark verified.
+# A release can only be tested once it is live (the bucket is private and the distribution has
+# one origin path), so if the tests fail the environment is switched back to the release it
+# served before, and the job fails with the test output in the summary.
+# Needs, per GitHub environment (dev / prod):
+#   secrets.AWS_ACCESS_KEY_ID, secrets.AWS_SECRET_ACCESS_KEY, vars.AWS_REGION
+# and the api-user stack (aws-api-gateway) deployed in that environment.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    # Shared with frontend-restore.yml: never two changes to the same environment at once.
+    concurrency:
+      group: frontend-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-frontend-cloudfront
+    env:
+      FRONTEND_ENV: ${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK bootstrap, main region and us-east-1 (no-op when up to date)
+        run: |
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          npx cdk bootstrap -c env="$FRONTEND_ENV" "aws://$account/$AWS_REGION" "aws://$account/us-east-1"
+
+      - name: Read the release the distribution serves
+        id: live
+        run: |
+          context="$(npm run -s live:context -- --env "$FRONTEND_ENV")"
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy both stacks (the live release stays live)
+        env:
+          LIVE_CONTEXT: ${{ steps.live.outputs.context }}
+        # LIVE_CONTEXT is unquoted on purpose: it is "-c liveReleaseId=<id>" or empty
+        run: npx cdk deploy --all -c env="$FRONTEND_ENV" $LIVE_CONTEXT --require-approval never
+
+      - name: Build the release against the api-user stack outputs
+        id: build
+        run: |
+          release="$(npm run -s release:build -- --env "$FRONTEND_ENV")"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the release and its manifest
+        run: npm run -s release:upload -- --env "$FRONTEND_ENV"
+
+      - name: Activate the release (origin path + invalidation, waits for both)
+        id: activate
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+        run: |
+          npm run -s release:activate -- --env "$FRONTEND_ENV" --release "$RELEASE" --wait > activation.json
+          cat activation.json
+          {
+            echo "previous=$(jq -r '.previousReleaseId // ""' activation.json)"
+            echo "invalidation=$(jq -r '.invalidationId' activation.json)"
+            echo "site=$(jq -r '.siteUrl' activation.json)"
+            echo "deployed_after=$(jq -r '.deployedAfter | floor' activation.json)"
+            echo "completed_after=$(jq -r '.completedAfter | floor' activation.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Record the deployment
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          INVALIDATION: ${{ steps.activate.outputs.invalidation }}
+          PREVIOUS: ${{ steps.activate.outputs.previous }}
+        run: >-
+          npm run -s deployment:record -- --env "$FRONTEND_ENV" --release "$RELEASE"
+          --invalidation "$INVALIDATION" ${PREVIOUS:+--previous "$PREVIOUS"}
+          --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"
+
+      - name: Playwright browser cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('aws-frontend-cloudfront/package-lock.json') }}
+
+      - name: Install Chromium for the end-to-end test
+        run: npx playwright install --with-deps chromium
+
+      - name: Integration tests (smoke + end to end)
+        id: integration
+        env:
+          FRONTEND_RELEASE: ${{ steps.build.outputs.release }}
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      - name: Mark the deployment verified (rollbacks only go back to verified releases)
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+        run: npm run -s deployment:verify -- --env "$FRONTEND_ENV" --release "$RELEASE"
+
+      - name: Tests failed -> switch back to the previous release
+        id: switch_back
+        if: failure() && steps.integration.outcome == 'failure' && steps.activate.outputs.previous != '' && steps.activate.outputs.previous != 'initial'
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          PREVIOUS: ${{ steps.activate.outputs.previous }}
+        run: >-
+          npm run -s deployment:restore -- --env "$FRONTEND_ENV" --release "$PREVIOUS" --wait
+          --reason "integration tests failed for $RELEASE (GitHub run $GITHUB_RUN_ID)"
+
+      - name: Integration test failures -> job summary
+        if: failure() && steps.integration.outcome == 'failure'
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          PREVIOUS: ${{ steps.activate.outputs.previous }}
+          SWITCHED_BACK: ${{ steps.switch_back.outcome }}
+        run: |
+          {
+            echo "### :x: frontend-user-$FRONTEND_ENV: integration tests failed for release \`$RELEASE\`"
+            if [ "$SWITCHED_BACK" = success ]; then
+              echo "Switched back to the previous release \`$PREVIOUS\` (recorded as a restore)."
+            else
+              echo "**Not switched back** (no earlier release, or the switch failed) - \`$RELEASE\` is still live."
+            fi
+            echo '<details open><summary>Test output (last 100 lines)</summary>'
+            echo
+            echo '```'
+            tail -n 100 integration-tests.log
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Activation timing and deployment history
+        if: always() && steps.activate.outcome == 'success'
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          SITE: ${{ steps.activate.outputs.site }}
+          DEPLOYED_AFTER: ${{ steps.activate.outputs.deployed_after }}
+          COMPLETED_AFTER: ${{ steps.activate.outputs.completed_after }}
+        run: |
+          {
+            echo "### frontend-user-$FRONTEND_ENV"
+            echo "Release \`$RELEASE\` activated on $SITE: distribution deployed after ${DEPLOYED_AFTER}s, invalidation completed after ${COMPLETED_AFTER}s."
+            echo '```'
+            npm run -s deployment:list -- --env "$FRONTEND_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
