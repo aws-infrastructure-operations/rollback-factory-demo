@@ -14,6 +14,8 @@ export interface StackOutputs {
   Alarm4xxName: string;
   Alarm5xxName: string;
   RollbackFunctionName: string;
+  LambdaErrorsAlarmName: string;
+  AccessLogGroupName: string;
 }
 
 const cfn = new CloudFormationClient({});

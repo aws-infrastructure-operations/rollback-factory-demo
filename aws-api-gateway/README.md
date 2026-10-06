@@ -16,6 +16,9 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-4xx-rate-<env>`, `rollback-factory-demo-5xx-rate-<env>` |
 | SNS notification topic | `rollback-factory-demo-notifications-<env>` |
 | Rollback Lambda | `rollback-factory-demo-rollback-<env>` |
+| Lambda errors alarm (informational, no rollback) | `rollback-factory-demo-lambda-errors-<env>` |
+| API access logs (JSON, 30 days) | `rollback-factory-demo-api-access-logs-<env>` |
+| Saved Logs Insights queries | `rollback-factory-demo-api-5xx-by-cause-<env>`, `rollback-factory-demo-api-5xx-requests-<env>` |
 
 The REST API keeps the `api-user-<env>` name from the story. Every other resource is named `rollback-factory-demo-<resource>-<env>`, built by `resourceName()` in [`lib/config.ts`](lib/config.ts).
 
@@ -164,6 +167,43 @@ npm run deployment:list -- --env dev                # shows the rollback record
 To exercise the rollback logic without waiting for real errors, run `npm run rollback:trigger -- --env dev [--alarm 4xx|5xx] [--reason "..."]`. It invokes the rollback Lambda with an ALARM event, the same way SNS does. CI uses it when integration tests fail.
 
 > After a rollback the live API config differs from what CloudFormation last applied. CloudFormation only updates the API resources whose template changed, so after rolling forward, check that the stage behaves as expected; the integration tests do that in CI.
+
+## Troubleshooting 5xx: API Gateway or Lambda?
+
+The 5xx alarm counts every 5xx the client received, whatever caused it. To find the cause, use the access logs and the Lambda-errors alarm.
+
+**1. Access logs.** Every request to stage `v1` is logged as one JSON line in `rollback-factory-demo-api-access-logs-<env>`:
+
+| Field | Meaning |
+|---|---|
+| `status` | what the client got |
+| `errorType` | set when **API Gateway** produced the error, e.g. `INTEGRATION_FAILURE`, `INTEGRATION_TIMEOUT`, `AUTHORIZER_FAILURE`, `UNAUTHORIZED`, `BAD_REQUEST_BODY`, `THROTTLED`; empty when the Lambda's response was passed through |
+| `integrationStatus` | status code returned by the **function code** |
+| `lambdaServiceStatus` | status of the call to the **Lambda service** itself |
+| `integrationError`, `integrationErrorMessage` | why the integration failed, e.g. the function's error, or "Invalid permissions on Lambda function" |
+| `lambdaRequestId` | same as `RequestId:` in the Lambda's log; find the stack trace with it |
+
+In CloudWatch → Logs Insights → **Saved queries**:
+- `rollback-factory-demo-api-5xx-by-cause-<env>`: counts the 5xx grouped by `errorType` / `integrationStatus` / `integrationErrorMessage`
+- `rollback-factory-demo-api-5xx-requests-<env>`: the latest 5xx requests, with `lambdaRequestId`
+
+How to read them:
+
+| You see | Cause |
+|---|---|
+| 502, `errorType=INTEGRATION_FAILURE`, `integrationError` set | the **Lambda** threw or returned an invalid response (e.g. `demo/break-api`) |
+| 5xx, `errorType` empty, `integrationStatus` = the same 5xx | the **Lambda code** returned the 5xx on purpose (e.g. `chaosFailureRate`) |
+| 504, `errorType=INTEGRATION_TIMEOUT` | the Lambda was slower than API Gateway's 29 s limit |
+| 500, `integrationErrorMessage` about permissions | **API Gateway** configuration, e.g. a missing invoke permission for the Lambda version |
+| no `lambdaRequestId` | the request never reached the Lambda (authorizer, validator, throttling, routing) |
+
+**2. The Lambda-errors alarm.** `rollback-factory-demo-lambda-errors-<env>` fires when the backend Lambda (any version) throws unhandled errors in 2 of 3 minutes:
+- 5xx alarm + Lambda-errors alarm together → the **code** is failing.
+- 5xx alarm alone → API Gateway, a timeout, or 5xx responses the code returns on purpose.
+
+It notifies the SNS topic, so e-mail subscribers see it, but it **never triggers a rollback**: the rollback Lambda's subscription only accepts the 4xx and 5xx alarms.
+
+Logging needs API Gateway's account-level CloudWatch role. The stack creates that role and keeps it if the stack is deleted, because it is one setting shared by every API in the account and region.
 
 ## CI/CD (GitHub Actions)
 
