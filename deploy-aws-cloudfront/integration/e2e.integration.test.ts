@@ -42,9 +42,10 @@ after(async () => {
 describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''} end to end`, () => {
   test('loads the page with its scripts and styles, without errors', async () => {
     await page.goto(`${site.siteUrl}/`);
-    await page.getByRole('heading', { name: config.frontendName }).waitFor();
-    // the stylesheet applied: the card is laid out as a grid
-    assert.equal(await page.locator('dl.card').evaluate((el) => (globalThis as any).getComputedStyle(el).display), 'grid');
+    // React rendered the dashboard
+    await page.getByRole('heading', { name: 'API Gateways' }).waitFor();
+    // the stylesheet applied: the page is laid out as a grid
+    assert.equal(await page.locator('.layout').evaluate((el) => (globalThis as any).getComputedStyle(el).display), 'grid');
     assert.deepEqual(problems.splice(0), []);
   });
 
