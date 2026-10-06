@@ -24,7 +24,7 @@ or off and that notify an SNS topic.
 - **SNS topic** `rollback-factory-demo-frontend-notifications-<env>`:
   - `enforceSSL: true` **plus an explicit topic-policy allow for `cloudwatch.amazonaws.com`**,
     or alarm actions fail (see the API)
-  - `-c alarmNotifications=false` removes the alarm actions; `-c alarmEmail=...` adds an e-mail subscription
+  - `-c alarmNotifications=false` turns the alarm actions off (`ActionsEnabled: false`, as in the API); `-c alarmEmail=...` adds an e-mail subscription
 - **Outputs:** `Alarm4xxName`, `Alarm5xxName`, `AlarmTopicArn`.
 - **Unit tests:** metric, dimensions, thresholds, math expression, topic policy, actions on/off.
 
@@ -33,7 +33,7 @@ or off and that notify an SNS topic.
 - Synth shows both alarms in us-east-1 on the right distribution.
 - With notifications on, `aws cloudwatch set-alarm-state --state-value ALARM` on dev publishes to the
   topic (visible in the e-mail subscription or topic metrics).
-- With `alarmNotifications=false`, the alarms have no actions.
+- With `alarmNotifications=false`, the alarms still change state but their actions are off.
 
 ## Notes
 

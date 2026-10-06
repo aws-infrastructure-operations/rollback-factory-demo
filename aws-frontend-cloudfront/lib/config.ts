@@ -7,6 +7,15 @@ export interface AlarmConfig {
   notificationsEnabled: boolean;
   /** Optional e-mail subscribed to the alarm topic. */
   email?: string;
+  /** Alarm when more than this % of requests in a minute are 4xx ... */
+  error4xxRatePercent: number;
+  /** ... and the minute had at least this many requests (keeps the smoke test's 404 from tripping it). */
+  minRequests4xx: number;
+  error5xxRatePercent: number;
+  minRequests5xx: number;
+  /** "datapointsToAlarm out of evaluationPeriods" one-minute periods. */
+  evaluationPeriods: number;
+  datapointsToAlarm: number;
 }
 
 export interface EnvConfig {
@@ -30,6 +39,8 @@ export interface EnvConfig {
   /** Whether stateful resources (buckets, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
+  /** The two CloudFront error-rate alarms the rollback Lambda reacts to. */
+  alarmNames: { error4xx: string; error5xx: string };
   /** The rollback Lambda only acts if the latest release is younger than this. */
   rollbackWindowMinutes: number;
 }
@@ -75,7 +86,14 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',
       email: overrides.alarmEmail || undefined,
+      error4xxRatePercent: 25,
+      minRequests4xx: 20,
+      error5xxRatePercent: 5,
+      minRequests5xx: 5,
+      evaluationPeriods: 3,
+      datapointsToAlarm: 2,
     },
+    alarmNames: { error4xx: resourceName('frontend-4xx-rate'), error5xx: resourceName('frontend-5xx-rate') },
     rollbackWindowMinutes,
   };
 }

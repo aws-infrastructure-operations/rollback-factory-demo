@@ -39,8 +39,8 @@ The work is split into tickets FE-01 to FE-10 in [docs/](docs/README.md).
 | 6 | Versioned releases selected by origin path | Done (FE-02, FE-04) | #22, #24 |
 | 7 | Build manifest stored in S3 | Done (FE-04, with the bucket-per-env deviation) | #24 |
 | 8 | DynamoDB table recording each deployment | Done (FE-05) | #25 |
-| 9 | Integration steps | Done (FE-06) | |
-| 10 | 4xx and 5xx alarms with optional SNS notification | Not started | |
+| 9 | Integration steps | Done (FE-06) | #26 |
+| 10 | 4xx and 5xx alarms with optional SNS notification | Done (FE-07) | |
 | 11 | SNS → rollback Lambda (within X minutes, previous release, invalidate) | Not started | |
 | 12 | GitHub workflow: deploy, test, promote to prod, rollback | Not started | |
 
