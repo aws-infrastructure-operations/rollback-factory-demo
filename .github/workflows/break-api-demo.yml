@@ -3,8 +3,10 @@ name: break-api-demo
 # Manual demo of the alarm-driven rollback, in dev only:
 #   1. check dev has a recorded deployment to roll back to
 #   2. deploy the broken branch (default demo/break-api) to dev and record it
-#   3. send real traffic -> 5xx alarm -> SNS -> rollback Lambda
-#   4. succeed once the rollback is recorded and the API answers 200 again
+#   3. send real traffic for traffic_minutes, then finish
+#
+# The workflow never rolls back and doesn't wait for one: the 5xx alarm -> SNS ->
+# rollback Lambda path does that on its own (watch CloudWatch / the Lambda logs).
 #
 # The broken branch is only checked out and deployed, never merged. Scripts come
 # from the branch this workflow runs on (main), so the broken branch doesn't need them.
@@ -17,7 +19,7 @@ on:
         type: string
         default: demo/break-api
       traffic_minutes:
-        description: Max minutes to send traffic while waiting for the rollback
+        description: Minutes to send traffic to the broken API
         type: string
         default: "10"
 
@@ -29,7 +31,7 @@ permissions:
   contents: read
 
 jobs:
-  break-and-rollback:
+  break-api:
     runs-on: ubuntu-latest
     environment: dev
     timeout-minutes: 45
@@ -80,7 +82,7 @@ jobs:
           npm run -s deployment:record -- --env dev
           --description "break-api-demo: $BROKEN_REF (run $GITHUB_RUN_ID)"
 
-      - name: Send traffic until the alarm rolls it back
+      - name: Send traffic
         working-directory: tools/aws-api-gateway
         run: npm run -s demo:traffic -- --env dev --minutes "$TRAFFIC_MINUTES"
 

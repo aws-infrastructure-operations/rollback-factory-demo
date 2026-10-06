@@ -52,7 +52,25 @@ before(async () => {
     cleanup = () => deleteUser(outputs.UserPoolId, username!);
   }
   token = await getIdToken(outputs.UserPoolClientId, username, password);
+  await waitUntilReady();
 });
+
+/**
+ * A fresh deployment (and its Lambda invoke permissions) can take a few seconds
+ * to serve everywhere, answering 5xx / 403 meanwhile. Wait up to READY_TIMEOUT_MS
+ * for a normal answer; if it never comes the tests run anyway and report the failure.
+ */
+const READY_TIMEOUT_MS = 60_000;
+async function waitUntilReady() {
+  const until = Date.now() + READY_TIMEOUT_MS;
+  let last = 0;
+  while (Date.now() < until) {
+    last = (await call('GET', '/users', { token })).status;
+    if (last < 500 && last !== 403) return;
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  console.warn(`API not ready after ${READY_TIMEOUT_MS / 1000}s (last GET /users: ${last}) - running tests anyway`);
+}
 
 after(async () => {
   await cleanup?.();
@@ -75,6 +93,27 @@ describe(`${config.apiName} (stage ${config.stageName})`, () => {
       assert.match(res.body.from, /@/);
     });
   }
+
+  test('answers CORS preflights and adds CORS headers (browser frontend)', async () => {
+    const base = outputs.ApiUrl.replace(/\/$/, '');
+    const preflight = await fetch(`${base}/messages`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://example.cloudfront.net',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+    assert.ok(preflight.status < 300, `preflight status ${preflight.status}`);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+    assert.match(preflight.headers.get('access-control-allow-headers') ?? '', /Authorization/i);
+
+    const get = await fetch(`${base}/users`, { headers: { Authorization: token } });
+    assert.equal(get.headers.get('access-control-allow-origin'), '*');
+    const unauthorized = await fetch(`${base}/users`);
+    assert.equal(unauthorized.status, 401);
+    assert.equal(unauthorized.headers.get('access-control-allow-origin'), '*');
+  });
 
   test('rejects requests without a token (401)', async () => {
     const res = await call('GET', '/users');

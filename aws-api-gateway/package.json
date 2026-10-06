@@ -19,7 +19,9 @@
     "deployment:list": "tsx scripts/list-deployments.ts",
     "test:integration": "tsx --test --test-concurrency=1 integration/*.test.ts",
     "rollback:trigger": "tsx scripts/trigger-rollback.ts",
-    "demo:traffic": "tsx scripts/generate-traffic.ts"
+    "demo:traffic": "tsx scripts/generate-traffic.ts",
+    "deployment:verify": "tsx scripts/verify-deployment.ts",
+    "deployment:restore": "tsx scripts/restore-deployment.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",

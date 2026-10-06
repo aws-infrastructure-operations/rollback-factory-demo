@@ -8,10 +8,13 @@
  */
 import { APIGatewayClient, GetExportCommand, GetStageCommand } from '@aws-sdk/client-api-gateway';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-export type DeploymentSource = 'manual' | 'cicd' | 'rollback';
+/** rollback = automatic (alarm / failed tests), restore = a deployment chosen by hand */
+export type DeploymentSource = 'manual' | 'cicd' | 'rollback' | 'restore';
 
 export interface DeploymentRecord {
   apiName: string;
@@ -32,6 +35,21 @@ export interface DeploymentRecord {
   rolledBackFrom?: string;
   /** Set on a deployment once a rollback has claimed it (see claimRollback) */
   rolledBackAt?: string;
+  /**
+   * Set once integration tests passed against this deployment (CI: deployment:verify).
+   * Rollbacks only ever restore verified deployments. A rollback record inherits the
+   * verifiedAt of the deployment it restored, since it serves the same spec.
+   */
+  verifiedAt?: string;
+  /** True only on the record the stage currently serves (the latest one). */
+  current?: boolean;
+  /**
+   * Set once the deployment is replaced: true if it was replaced by a newer deployment,
+   * false if an alarm rolled it back. Unset while it is current.
+   */
+  stable?: boolean;
+  /** Seconds the deployment stayed live (until the next deployment). Only on stable deployments. */
+  stableFor?: number;
 }
 
 export interface DeploymentTarget {
@@ -49,6 +67,7 @@ export interface RecordOptions {
   runUrl?: string;
   description?: string;
   rolledBackFrom?: string;
+  verifiedAt?: string;
   now?: Date;
 }
 
@@ -85,7 +104,21 @@ export function buildRecord(
     runUrl: opts.runUrl,
     description: opts.description,
     rolledBackFrom: opts.rolledBackFrom,
+    verifiedAt: opts.verifiedAt,
+    current: true,
   };
+}
+
+/**
+ * The fields to set on the previous current deployment when `next` replaces it.
+ * A deployment an alarm rollback claimed (rolledBackAt) is unstable; any other is
+ * stable for the time between its deployment and the next one.
+ */
+export function retirement(previous: DeploymentRecord, next: DeploymentRecord):
+  Pick<DeploymentRecord, 'current' | 'stable' | 'stableFor'> {
+  if (previous.rolledBackAt) return { current: false, stable: false };
+  const ms = new Date(next.deployedAt).getTime() - new Date(previous.deployedAt).getTime();
+  return { current: false, stable: true, stableFor: Math.round(ms / 1000) };
 }
 
 export async function getStageDeploymentId(restApiId: string, stageName: string): Promise<string> {
@@ -123,7 +156,8 @@ export async function listDeployments(
 }
 
 /**
- * Exports the stage's current spec to S3 and records the deployment.
+ * Exports the stage's current spec to S3 and records the deployment as current.
+ * The previous current deployment is retired in the same transaction (see retirement).
  * Returns undefined (and records nothing) when the stage still points at the
  * same deployment as the latest record, i.e. nothing was actually deployed.
  */
@@ -144,12 +178,59 @@ export async function recordDeployment(
     ContentType: 'application/json',
     Metadata: { 'deployment-id': deploymentId, source: record.source },
   }));
-  await ddb.send(new PutCommand({
+  const put = {
     TableName: target.table,
     Item: record,
     ConditionExpression: 'attribute_not_exists(deployedAt)',
+  };
+  if (!latest) {
+    await ddb.send(new PutCommand(put));
+    return record;
+  }
+  const { stable, stableFor } = retirement(latest, record);
+  await ddb.send(new TransactWriteCommand({
+    TransactItems: [
+      { Put: put },
+      {
+        Update: {
+          TableName: target.table,
+          Key: { apiName: latest.apiName, deployedAt: latest.deployedAt },
+          // CURRENT is a DynamoDB reserved word
+          UpdateExpression: stableFor === undefined
+            ? 'SET #current = :false, #stable = :stable REMOVE #stableFor'
+            : 'SET #current = :false, #stable = :stable, #stableFor = :stableFor',
+          ConditionExpression: 'attribute_exists(deployedAt)',
+          ExpressionAttributeNames: { '#current': 'current', '#stable': 'stable', '#stableFor': 'stableFor' },
+          ExpressionAttributeValues: {
+            ':false': false,
+            ':stable': stable,
+            ...(stableFor === undefined ? {} : { ':stableFor': stableFor }),
+          },
+        },
+      },
+    ],
   }));
   return record;
+}
+
+export async function getDeployment(
+  table: string,
+  apiName: string,
+  deployedAt: string,
+): Promise<DeploymentRecord | undefined> {
+  const { Item } = await ddb.send(new GetCommand({ TableName: table, Key: { apiName, deployedAt } }));
+  return Item as DeploymentRecord | undefined;
+}
+
+/** Marks a deployment as having passed the integration tests. */
+export async function markVerified(table: string, record: DeploymentRecord, now = new Date()) {
+  await ddb.send(new UpdateCommand({
+    TableName: table,
+    Key: { apiName: record.apiName, deployedAt: record.deployedAt },
+    UpdateExpression: 'SET verifiedAt = :now',
+    ConditionExpression: 'attribute_exists(deployedAt)',
+    ExpressionAttributeValues: { ':now': now.toISOString() },
+  }));
 }
 
 export async function getSpec(bucket: string, key: string): Promise<string> {
@@ -159,17 +240,19 @@ export async function getSpec(bucket: string, key: string): Promise<string> {
 }
 
 /**
- * Marks a deployment as being rolled back. Returns false if another rollback
- * already claimed it, so concurrent alarms (4xx + 5xx) roll back only once.
+ * Marks a deployment as being rolled back, and as unstable (stableFor removed).
+ * Returns false if another rollback already claimed it, so concurrent alarms
+ * (4xx + 5xx) roll back only once.
  */
 export async function claimRollback(table: string, record: DeploymentRecord, now = new Date()) {
   try {
     await ddb.send(new UpdateCommand({
       TableName: table,
       Key: { apiName: record.apiName, deployedAt: record.deployedAt },
-      UpdateExpression: 'SET rolledBackAt = :now',
+      UpdateExpression: 'SET rolledBackAt = :now, #stable = :false REMOVE #stableFor',
       ConditionExpression: 'attribute_exists(deployedAt) AND attribute_not_exists(rolledBackAt)',
-      ExpressionAttributeValues: { ':now': now.toISOString() },
+      ExpressionAttributeNames: { '#stable': 'stable', '#stableFor': 'stableFor' },
+      ExpressionAttributeValues: { ':now': now.toISOString(), ':false': false },
     }));
     return true;
   } catch (err) {

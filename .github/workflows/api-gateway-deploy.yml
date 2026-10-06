@@ -73,6 +73,9 @@ jobs:
         id: integration
         run: npm run test:integration
 
+      - name: Mark deployment verified (rollbacks only restore verified deployments)
+        run: npm run -s deployment:verify -- --env "$API_ENV"
+
       - name: Roll back after failed integration tests
         if: failure() && steps.integration.outcome == 'failure'
         run: >-
