@@ -30,6 +30,23 @@ describe('stack', () => {
     }
   });
 
+  test('lets CloudWatch publish the API alarms to the SSL-only topic', () => {
+    const policies = Object.values(t.findResources('AWS::SNS::TopicPolicy')) as any[];
+    assert.equal(policies.length, 1);
+    const statements = policies[0].Properties.PolicyDocument.Statement as any[];
+    const allow = statements.find((s) => s.Sid === 'AllowCloudWatchAlarms');
+    assert.ok(allow, 'missing AllowCloudWatchAlarms statement');
+    assert.equal(allow.Effect, 'Allow');
+    assert.deepEqual(allow.Principal, { Service: 'cloudwatch.amazonaws.com' });
+    assert.equal(allow.Action, 'sns:Publish');
+    assert.deepEqual(allow.Condition.StringEquals, { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } });
+    const alarmIds = Object.keys(t.findResources('AWS::CloudWatch::Alarm')).sort();
+    const sourceArns = (allow.Condition.ArnLike['aws:SourceArn'] as any[]).map((a) => a['Fn::GetAtt'][0]).sort();
+    assert.deepEqual(sourceArns, alarmIds);
+    // the SSL-only deny is still there
+    assert.ok(statements.some((s) => s.Effect === 'Deny' && s.Condition?.Bool?.['aws:SecureTransport'] === 'false'));
+  });
+
   test('alarm notifications can be switched off', () => {
     synth('dev', { alarmNotifications: 'false' })
       .allResourcesProperties('AWS::CloudWatch::Alarm', { ActionsEnabled: false });
