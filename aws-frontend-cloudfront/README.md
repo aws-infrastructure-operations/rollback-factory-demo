@@ -159,6 +159,40 @@ so its timeout is 30 s. The decision (rolled back, or skipped and why) is logged
 
 **Demo:** `npm run rollback:trigger -- --env dev` invokes it with a fake alarm, exactly as SNS would.
 
+## GitHub workflows
+
+Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
+[`frontend-deploy.yml`](../.github/workflows/frontend-deploy.yml) once per environment, and
+[`frontend-restore.yml`](../.github/workflows/frontend-restore.yml).
+
+- **Triggers:** pull requests and pushes to `main` that change `aws-frontend-cloudfront/**` or
+  these workflows. Changes to `.md` files alone don't trigger a run.
+- **Pull requests:** typecheck, unit tests, app build with dummy settings, synth dev and prod.
+  No AWS credentials are needed.
+- **`main` / manual run:** for dev, then for prod:
+  1. bootstrap the main region and us-east-1
+  2. `cdk deploy --all`, keeping the live release (`live:context`)
+  3. `release:build` against that environment's api-user stack, then `release:upload` (release + manifest)
+  4. `release:activate --wait`, then `deployment:record`
+  5. integration tests, with `FRONTEND_RELEASE` set to the new release
+  6. `deployment:verify`
+  7. activation timing (distribution deployed / invalidation completed) and the deployment
+     history in the job summary
+- **Failed tests:** the environment is switched back to the release it served before
+  (`deployment:restore`, recorded as a `restore`). The job fails with the test output in the summary,
+  and prod isn't deployed. A release can only be tested once it is live, because the bucket is
+  private and the distribution has one origin path, so the switch back is the workflow's safety net.
+  On the very first deploy there is nothing to switch back to.
+- **Promotion:** prod deploys only when dev is green. Prod gets its own build, with the prod API
+  and user pool. Add required reviewers on the `prod` GitHub environment to gate it with an approval.
+- **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't
+  watch alarms after a deploy.
+- **Restore:** `frontend-restore` (manual) restores a release you choose, runs the integration
+  tests against it and marks it verified if they pass.
+- **AWS auth:** access-key secrets per GitHub environment (`AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`), the same as the API. The api-user stack must
+  already exist in the environment.
+
 ## Integration tests
 
 `FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set
