@@ -49,9 +49,11 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 
 ## App
 
-Vite + plain TypeScript in [`app/`](app), no framework. **One static page** (`index.html`) that shows
-which environment and release it is:
-- the name (`frontend-user-<env>`), the environment, the release id and the build time
+Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Control Center dashboard
+(API Gateways, Lambda Functions, CloudFront Distributions) laid out on **sample data**
+([`app/src/mock-data.ts`](app/src/mock-data.ts)). There are no AWS calls yet, and the buttons and tabs are visual only.
+The page also shows which environment and release it is:
+- the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"
 - the release id again in the footer, so an activation or a rollback is visible
 
 **Sign-in and the API page are out of scope for now.** The earlier version signed in with the API's

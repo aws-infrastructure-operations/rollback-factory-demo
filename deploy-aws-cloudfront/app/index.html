@@ -3,27 +3,11 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>frontend-user</title>
+    <title>AWS Control Center · frontend-user</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </head>
   <body>
-    <main class="narrow">
-      <h1 id="name">frontend-user</h1>
-      <p class="muted">
-        A static site served by CloudFront from a private S3 bucket. Every release lives under its
-        own prefix, so a rollback switches the distribution back to an earlier one.
-      </p>
-
-      <dl class="card">
-        <dt>Environment</dt>
-        <dd id="env">…</dd>
-        <dt>Release</dt>
-        <dd id="release">…</dd>
-        <dt>Built</dt>
-        <dd id="built">…</dd>
-      </dl>
-    </main>
-    <footer>Release <span id="footer-release">…</span></footer>
+    <div id="root"></div>
   </body>
 </html>

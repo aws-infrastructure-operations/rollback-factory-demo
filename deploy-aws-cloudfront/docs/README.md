@@ -26,7 +26,7 @@ FE-02 and FE-03 can run in parallel; so can FE-05/FE-06/FE-07 once FE-04 is in.
 
 These apply to every ticket.
 
-- **Stack:** AWS CDK with TypeScript. The app is **Vite + plain TypeScript** (no framework).
+- **Stack:** AWS CDK with TypeScript. The app is **Vite + React**.
 - **Naming:** the distribution keeps the story's name, `frontend-user-<env>`. Every other resource is
   `rollback-factory-demo-<resource>-<env>`, the same as the API.
 - **Regions:** two stacks per environment.
