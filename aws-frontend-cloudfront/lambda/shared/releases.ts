@@ -84,11 +84,15 @@ export const contentTypeFor = (filePath: string) =>
 
 /**
  * HTML is revalidated on every request, so an activation or rollback shows up as soon as
- * the invalidation is done. Everything else has a content hash in its name (Vite) and is
- * cached for a year.
+ * the invalidation is done. Vite's assets/ have a content hash in their name and are cached
+ * for a year. Other static files (app/public, e.g. the favicon) keep their name across
+ * releases, so they are only cached for an hour.
  */
-export const cacheControlFor = (filePath: string) =>
-  filePath.endsWith('.html') ? 'no-cache' : 'public, max-age=31536000, immutable';
+export function cacheControlFor(filePath: string) {
+  if (filePath.endsWith('.html')) return 'no-cache';
+  if (filePath.startsWith('assets/')) return 'public, max-age=31536000, immutable';
+  return 'public, max-age=3600';
+}
 
 // --- Switching releases -------------------------------------------------------
 
