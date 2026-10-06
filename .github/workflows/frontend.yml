@@ -84,7 +84,7 @@ jobs:
 
   deploy-staging:
     if: github.event_name != 'pull_request'
-    needs: deploy-dev
+    needs: deploy-testing
     uses: ./.github/workflows/frontend-deploy.yml
     with:
       environment: staging
