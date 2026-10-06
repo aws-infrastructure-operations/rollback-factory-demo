@@ -21,7 +21,7 @@ describe('stack', () => {
   test('creates a 4xx and a 5xx rate alarm wired to the SNS topic', () => {
     for (const [kind, threshold, min] of [['4xx', 25, 20], ['5xx', 5, 5]] as const) {
       t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: `rollback-factory-demo-${kind}-rate-dev`,
+        AlarmName: `rollback-factory-demo-api-user-${kind}-rate-dev`,
         Threshold: threshold,
         ActionsEnabled: true,
         AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
@@ -61,7 +61,7 @@ describe('stack', () => {
     t.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'lambda',
       FilterPolicyScope: 'MessageBody',
-      FilterPolicy: { AlarmName: ['rollback-factory-demo-4xx-rate-dev', 'rollback-factory-demo-5xx-rate-dev'] },
+      FilterPolicy: { AlarmName: ['rollback-factory-demo-api-user-4xx-rate-dev', 'rollback-factory-demo-api-user-5xx-rate-dev'] },
     });
     t.resourcePropertiesCountIs('AWS::SNS::Subscription', { Protocol: 'email' }, 0);
     synth('dev', { alarmEmail: 'ops@example.com' })
@@ -75,7 +75,7 @@ describe('stack', () => {
         Variables: Match.objectLike({
           STAGE_NAME: 'v1',
           ROLLBACK_WINDOW_MINUTES: '30',
-          ALARM_NAMES: 'rollback-factory-demo-4xx-rate-dev,rollback-factory-demo-5xx-rate-dev',
+          ALARM_NAMES: 'rollback-factory-demo-api-user-4xx-rate-dev,rollback-factory-demo-api-user-5xx-rate-dev',
         }),
       },
     });
@@ -154,13 +154,13 @@ describe('stack', () => {
     const vars = fn.Properties.Environment.Variables;
     assert.deepEqual(JSON.parse(vars.ALARM_PAIRS), [
       {
-        apiAlarm: 'rollback-factory-demo-4xx-rate-dev',
+        apiAlarm: 'rollback-factory-demo-api-user-4xx-rate-dev',
         lambdaAlarm: 'rollback-factory-demo-lambda-4xx-rate-dev',
         apiMetric: '4XXError',
         lambdaMetric: 'Lambda4XXError',
       },
       {
-        apiAlarm: 'rollback-factory-demo-5xx-rate-dev',
+        apiAlarm: 'rollback-factory-demo-api-user-5xx-rate-dev',
         lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
         apiMetric: '5XXError',
         lambdaMetric: 'Lambda5XXError',
@@ -239,11 +239,11 @@ test('recognises manual restore requests', () => {
 test('parses CloudWatch alarm notifications from SNS', () => {
   const event = {
     Records: [{ Sns: { Message: JSON.stringify({
-      AlarmName: 'rollback-factory-demo-5xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'Threshold Crossed',
+      AlarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'Threshold Crossed',
     }) } }],
   } as unknown as SNSEvent;
   assert.deepEqual(parseAlarms(event), [
-    { alarmName: 'rollback-factory-demo-5xx-rate-dev', newState: 'ALARM', reason: 'Threshold Crossed' },
+    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', newState: 'ALARM', reason: 'Threshold Crossed' },
   ]);
 });
 
@@ -264,19 +264,19 @@ test('finds the versioned Lambda ARNs in an exported spec', () => {
 
 test('only acts on ALARM transitions of its own API', () => {
   const alarms = [
-    { alarmName: 'rollback-factory-demo-5xx-rate-dev', newState: 'ALARM', reason: '' },
-    { alarmName: 'rollback-factory-demo-5xx-rate-prod', newState: 'ALARM', reason: '' },
-    { alarmName: 'rollback-factory-demo-4xx-rate-dev', newState: 'OK', reason: '' },
+    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', newState: 'ALARM', reason: '' },
+    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-prod', newState: 'ALARM', reason: '' },
+    { alarmName: 'rollback-factory-demo-api-user-4xx-rate-dev', newState: 'OK', reason: '' },
   ];
   const dev = Object.values(getConfig('dev').alarmNames);
   const prod = Object.values(getConfig('prod').alarmNames);
-  assert.deepEqual(ownAlarms(alarms, dev).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-dev']);
-  assert.deepEqual(ownAlarms(alarms, prod).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-prod']);
+  assert.deepEqual(ownAlarms(alarms, dev).map((a) => a.alarmName), ['rollback-factory-demo-api-user-5xx-rate-dev']);
+  assert.deepEqual(ownAlarms(alarms, prod).map((a) => a.alarmName), ['rollback-factory-demo-api-user-5xx-rate-prod']);
 });
 
 describe('lambdaFault', () => {
   const pair: AlarmPair = {
-    apiAlarm: 'rollback-factory-demo-5xx-rate-dev',
+    apiAlarm: 'rollback-factory-demo-api-user-5xx-rate-dev',
     lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
     apiMetric: '5XXError',
     lambdaMetric: 'Lambda5XXError',

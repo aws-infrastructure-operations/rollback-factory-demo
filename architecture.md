@@ -52,8 +52,8 @@ The numbered arrows are the request flow, the lettered arrows the rollback, and 
 
 | Alarm | Fires on | Effect |
 |---|---|---|
-| `rollback-factory-demo-4xx-rate-<env>` | > 25 % 4xx on stage `v1` | triggers a rollback |
-| `rollback-factory-demo-5xx-rate-<env>` | > 5 % 5xx on stage `v1` | triggers a rollback |
+| `rollback-factory-demo-api-user-4xx-rate-<env>` | > 25 % 4xx on stage `v1` | triggers a rollback |
+| `rollback-factory-demo-api-user-5xx-rate-<env>` | > 5 % 5xx on stage `v1` | triggers a rollback |
 | `rollback-factory-demo-lambda-4xx-rate-<env>` / `-lambda-5xx-rate-<env>` | the same rates, counting only errors the Lambda produced | blocks the rollback (the code is at fault, not the API config) |
 | `rollback-factory-demo-lambda-errors-<env>` | Lambda invocation errors | notification only |
 

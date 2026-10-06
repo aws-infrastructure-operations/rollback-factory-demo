@@ -62,6 +62,6 @@ test('alarms on Lambda errors without triggering a rollback', () => {
   // the rollback Lambda only receives the 4xx / 5xx alarms
   t.hasResourceProperties('AWS::SNS::Subscription', {
     Protocol: 'lambda',
-    FilterPolicy: { AlarmName: ['rollback-factory-demo-4xx-rate-dev', 'rollback-factory-demo-5xx-rate-dev'] },
+    FilterPolicy: { AlarmName: ['rollback-factory-demo-api-user-4xx-rate-dev', 'rollback-factory-demo-api-user-5xx-rate-dev'] },
   });
 });
