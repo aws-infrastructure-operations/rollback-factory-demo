@@ -110,6 +110,26 @@ follows the API's record model, so both histories read the same way.
   so a record never describes a release that isn't live.
 - **Limitation:** changing the origin path in the CloudFront console is not recorded.
 
+## Alarms
+
+In `rollback-factory-demo-frontend-alarms-<env>` (us-east-1, where CloudFront publishes its metrics):
+
+- **Alarms:** `rollback-factory-demo-frontend-4xx-rate-<env>` and `rollback-factory-demo-frontend-5xx-rate-<env>`
+  on the distribution's `4xxErrorRate` / `5xxErrorRate` (`AWS/CloudFront`, `Region=Global`).
+  - 4xx above 25 %, or 5xx above 5 %, in 2 of 3 one-minute periods.
+  - Minutes with fewer than 20 (4xx) / 5 (5xx) requests count as 0, so the smoke test's one
+    intentional 404 can't fire them.
+- **SNS topic:** `rollback-factory-demo-frontend-notifications-<env>` receives the alarm actions.
+  - HTTPS only. CloudWatch may publish, but only for these two alarms in this account; without
+    that explicit allow, the topic's TLS-only policy would block the alarm actions.
+  - `-c alarmNotifications=false` turns the actions off (the alarms still change state).
+  - `-c alarmEmail=...` subscribes an e-mail address.
+- **Distribution id:** passed from the main stack as a cross-region reference (CDK writes it to SSM
+  in us-east-1). Strong references are set explicitly in `cdk.json`, so the main stack can't drop
+  the distribution while the alarms use it.
+- **Delay:** CloudFront metrics arrive a few minutes late, so expect an alarm roughly 3–6 minutes
+  after the errors start.
+
 ## Integration tests
 
 `FRONTEND_ENV=<env> npm run test:integration` tests the release the distribution serves. Set

@@ -18,6 +18,7 @@ export function createFrontendStacks(app: cdk.App, config: EnvConfig, env: { acc
     config,
     env: { account: env.account, region: config.alarmsRegion },
     crossRegionReferences: true,
+    distributionId: main.distribution.distributionId,
     description: `${config.frontendName} CloudFront alarms and rollback (CloudFront metrics live in us-east-1)`,
   });
   // the alarms watch the distribution, so `cdk deploy --all` creates the main stack first
