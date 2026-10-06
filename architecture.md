@@ -1,17 +1,18 @@
 # Architecture
 
-`rollback-factory-demo` shows automatic, alarm-driven rollbacks on AWS. Two projects are deployed
+`rollback-factory-demo` shows automatic, alarm-driven rollbacks on AWS. Three projects are deployed
 by GitHub Actions through `dev → testing → staging → prod`. Each one rolls itself back when its
-CloudWatch error-rate alarm fires shortly after a deployment.
+CloudWatch alarm fires shortly after a deployment.
 
 | Project | Rolls back by | Details |
 |---|---|---|
 | [API](#api-api-user-env) (`aws-api-gateway`) | re-importing the previous verified OpenAPI spec into stage `v1` | [README](aws-api-gateway/README.md), [story](aws-api-gateway/story-implementation.md) |
+| [Lambda](#lambda-service-lambda-env) (`aws-lambda`) | pointing `live` back at the previous version that went live, restoring `$LATEST` from its archived zip | [README](aws-lambda/README.md) |
 | [Frontend](#frontend-frontend-user-env) (`aws-frontend-cloudfront`) | pointing the CloudFront origin path back at the previous verified release | [README](aws-frontend-cloudfront/README.md), [story](aws-frontend-cloudfront/story-implementation.md) |
 
 Shared conventions:
 
-- **Naming:** the story-mandated names stay (`api-user-<env>`, `frontend-user-<env>`). Every other
+- **Naming:** the product names stay (`api-user-<env>`, `frontend-user-<env>`, `service-lambda-<env>`). Every other
   resource is `rollback-factory-demo-<resource>-<env>`.
 - **Region:** the main region is `eu-central-1`. The frontend's alarms live in `us-east-1`, because
   CloudFront only publishes its metrics there.
@@ -106,6 +107,25 @@ branch to dev and sends traffic, to show an alarm rollback.
 > - The CI arrows point at the right services, but their exact endpoints are approximate.
 >
 > The text above is the reference.
+
+## Lambda (`service-lambda-<env>`)
+
+No diagram yet. In short:
+
+- **Deploy:** `cdk deploy` publishes a new version to the `integration` alias while `live` stays
+  pinned. CI invokes `service-lambda-<env>:integration` in the integration tests, and only then
+  points `live` at the same version.
+- **Archive:** a sync step in the rollback function archives every version: its zip goes to S3, its
+  metadata to DynamoDB. The sync records the promotion, including the version's `liveAt`.
+- **Rollback:** the errors alarm watches `live` and `$LATEST` only, never `integration`. Through SNS
+  it invokes the rollback function. After its guards (deployment window, cooldown, consecutive-rollback
+  limit), the function points `live` back at the newest older version that went live and was never
+  rolled back from, and restores `$LATEST` from that version's zip. If only `$LATEST` is failing,
+  it restores `$LATEST` alone.
+- **Scheduled check:** every 5 minutes it syncs, marks long-healthy versions stable, and re-handles
+  alarms still in `ALARM`.
+
+See the [Lambda README](aws-lambda/README.md) for details.
 
 ## Frontend (`frontend-user-<env>`)
 
