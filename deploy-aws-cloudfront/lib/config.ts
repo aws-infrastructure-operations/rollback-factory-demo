@@ -7,8 +7,6 @@ export type EnvName = (typeof ENV_NAMES)[number];
 export interface AlarmConfig {
   /** Alarm actions (SNS -> rollback Lambda) on/off. Alarms still change state either way. */
   notificationsEnabled: boolean;
-  /** Optional e-mail subscribed to the alarm topic. */
-  email?: string;
   /** Alarm when more than this % of requests in a minute are 4xx ... */
   error4xxRatePercent: number;
   /** ... and the minute had at least this many requests (keeps the smoke test's 404 from tripping it). */
@@ -46,18 +44,25 @@ export interface EnvConfig {
   /** Whether stateful resources (buckets, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
-  /** In the main stack; the rollback Lambda in us-east-1 writes to it by name. */
+  /** In the main stack; the rollback service writes rollback records to it. */
   deploymentsTableName: string;
-  /** The two CloudFront error-rate alarms the rollback Lambda reacts to. */
+  /**
+   * The two CloudFront error-rate alarms that trigger a rollback, named
+   * rollback-factory-demo-cloudfront-<name>-<env>: the rollback service picks its CloudFront manager
+   * from the "cloudfront" type in the name.
+   */
   alarmNames: { error4xx: string; error5xx: string };
-  /** The rollback Lambda only acts if the latest release is younger than this. */
+  /** The rollback service's topic (rollback-service), in us-east-1 for these alarms. */
+  rollbackTopicName: string;
+  /** The rollback service's Lambda (rollback-service), invoked by rollback:trigger. */
+  rollbackServiceFunctionName: string;
+  /** The rollback service only acts if the latest release is younger than this. */
   rollbackWindowMinutes: number;
 }
 
-/** Optional overrides, e.g. from `cdk deploy -c liveReleaseId=... -c alarmEmail=...`. */
+/** Optional overrides, e.g. from `cdk deploy -c liveReleaseId=...`. */
 export interface ConfigOverrides {
   alarmNotifications?: string | boolean;
-  alarmEmail?: string;
   rollbackWindowMinutes?: string | number;
   liveReleaseId?: string;
   integrationReleaseId?: string;
@@ -103,7 +108,6 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     retainData: envName === 'prod',
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',
-      email: overrides.alarmEmail || undefined,
       error4xxRatePercent: 25,
       minRequests4xx: 20,
       error5xxRatePercent: 5,
@@ -112,7 +116,12 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
       datapointsToAlarm: 2,
     },
     deploymentsTableName: resourceName('frontend-deployments'),
-    alarmNames: { error4xx: resourceName('frontend-4xx-rate'), error5xx: resourceName('frontend-5xx-rate') },
+    alarmNames: {
+      error4xx: resourceName('cloudfront-frontend-user-4xx-rate'),
+      error5xx: resourceName('cloudfront-frontend-user-5xx-rate'),
+    },
+    rollbackTopicName: resourceName('rollback-notifications'),
+    rollbackServiceFunctionName: resourceName('rollback-service'),
     rollbackWindowMinutes,
   };
 }

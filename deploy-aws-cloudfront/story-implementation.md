@@ -24,6 +24,13 @@
 
 ## Implementation status
 
+> **Since the move to [`rollback-service`](../rollback-service):** the rollback Lambda (us-east-1) described below
+> no longer lives in this stack. One Lambda, `rollback-factory-demo-rollback-service-<env>`, does the rollbacks
+> of every project, picking the manager from the alarm name (`rollback-factory-demo-<type>-<name>-<env>`).
+> Its topic is `rollback-factory-demo-rollback-notifications-<env>`, and this stack's alarms are now named
+> `rollback-factory-demo-cloudfront-frontend-user-*`. The logic and guards are unchanged; the names
+> below are the ones from when the story was implemented.
+
 Every item is implemented, in tickets FE-01 to FE-10 ([docs/](docs/README.md)), each branched from `origin/main`.
 **Nothing has been deployed to AWS yet.** The first CI run on `main` is the first end-to-end run.
 Usage details are in [README.md](README.md).

@@ -11,9 +11,10 @@ the work is split into tickets in [docs/](docs/README.md).
 | Stack | Region | Holds |
 |---|---|---|
 | `deploy-aws-cloudfront-<env>` | `CDK_DEFAULT_REGION` (the API's region) | site bucket, distribution `frontend-user-<env>`, deployments bucket + table |
-| `deploy-aws-cloudfront-alarms-<env>` | `us-east-1` | CloudFront alarms, SNS topic, rollback Lambda |
+| `deploy-aws-cloudfront-alarms-<env>` | `us-east-1` | the CloudFront 4xx / 5xx alarms |
 
-CloudFront only publishes its metrics in `us-east-1`, so the alarms stack lives there.
+CloudFront only publishes its metrics in `us-east-1`, so the alarms stack lives there. The rollback itself is done by the
+[rollback service](../rollback-service): deploy it to the environment first, since the alarms publish to its us-east-1 topic.
 Both regions must be bootstrapped:
 
 ```sh
@@ -90,7 +91,7 @@ A release is one build of the app for one environment, identified by its UTC bui
      (`previousReleaseId`, `invalidationId`, ...).
 
 The origin-path switch lives in [`lambda/shared/releases.ts`](lambda/shared/releases.ts), so the
-rollback Lambda uses the same code.
+rollback service uses the same switch (a copy of it).
 
 **Deviation:** the story's bucket name (`frontendname-awsaccount-deployments-datetimestamp`) suggests one
 bucket per deployment. As for the API, it is one versioned bucket per environment with the release id in
@@ -106,7 +107,7 @@ follows the API's record model, so both histories read the same way.
   the previous release, `source` (`manual`, `cicd`, `rollback` or `restore`), actor, the commit
   the release was built from, and the CI run link.
 - **Writers:** `deployment:record` (after `release:activate`, manual or CI), `deployment:restore`,
-  and the rollback Lambda (FE-08). `deploy:<env>` records automatically.
+  and the rollback service. `deploy:<env>` records automatically.
 - **Current / stable:** the record the distribution serves has `current=true`. When a new one is
   recorded, the previous one gets `stable=true` plus `stableFor` (seconds until the next deployment)
   and `stableForHumanReadable`. A deployment an alarm rolled back is `stable=false`.
@@ -118,28 +119,31 @@ follows the API's record model, so both histories read the same way.
 
 ## Alarms
 
-In `rollback-factory-demo-frontend-alarms-<env>` (us-east-1, where CloudFront publishes its metrics):
+In `deploy-aws-cloudfront-alarms-<env>` (us-east-1, where CloudFront publishes its metrics):
 
-- **Alarms:** `rollback-factory-demo-frontend-4xx-rate-<env>` and `rollback-factory-demo-frontend-5xx-rate-<env>`
-  on the distribution's `4xxErrorRate` / `5xxErrorRate` (`AWS/CloudFront`, `Region=Global`).
+- **Alarms:** `rollback-factory-demo-cloudfront-frontend-user-4xx-rate-<env>` and
+  `rollback-factory-demo-cloudfront-frontend-user-5xx-rate-<env>` on the distribution's `4xxErrorRate` /
+  `5xxErrorRate` (`AWS/CloudFront`, `Region=Global`). The `cloudfront` in the name tells the rollback
+  service which manager handles them.
   - 4xx above 25 %, or 5xx above 5 %, in 2 of 3 one-minute periods.
   - Minutes with fewer than 20 (4xx) / 5 (5xx) requests count as 0, so the smoke test's one
     intentional 404 can't fire them.
-- **SNS topic:** `rollback-factory-demo-frontend-notifications-<env>` receives the alarm actions.
-  - HTTPS only. CloudWatch may publish, but only for these two alarms in this account; without
-    that explicit allow, the topic's TLS-only policy would block the alarm actions.
-  - `-c alarmNotifications=false` turns the actions off (the alarms still change state).
-  - `-c alarmEmail=...` subscribes an e-mail address.
+- **Topic:** they publish to the rollback service's us-east-1 topic,
+  `rollback-factory-demo-rollback-notifications-<env>`. `-c alarmNotifications=false` turns the actions
+  off (the alarms still change state). An e-mail subscription is set on the rollback service
+  (`-c alarmEmail=...` there).
 - **Distribution id:** passed from the main stack as a cross-region reference (CDK writes it to SSM
   in us-east-1). Strong references are set explicitly in `cdk.json`, so the main stack can't drop
   the distribution while the alarms use it.
 - **Delay:** CloudFront metrics arrive a few minutes late, so expect an alarm roughly 3–6 minutes
   after the errors start.
 
-## Rollback Lambda
+## Rollback
 
-`rollback-factory-demo-frontend-rollback-<env>` lives in us-east-1, next to the alarms. It is
-subscribed to the topic and only accepts its own two alarms.
+Done by the [rollback service](../rollback-service)'s **CloudFront manager**
+(`rollback-factory-demo-rollback-service-<env>`, in the main region). It reads what it needs from
+this stack's `RollbackTarget` output: the distribution clients use (never the integration one), the
+deployments table, the alarm names and the window.
 
 **When it acts.** On an `ALARM`, it rolls back only if all of these hold:
 - the latest deployment is younger than **X = `-c rollbackWindowMinutes`** (default 30)
@@ -151,19 +155,14 @@ subscribed to the topic and only accepts its own two alarms.
 **What it does:**
 1. marks the bad deployment `rolledBackAt` with a conditional write, so the 4xx and 5xx alarms
    together roll back only once
-2. switches the origin path to the target release and invalidates `/*` (the same code as `release:activate`)
+2. switches the origin path to the target release and invalidates `/*` (the same switch as `release:activate`)
 3. records a `rollback` deployment. It inherits the target's `verifiedAt`, since it is the same
    release. The bad deployment is retired as `stable=false`.
 
-**What it doesn't do.** It doesn't wait for the distribution to deploy, which takes a few minutes,
-so its timeout is 30 s. The decision (rolled back, or skipped and why) is logged as JSON.
+It doesn't wait for the distribution to deploy, which takes a few minutes.
 
-**Access.**
-- **Deployments table:** the table is in the main region, and the Lambda writes to it by its fixed
-  name with a client for that region.
-- **IAM:** it may only read, update and invalidate this distribution, and read and write this table.
-
-**Demo:** `npm run rollback:trigger -- --env dev` invokes it with a fake alarm, exactly as SNS would.
+**Demo:** `npm run rollback:trigger -- --env dev` invokes the rollback service with a fake alarm,
+exactly as SNS would.
 
 ## GitHub workflows
 
@@ -190,7 +189,7 @@ Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
   touched, and the next environments aren't deployed. This is the same as the API's integration stage.
 - **Promotion:** each environment deploys only when the previous one is green, and gets its own build.
   Add required reviewers on the `prod` GitHub environment to gate it with an approval.
-- **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't
+- **Alarm rollback:** happens only in AWS (alarm → SNS → rollback service). The workflow doesn't
   watch alarms after a deploy.
 - **Restore:** `frontend-restore` (manual) restores a release you choose, runs the integration
   tests against it and marks it verified if they pass.
@@ -268,7 +267,7 @@ rollback in us-east-1.
 | `npm run deployment:verify -- --env <env> [--release <id>]` | mark the live deployment verified (after the integration tests) |
 | `npm run deployment:list -- --env <env> [--limit 10]` | deployment history |
 | `npm run deployment:restore -- --env <env> --release <id> [--wait]` | activate any release with a manifest and record a `restore` |
-| `npm run rollback:trigger -- --env <env> [--alarm 4xx\|5xx]` | invoke the rollback Lambda as SNS would (demo) |
+| `npm run rollback:trigger -- --env <env> [--alarm 4xx\|5xx]` | invoke the rollback service as SNS would (demo) |
 | `npm run demo:traffic -- --env <env> [--minutes 10] [--preflight]` | load the site like a browser and report status codes + the live release (demo) |
 
 ## Context options
@@ -278,5 +277,4 @@ rollback in us-east-1.
 | `liveReleaseId` | – | origin path `frontend-user-<env>` keeps (FE-02, FE-04) |
 | `integrationReleaseId` | – | origin path `frontend-user-<env>-integration` keeps (FE-11) |
 | `alarmNotifications` | `true` | alarm actions on/off (FE-07) |
-| `alarmEmail` | – | e-mail subscription on the alarm topic (FE-07) |
-| `rollbackWindowMinutes` | `30` | rollback Lambda window (FE-08) |
+| `rollbackWindowMinutes` | `30` | rollback window, published in `RollbackTarget` |

@@ -47,7 +47,7 @@ env:
   ENV_NAME: ${{ inputs.environment }}
   FUNCTION_NAME: service-lambda-${{ inputs.environment }}
   ALIAS_NAME: live
-  ROLLBACK_FUNCTION_NAME: rollback-factory-demo-lambda-rollback-${{ inputs.environment }}
+  ROLLBACK_FUNCTION_NAME: rollback-factory-demo-rollback-service-${{ inputs.environment }}
   TABLE_NAME: rollback-factory-demo-lambda-versions-${{ inputs.environment }}
   # Workflows whose running or queued runs block a rollback (the deploys run inside lambda.yml).
   DEPLOY_WORKFLOWS: lambda.yml

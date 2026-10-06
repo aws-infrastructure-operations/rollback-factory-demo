@@ -10,7 +10,6 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import { EnvConfig } from './config.js';
@@ -25,8 +24,6 @@ export class ApiUserStack extends cdk.Stack {
   readonly userPoolClient: cognito.UserPoolClient;
   readonly specBucket: s3.Bucket;
   readonly deploymentsTable: dynamodb.TableV2;
-  readonly alarmTopic: sns.Topic;
-  readonly rollbackFunction: NodejsFunction;
   readonly accessLogGroup: logs.LogGroup;
 
   constructor(scope: Construct, id: string, props: ApiUserStackProps) {
@@ -273,15 +270,11 @@ export class ApiUserStack extends cdk.Stack {
       removalPolicy,
     });
 
-    // --- Alarms & rollback ------------------------------------------------------
-    this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
-      topicName: name('notifications'),
-      displayName: `${config.apiName} alarms`,
-      enforceSSL: true,
-    });
-    if (config.alarms.email) {
-      this.alarmTopic.addSubscription(new snsSubs.EmailSubscription(config.alarms.email));
-    }
+    // --- Alarms ------------------------------------------------------------------
+    // They publish to the rollback service's topic (rollback-service, deployed first), whose one
+    // Lambda routes rollback-factory-demo-apigateway-* alarms to its API Gateway manager.
+    const rollbackTopic = sns.Topic.fromTopicArn(this, 'RollbackTopic',
+      this.formatArn({ service: 'sns', resource: config.rollbackTopicName }));
 
     const apiMetric = (metricName: string) => new cloudwatch.Metric({
       namespace: 'AWS/ApiGateway',
@@ -301,17 +294,17 @@ export class ApiUserStack extends cdk.Stack {
       ...c,
       alarmName: config.alarmNames[c.key],
       description: `More than ${c.threshold}% ${c.kind} responses (min ${c.minRequests} requests/min) on `
-        + `${config.apiName}/${config.stageName}. Triggers the rollback Lambda via SNS.`,
+        + `${config.apiName}/${config.stageName}. Triggers the rollback service via SNS.`,
       errors: apiMetric(c.metricName),
       requests: apiMetric('Count'),
     }));
-    for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
+    for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
     // Paired Lambda alarms: the same rates, counting only the errors of requests that reached
     // the backend Lambda (the access log has a lambdaRequestId) - errors it returned, threw or
     // timed out on. Errors API Gateway produced on its own (authorizer, validator, unknown route,
     // throttling, invoke permissions) are left out. While the paired Lambda alarm is in ALARM the
-    // rollback Lambda skips the API rollback: the API always invokes the latest Lambda, so
+    // rollback service skips the API rollback: the API always invokes the latest Lambda, so
     // re-importing an old spec would not fix the code.
     const lambdaAlarms = errorClasses.map((c) => {
       const metricName = `Lambda${c.metricName}`;
@@ -342,14 +335,14 @@ export class ApiUserStack extends cdk.Stack {
         requests: apiMetric('Count'),
       });
     });
-    for (const alarm of lambdaAlarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
+    for (const alarm of lambdaAlarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
     // Informational: unhandled errors thrown by the backend Lambda (all versions).
     // Comparing it with the 5xx alarm tells code failures apart from API Gateway
-    // failures. It notifies the topic (e.g. e-mail) but never triggers a rollback:
-    // the rollback Lambda's subscription only accepts config.alarmNames.
+    // failures. It notifies the topic (e.g. e-mail) but never triggers a rollback: the rollback
+    // service's API Gateway manager only acts on config.alarmNames.
     const lambdaErrorsAlarm = new cloudwatch.Alarm(this, 'AlarmLambdaErrors', {
-      alarmName: name('lambda-errors'),
+      alarmName: config.lambdaErrorsAlarmName,
       alarmDescription:
         `${handler.functionName} threw unhandled errors (Lambda Errors > 0 in 2 of 3 minutes). `
         + 'Informational - does not trigger a rollback.',
@@ -361,91 +354,7 @@ export class ApiUserStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       actionsEnabled: config.alarms.notificationsEnabled,
     });
-    lambdaErrorsAlarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
-
-    // enforceSSL gives the topic its own resource policy, which replaces the default
-    // one that let the account publish - so CloudWatch must be allowed explicitly
-    // (only for this API's alarms in this account, to avoid confused-deputy access).
-    this.alarmTopic.addToResourcePolicy(new iam.PolicyStatement({
-      sid: 'AllowCloudWatchAlarms',
-      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
-      actions: ['sns:Publish'],
-      resources: [this.alarmTopic.topicArn],
-      conditions: {
-        StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
-        ArnLike: { 'aws:SourceArn': [...alarms, ...lambdaAlarms, lambdaErrorsAlarm].map((a) => a.alarmArn) },
-      },
-    }));
-
-    this.rollbackFunction = new NodejsFunction(this, 'RollbackFunction', {
-      functionName: name('rollback'),
-      description: `Rolls ${config.apiName}/${config.stageName} back to the previous deployment's spec on alarm`,
-      entry: path.join(__dirname, '..', 'lambda', 'rollback', 'handler.ts'),
-      runtime: lambda.Runtime.NODEJS_24_X,
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 512,
-      timeout: cdk.Duration.minutes(2),
-      retryAttempts: 0,
-      environment: {
-        API_NAME: config.apiName,
-        REST_API_ID: this.api.restApiId,
-        STAGE_NAME: config.stageName,
-        SPEC_BUCKET: this.specBucket.bucketName,
-        DEPLOYMENTS_TABLE: this.deploymentsTable.tableName,
-        ROLLBACK_WINDOW_MINUTES: String(config.rollbackWindowMinutes),
-        ALARM_NAMES: Object.values(config.alarmNames).join(','),
-        // API alarm -> its paired Lambda alarm and the metrics lambdaFault compares (plan.ts)
-        ALARM_PAIRS: JSON.stringify(errorClasses.map((c) => ({
-          apiAlarm: config.alarmNames[c.key],
-          lambdaAlarm: config.lambdaAlarmNames[c.key],
-          apiMetric: c.metricName,
-          lambdaMetric: `Lambda${c.metricName}`,
-        }))),
-        METRICS_NAMESPACE: config.metricsNamespace,
-        EVALUATION_MINUTES: String(config.alarms.evaluationPeriods),
-        HANDLER_FUNCTION_ARN: handler.functionArn,
-      },
-      logGroup: new logs.LogGroup(this, 'RollbackLogs', {
-        retention: logs.RetentionDays.ONE_MONTH,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-      bundling: { minify: true, sourceMap: true },
-    });
-    // Only this API's alarms trigger a rollback, even if something else publishes to the topic.
-    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction, {
-      filterPolicyWithMessageBody: {
-        AlarmName: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.stringFilter({
-          allowlist: Object.values(config.alarmNames),
-        })),
-      },
-    }));
-
-    this.specBucket.grantReadWrite(this.rollbackFunction);
-    this.deploymentsTable.grantReadWriteData(this.rollbackFunction);
-    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // GetStage/GetExport, PutRestApi, CreateDeployment on this API only
-      actions: ['apigateway:GET', 'apigateway:PUT', 'apigateway:POST'],
-      resources: [
-        `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::/restapis/${this.api.restApiId}`,
-        `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::/restapis/${this.api.restApiId}/*`,
-      ],
-    }));
-    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // AddPermission: make sure API Gateway may invoke other functions a restored spec points to
-      // GetAlias: record the version the live alias serves (lambdaVersion)
-      actions: ['lambda:AddPermission', 'lambda:GetAlias'],
-      resources: [handler.functionArn, `${handler.functionArn}:*`],
-    }));
-    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // is the paired Lambda alarm in ALARM?
-      actions: ['cloudwatch:DescribeAlarms'],
-      resources: lambdaAlarms.map((alarm) => alarm.alarmArn),
-    }));
-    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // did the Lambda cause the errors? GetMetricData has no resource-level permissions
-      actions: ['cloudwatch:GetMetricData'],
-      resources: ['*'],
-    }));
+    lambdaErrorsAlarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
     // --- Outputs --------------------------------------------------------------
     const out = (name: string, value: string) =>
@@ -459,14 +368,33 @@ export class ApiUserStack extends cdk.Stack {
     out('UserPoolClientId', this.userPoolClient.userPoolClientId);
     out('SpecBucketName', this.specBucket.bucketName);
     out('DeploymentsTableName', this.deploymentsTable.tableName);
-    out('AlarmTopicArn', this.alarmTopic.topicArn);
     out('Alarm4xxName', alarms[0].alarmName);
     out('Alarm5xxName', alarms[1].alarmName);
-    out('RollbackFunctionName', this.rollbackFunction.functionName);
     out('LambdaErrorsAlarmName', lambdaErrorsAlarm.alarmName);
     out('LambdaAlarm4xxName', lambdaAlarms[0].alarmName);
     out('LambdaAlarm5xxName', lambdaAlarms[1].alarmName);
     out('AccessLogGroupName', this.accessLogGroup.logGroupName);
+    // What the rollback service's API Gateway manager needs, as one JSON output it reads at runtime
+    // (rollback-service/lambda/managers/apigateway/manager.ts: ApiRollbackTarget).
+    out('RollbackTarget', cdk.Stack.of(this).toJsonString({
+      apiName: config.apiName,
+      restApiId: this.api.restApiId,
+      stageName: config.stageName,
+      specBucket: this.specBucket.bucketName,
+      table: this.deploymentsTable.tableName,
+      handlerFunctionArn: handler.functionArn,
+      alarmNames: Object.values(config.alarmNames),
+      // API alarm -> its paired Lambda alarm and the metrics the manager compares
+      alarmPairs: errorClasses.map((c) => ({
+        apiAlarm: config.alarmNames[c.key],
+        lambdaAlarm: config.lambdaAlarmNames[c.key],
+        apiMetric: c.metricName,
+        lambdaMetric: `Lambda${c.metricName}`,
+      })),
+      metricsNamespace: config.metricsNamespace,
+      rollbackWindowMinutes: config.rollbackWindowMinutes,
+      evaluationMinutes: config.alarms.evaluationPeriods,
+    }));
   }
 
   /**

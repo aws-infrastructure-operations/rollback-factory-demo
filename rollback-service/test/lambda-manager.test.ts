@@ -11,11 +11,11 @@ import {
   UpdateFunctionCodeCommand,
 } from '@aws-sdk/client-lambda';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { resolveRegistry } from '../lambda/rollback/registry.js';
-import { createRollbackSystem } from '../lambda/rollback/rollback.js';
+import { resolveRegistry } from '../lambda/managers/lambda/registry.js';
+import { createRollbackSystem } from '../lambda/managers/lambda/rollback.js';
 
 const FN = 'service-lambda-dev';
-const ALARM = 'rollback-factory-demo-service-lambda-errors-dev';
+const ALARM = 'rollback-factory-demo-lambda-service-lambda-errors-dev';
 const TABLE = 'versions';
 const BUCKET = 'artifacts';
 const NOW = Date.parse('2026-10-06T12:00:00.000Z');

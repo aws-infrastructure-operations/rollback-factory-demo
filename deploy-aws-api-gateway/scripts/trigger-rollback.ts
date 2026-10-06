@@ -1,7 +1,7 @@
 /**
- * Invokes the rollback Lambda with a CloudWatch-style ALARM notification, exactly
+ * Invokes the rollback service with a CloudWatch-style ALARM notification, exactly
  * as SNS would. Used by CI when integration tests fail right after a deploy, and
- * to exercise rollbacks by hand. The Lambda's normal checks still apply (rollback
+ * to exercise rollbacks by hand. The API Gateway manager's checks still apply (rollback
  * window, previous deployment exists, latest is not already a rollback).
  *
  * Usage: npx tsx scripts/trigger-rollback.ts --env dev [--alarm 4xx|5xx] [--reason "..."]
@@ -24,12 +24,12 @@ run(async () => {
       },
     }],
   };
-  log(`Invoking ${outputs.RollbackFunctionName} as ${alarmName}: ${reason}`);
+  log(`Invoking ${config.rollbackServiceFunctionName} as ${alarmName}: ${reason}`);
   const res = await new LambdaClient({}).send(new InvokeCommand({
-    FunctionName: outputs.RollbackFunctionName,
+    FunctionName: config.rollbackServiceFunctionName,
     Payload: new TextEncoder().encode(JSON.stringify(event)),
   }));
   const payload = res.Payload ? new TextDecoder().decode(res.Payload) : '';
-  if (res.FunctionError) throw new Error(`Rollback Lambda failed: ${payload}`);
+  if (res.FunctionError) throw new Error(`Rollback service failed: ${payload}`);
   process.stdout.write(`${payload}\n`);
 });

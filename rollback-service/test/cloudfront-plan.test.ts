@@ -1,12 +1,9 @@
+// CloudFront manager: deciding what to roll back to.
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import type { SNSEvent } from 'aws-lambda';
-import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
-import { DeploymentRecord } from '../lambda/shared/deployments.js';
-import { ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
-import { getConfig } from '../lib/config.js';
-import { FrontendAlarmsStack } from '../lib/frontend-alarms-stack.js';
+import type { DeploymentRecord } from '../lambda/managers/cloudfront/deployments.js';
+import { ownAlarms, parseAlarms, planRollback } from '../lambda/managers/cloudfront/plan.js';
 
 const NOW = new Date('2026-10-06T13:00:00.000Z');
 const WINDOW = 30;
@@ -79,59 +76,10 @@ const snsEvent = (...messages: object[]) => ({
 
 test('only reacts to ALARM transitions of its own alarms', () => {
   const alarms = parseAlarms(snsEvent(
-    { AlarmName: 'rollback-factory-demo-frontend-4xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'r' },
-    { AlarmName: 'rollback-factory-demo-frontend-5xx-rate-dev', NewStateValue: 'OK', NewStateReason: 'r' },
-    { AlarmName: 'rollback-factory-demo-4xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'the API' },
+    { AlarmName: 'rollback-factory-demo-cloudfront-frontend-user-4xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'r' },
+    { AlarmName: 'rollback-factory-demo-cloudfront-frontend-user-5xx-rate-dev', NewStateValue: 'OK', NewStateReason: 'r' },
+    { AlarmName: 'rollback-factory-demo-apigateway-api-user-4xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'the API' },
   ));
-  const own = ownAlarms(alarms, ['rollback-factory-demo-frontend-4xx-rate-dev', 'rollback-factory-demo-frontend-5xx-rate-dev']);
-  assert.deepEqual(own.map((a) => a.alarmName), ['rollback-factory-demo-frontend-4xx-rate-dev']);
-});
-
-// --- Infrastructure -------------------------------------------------------------
-
-const template = (() => {
-  const app = new cdk.App();
-  return Template.fromStack(new FrontendAlarmsStack(app, 'Test', {
-    config: getConfig('dev', { rollbackWindowMinutes: 15 }),
-    distributionId: 'E2EXAMPLE',
-    mainRegion: 'eu-central-1',
-    env: { account: '123456789012', region: 'us-east-1' },
-  }));
-})();
-
-test('runs the rollback Lambda with the distribution, table and window it needs', () => {
-  template.hasResourceProperties('AWS::Lambda::Function', {
-    FunctionName: 'rollback-factory-demo-frontend-rollback-dev',
-    Runtime: 'nodejs24.x',
-    Timeout: 30,
-    Environment: {
-      Variables: Match.objectLike({
-        FRONTEND_NAME: 'frontend-user-dev',
-        DISTRIBUTION_ID: 'E2EXAMPLE',
-        DEPLOYMENTS_TABLE: 'rollback-factory-demo-frontend-deployments-dev',
-        DEPLOYMENTS_TABLE_REGION: 'eu-central-1',
-        ROLLBACK_WINDOW_MINUTES: '15',
-        ALARM_NAMES: 'rollback-factory-demo-frontend-4xx-rate-dev,rollback-factory-demo-frontend-5xx-rate-dev',
-      }),
-    },
-  });
-  template.hasResource('AWS::Lambda::EventInvokeConfig', { Properties: Match.objectLike({ MaximumRetryAttempts: 0 }) });
-});
-
-test('subscribes the Lambda to its own two alarms only', () => {
-  template.hasResourceProperties('AWS::SNS::Subscription', {
-    Protocol: 'lambda',
-    FilterPolicyScope: 'MessageBody',
-    FilterPolicy: { AlarmName: ['rollback-factory-demo-frontend-4xx-rate-dev', 'rollback-factory-demo-frontend-5xx-rate-dev'] },
-  });
-});
-
-test('may only switch this distribution and write the table in the main region', () => {
-  const [policy] = Object.values(template.findResources('AWS::IAM::Policy')) as any[];
-  const statements: any[] = policy.Properties.PolicyDocument.Statement;
-  const cloudfront = statements.find((s) => [s.Action].flat().includes('cloudfront:UpdateDistribution'));
-  assert.deepEqual([cloudfront.Action].flat().sort(), ['cloudfront:CreateInvalidation', 'cloudfront:GetDistributionConfig', 'cloudfront:UpdateDistribution']);
-  assert.match(JSON.stringify(cloudfront.Resource), /:cloudfront::123456789012:distribution\/E2EXAMPLE/);
-  const dynamo = statements.find((s) => [s.Action].flat().includes('dynamodb:PutItem'));
-  assert.match(JSON.stringify(dynamo.Resource), /:dynamodb:eu-central-1:123456789012:table\/rollback-factory-demo-frontend-deployments-dev/);
+  const own = ownAlarms(alarms, ['rollback-factory-demo-cloudfront-frontend-user-4xx-rate-dev', 'rollback-factory-demo-cloudfront-frontend-user-5xx-rate-dev']);
+  assert.deepEqual(own.map((a) => a.alarmName), ['rollback-factory-demo-cloudfront-frontend-user-4xx-rate-dev']);
 });

@@ -155,6 +155,15 @@ test('exports the outputs later scripts read', () => {
   }
 });
 
+test('publishes the RollbackTarget the rollback service reads, for the live distribution only', () => {
+  const target = JSON.stringify(synth('dev').findOutputs('RollbackTarget').RollbackTarget.Value);
+  assert.ok(target.includes('rollback-factory-demo-cloudfront-frontend-user-4xx-rate-dev'));
+  assert.ok(target.includes('frontend-user-dev'));
+  assert.ok(target.includes('rollbackWindowMinutes\\":30'));
+  assert.match(target, /"Ref":"Distribution[0-9A-F]{8}"/);
+  assert.doesNotMatch(target, /IntegrationDistribution/);
+});
+
 test('never exports a name the api-user stack in the same region could use', () => {
   // the API exports rollback-factory-demo-<Output>-<env>; export names are unique per region
   for (const [name, output] of Object.entries(synth('dev').findOutputs('*'))) {

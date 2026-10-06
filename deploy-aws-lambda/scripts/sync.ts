@@ -1,5 +1,5 @@
 /**
- * Invokes the rollback function's sync for this environment's function: archives every new
+ * Invokes the rollback service's sync (its Lambda manager) for this environment's function: archives every new
  * version (S3 + DynamoDB) and records a `live` move made outside the rollback system (a promotion)
  * as a deploy. Fails if the sync failed.
  *
@@ -11,7 +11,7 @@ import { log, parseCli, run } from './lib/cli.js';
 run(async () => {
   const { config } = parseCli();
   const results = await invokeJson<Array<{ synced?: boolean }>>(
-    config.rollbackFunctionName, { type: 'sync', functionName: config.functionName },
+    config.rollbackServiceFunctionName, { type: 'sync', functionName: config.functionName },
   );
   process.stdout.write(`${JSON.stringify(results)}\n`);
   if (!Array.isArray(results) || results.some((r) => r.synced !== true)) {

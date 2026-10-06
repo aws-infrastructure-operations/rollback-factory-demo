@@ -2,29 +2,34 @@ import { strict as assert } from 'node:assert';
 import { describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import type { SNSEvent } from 'aws-lambda';
 import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
-import type { DeploymentRecord } from '../lambda/shared/deployments.js';
-import {
-  AlarmPair, isRestoreRequest, lambdaArnsFromSpec, lambdaFault, ownAlarms, parseAlarms, planRollback, pointToAlias,
-} from '../lambda/rollback/plan.js';
+
+// The rollback itself is done by the rollback service (rollback-service/): its API Gateway
+// manager's tests live there. This stack only names the alarms, points them at the service's
+// topic and publishes the RollbackTarget the manager reads.
 
 const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
   return Template.fromStack(new ApiUserStack(app, `Test-${env}`, { config: getConfig(env, overrides) }));
 };
 
+/** Alarm actions point at the rollback service's topic, rollback-factory-demo-rollback-notifications-<env>. */
+const publishesToRollbackService = (alarm: any, env = 'dev') =>
+  JSON.stringify(alarm.Properties.AlarmActions).includes(`:rollback-factory-demo-rollback-notifications-${env}`);
+
+const alarmsByName = (t: Template) => Object.fromEntries(Object.values(t.findResources('AWS::CloudWatch::Alarm'))
+  .map((a: any) => [a.Properties.AlarmName, a]));
+
 describe('stack', () => {
   const t = synth('dev');
 
-  test('creates a 4xx and a 5xx rate alarm wired to the SNS topic', () => {
+  test('names the rollback alarms rollback-factory-demo-apigateway-api-user-<metric>-<env>', () => {
     for (const [kind, threshold, min] of [['4xx', 25, 20], ['5xx', 5, 5]] as const) {
       t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: `rollback-factory-demo-api-user-${kind}-rate-dev`,
+        AlarmName: `rollback-factory-demo-apigateway-api-user-${kind}-rate-dev`,
         Threshold: threshold,
         ActionsEnabled: true,
-        AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
         Metrics: Match.arrayWith([
           Match.objectLike({ Expression: `IF(requests >= ${min}, 100 * errors / requests, 0)` }),
         ]),
@@ -32,21 +37,20 @@ describe('stack', () => {
     }
   });
 
-  test('lets CloudWatch publish the API alarms to the SSL-only topic', () => {
-    const policies = Object.values(t.findResources('AWS::SNS::TopicPolicy')) as any[];
-    assert.equal(policies.length, 1);
-    const statements = policies[0].Properties.PolicyDocument.Statement as any[];
-    const allow = statements.find((s) => s.Sid === 'AllowCloudWatchAlarms');
-    assert.ok(allow, 'missing AllowCloudWatchAlarms statement');
-    assert.equal(allow.Effect, 'Allow');
-    assert.deepEqual(allow.Principal, { Service: 'cloudwatch.amazonaws.com' });
-    assert.equal(allow.Action, 'sns:Publish');
-    assert.deepEqual(allow.Condition.StringEquals, { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } });
-    const alarmIds = Object.keys(t.findResources('AWS::CloudWatch::Alarm')).sort();
-    const sourceArns = (allow.Condition.ArnLike['aws:SourceArn'] as any[]).map((a) => a['Fn::GetAtt'][0]).sort();
-    assert.deepEqual(sourceArns, alarmIds);
-    // the SSL-only deny is still there
-    assert.ok(statements.some((s) => s.Effect === 'Deny' && s.Condition?.Bool?.['aws:SecureTransport'] === 'false'));
+  test('every alarm publishes to the rollback service topic; the stack has no topic or rollback Lambda of its own', () => {
+    const alarms = alarmsByName(t);
+    assert.deepEqual(Object.keys(alarms).sort(), [
+      'rollback-factory-demo-apigateway-api-user-4xx-rate-dev',
+      'rollback-factory-demo-apigateway-api-user-5xx-rate-dev',
+      'rollback-factory-demo-apigateway-api-user-handler-4xx-rate-dev',
+      'rollback-factory-demo-apigateway-api-user-handler-5xx-rate-dev',
+      'rollback-factory-demo-apigateway-api-user-handler-errors-dev',
+    ]);
+    for (const [name, alarm] of Object.entries(alarms)) assert.ok(publishesToRollbackService(alarm), name);
+    t.resourceCountIs('AWS::SNS::Topic', 0);
+    t.resourceCountIs('AWS::SNS::Subscription', 0);
+    const functions = Object.values(t.findResources('AWS::Lambda::Function')).map((f: any) => f.Properties.FunctionName);
+    assert.ok(!functions.includes('rollback-factory-demo-rollback-dev'));
   });
 
   test('alarm notifications can be switched off', () => {
@@ -54,35 +58,18 @@ describe('stack', () => {
       .allResourcesProperties('AWS::CloudWatch::Alarm', { ActionsEnabled: false });
   });
 
-  test('subscribes the rollback Lambda (and optional e-mail) to the topic', () => {
-    for (const env of ['dev', 'prod']) {
-      synth(env).hasResourceProperties('AWS::SNS::Topic', { TopicName: `rollback-factory-demo-notifications-${env}` });
-    }
-    t.hasResourceProperties('AWS::SNS::Subscription', {
-      Protocol: 'lambda',
-      FilterPolicyScope: 'MessageBody',
-      FilterPolicy: { AlarmName: ['rollback-factory-demo-api-user-4xx-rate-dev', 'rollback-factory-demo-api-user-5xx-rate-dev'] },
-    });
-    t.resourcePropertiesCountIs('AWS::SNS::Subscription', { Protocol: 'email' }, 0);
-    synth('dev', { alarmEmail: 'ops@example.com' })
-      .hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email', Endpoint: 'ops@example.com' });
-  });
-
-  test('configures the rollback Lambda', () => {
-    t.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'rollback-factory-demo-rollback-dev',
-      Environment: {
-        Variables: Match.objectLike({
-          STAGE_NAME: 'v1',
-          ROLLBACK_WINDOW_MINUTES: '30',
-          ALARM_NAMES: 'rollback-factory-demo-api-user-4xx-rate-dev,rollback-factory-demo-api-user-5xx-rate-dev',
-        }),
-      },
-    });
-    synth('dev', { rollbackWindowMinutes: '10' }).hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'rollback-factory-demo-rollback-dev',
-      Environment: { Variables: Match.objectLike({ ROLLBACK_WINDOW_MINUTES: '10' }) },
-    });
+  test('publishes the RollbackTarget the rollback service reads', () => {
+    const output = JSON.stringify(t.findOutputs('RollbackTarget').RollbackTarget.Value);
+    for (const expected of [
+      'rollback-factory-demo-apigateway-api-user-4xx-rate-dev',
+      'rollback-factory-demo-apigateway-api-user-handler-5xx-rate-dev',
+      'Lambda4XXError',
+      'rollback-factory-demo/api-user-dev',
+      '\\"rollbackWindowMinutes\\":30',
+      '\\"stageName\\":\\"v1\\"',
+    ]) assert.ok(output.includes(expected), `RollbackTarget lacks ${expected}`);
+    assert.match(output, /ApiUserApi|Api[A-F0-9]{8}/, 'restApiId is a reference to the API');
+    assert.ok(JSON.stringify(synth('dev', { rollbackWindowMinutes: '10' }).findOutputs('RollbackTarget')).includes('\\"rollbackWindowMinutes\\":10'));
   });
 
   const aliases = (template: Template): Record<string, any> => Object.fromEntries(
@@ -140,33 +127,13 @@ describe('stack', () => {
         }],
       });
       t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: `rollback-factory-demo-lambda-${kind}-rate-dev`,
+        AlarmName: `rollback-factory-demo-apigateway-api-user-handler-${kind}-rate-dev`,
         Threshold: threshold,
-        AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
         Metrics: Match.arrayWith([
           Match.objectLike({ Expression: `IF(requests >= ${min}, 100 * errors / requests, 0)` }),
         ]),
       });
     }
-    const [fn] = Object.values(t.findResources('AWS::Lambda::Function', {
-      Properties: { FunctionName: 'rollback-factory-demo-rollback-dev' },
-    })) as any[];
-    const vars = fn.Properties.Environment.Variables;
-    assert.deepEqual(JSON.parse(vars.ALARM_PAIRS), [
-      {
-        apiAlarm: 'rollback-factory-demo-api-user-4xx-rate-dev',
-        lambdaAlarm: 'rollback-factory-demo-lambda-4xx-rate-dev',
-        apiMetric: '4XXError',
-        lambdaMetric: 'Lambda4XXError',
-      },
-      {
-        apiAlarm: 'rollback-factory-demo-api-user-5xx-rate-dev',
-        lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
-        apiMetric: '5XXError',
-        lambdaMetric: 'Lambda5XXError',
-      },
-    ]);
-    assert.ok(vars.HANDLER_FUNCTION_ARN, 'rollback Lambda needs the handler to point restored specs at its stage alias');
   });
 
   test('chaosFailureRate reaches the API handler', () => {
@@ -176,141 +143,4 @@ describe('stack', () => {
     });
     assert.throws(() => getConfig('dev', { chaosFailureRate: '2' }), /between 0 and 1/);
   });
-});
-
-describe('planRollback', () => {
-  const now = new Date('2026-10-06T12:30:00.000Z');
-  const rec = (deployedAt: string, deploymentId: string, extra: Partial<DeploymentRecord> = {}) =>
-    ({ apiName: 'api-user-dev', deployedAt, deploymentId, source: 'cicd', ...extra }) as DeploymentRecord;
-
-  const good = rec('2026-10-06T11:00:00.000Z', 'good', { verifiedAt: '2026-10-06T11:02:00.000Z' });
-  const bad = rec('2026-10-06T12:20:00.000Z', 'bad');
-
-  test('rolls the recent deployment back to the previous verified one', () => {
-    assert.deepEqual(planRollback([bad, good], now, 30), { action: 'rollback', from: bad, to: good });
-  });
-
-  test('skips deployments older than the window', () => {
-    const plan = planRollback([bad, good], now, 5);
-    assert.equal(plan.action, 'skip');
-    assert.match((plan as any).reason, /10 min old \(window: 5 min\)/);
-  });
-
-  test('never rolls back a rollback or an already rolled back deployment', () => {
-    const rollback = rec('2026-10-06T12:25:00.000Z', 'r1', { source: 'rollback' });
-    assert.equal(planRollback([rollback, bad, good], now, 30).action, 'skip');
-    const restore = rec('2026-10-06T12:25:00.000Z', 'r2', { source: 'restore' });
-    assert.equal(planRollback([restore, bad, good], now, 30).action, 'skip');
-    assert.equal(planRollback([{ ...bad, rolledBackAt: now.toISOString() }, good], now, 30).action, 'skip');
-  });
-
-  test('skips the same deployment id recorded twice and needs a target', () => {
-    const dupe = rec('2026-10-06T12:10:00.000Z', 'bad');
-    assert.deepEqual(planRollback([bad, dupe, good], now, 30), { action: 'rollback', from: bad, to: good });
-    assert.equal(planRollback([bad], now, 30).action, 'skip');
-    assert.equal(planRollback([], now, 30).action, 'skip');
-  });
-
-  // What broke dev on 2026-10-06: a broken demo deploy was never rolled back (the alarm
-  // couldn't publish), so the next failed deploy was "rolled back" onto it.
-  test('never restores an unverified deployment, even if it is the previous one', () => {
-    const untestedBroken = rec('2026-10-06T12:00:00.000Z', 'broken');
-    const plan = planRollback([bad, untestedBroken, good], now, 30);
-    assert.deepEqual(plan, { action: 'rollback', from: bad, to: good });
-    assert.deepEqual(planRollback([bad, untestedBroken], now, 30), {
-      action: 'skip', reason: 'no earlier verified deployment to roll back to',
-    });
-  });
-
-  test('never restores a verified deployment that was rolled back later', () => {
-    const verifiedButRolledBack = rec('2026-10-06T12:00:00.000Z', 'flaky', {
-      verifiedAt: '2026-10-06T12:01:00.000Z', rolledBackAt: '2026-10-06T12:10:00.000Z',
-    });
-    assert.deepEqual(planRollback([bad, verifiedButRolledBack, good], now, 30), { action: 'rollback', from: bad, to: good });
-  });
-});
-
-test('recognises manual restore requests', () => {
-  assert.ok(isRestoreRequest({ restore: { deployedAt: '2026-10-06T11:38:01.784Z' } }));
-  assert.ok(!isRestoreRequest({ Records: [] }));
-  assert.ok(!isRestoreRequest({ restore: {} }));
-});
-
-test('parses CloudWatch alarm notifications from SNS', () => {
-  const event = {
-    Records: [{ Sns: { Message: JSON.stringify({
-      AlarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'Threshold Crossed',
-    }) } }],
-  } as unknown as SNSEvent;
-  assert.deepEqual(parseAlarms(event), [
-    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', newState: 'ALARM', reason: 'Threshold Crossed' },
-  ]);
-});
-
-test('finds the versioned Lambda ARNs in an exported spec', () => {
-  const fn = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev:7';
-  const integration = {
-    type: 'aws_proxy',
-    uri: `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${fn}/invocations`,
-  };
-  const spec = {
-    paths: {
-      '/users': { get: { 'x-amazon-apigateway-integration': integration }, post: { 'x-amazon-apigateway-integration': integration } },
-      '/health': { get: { 'x-amazon-apigateway-integration': { type: 'mock' } } },
-    },
-  };
-  assert.deepEqual(lambdaArnsFromSpec(spec), [fn]);
-});
-
-test('only acts on ALARM transitions of its own API', () => {
-  const alarms = [
-    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-dev', newState: 'ALARM', reason: '' },
-    { alarmName: 'rollback-factory-demo-api-user-5xx-rate-prod', newState: 'ALARM', reason: '' },
-    { alarmName: 'rollback-factory-demo-api-user-4xx-rate-dev', newState: 'OK', reason: '' },
-  ];
-  const dev = Object.values(getConfig('dev').alarmNames);
-  const prod = Object.values(getConfig('prod').alarmNames);
-  assert.deepEqual(ownAlarms(alarms, dev).map((a) => a.alarmName), ['rollback-factory-demo-api-user-5xx-rate-dev']);
-  assert.deepEqual(ownAlarms(alarms, prod).map((a) => a.alarmName), ['rollback-factory-demo-api-user-5xx-rate-prod']);
-});
-
-describe('lambdaFault', () => {
-  const pair: AlarmPair = {
-    apiAlarm: 'rollback-factory-demo-api-user-5xx-rate-dev',
-    lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
-    apiMetric: '5XXError',
-    lambdaMetric: 'Lambda5XXError',
-  };
-
-  test('blames the Lambda while its paired alarm is in ALARM', () => {
-    assert.match(lambdaFault(pair, { lambdaAlarmState: 'ALARM', apiErrors: 10, lambdaErrors: 0 })!, /lambda-5xx-rate-dev is in ALARM/);
-  });
-
-  test('blames the Lambda when it produced at least half of the errors, even before its alarm fires', () => {
-    assert.match(lambdaFault(pair, { lambdaAlarmState: 'OK', apiErrors: 10, lambdaErrors: 5 })!, /5 of the 10 5XXError/);
-  });
-
-  test('lets the API roll back when API Gateway produced most errors', () => {
-    assert.equal(lambdaFault(pair, { lambdaAlarmState: 'OK', apiErrors: 10, lambdaErrors: 4 }), undefined);
-    assert.equal(lambdaFault(pair, { lambdaAlarmState: 'INSUFFICIENT_DATA', apiErrors: 0, lambdaErrors: 0 }), undefined);
-  });
-});
-
-test('points restored specs at the live alias, whatever version they were recorded with', () => {
-  const fn = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev';
-  const other = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev-other:3';
-  const uri = (arn: string) => `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${arn}/invocations`;
-  const op = (arn: string) => ({ 'x-amazon-apigateway-integration': { type: 'aws_proxy', uri: uri(arn) } });
-  const spec = {
-    paths: {
-      '/users': { get: op(`${fn}:7`), post: op(`${fn}:live`) },
-      '/messages': { get: op(fn), post: op(other) },
-      '/health': { get: { 'x-amazon-apigateway-integration': { type: 'mock' } } },
-    },
-  };
-  const result = pointToAlias(spec, fn, `${fn}:live`);
-  assert.deepEqual(lambdaArnsFromSpec(result).sort(), [`${fn}:live`, other].sort());
-  assert.equal(result.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${fn}:live`));
-  // the input is not modified
-  assert.equal(spec.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${fn}:7`));
 });

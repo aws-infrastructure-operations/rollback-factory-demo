@@ -1,5 +1,5 @@
 import { CloudFormationClient, DescribeStacksCommand } from '@aws-sdk/client-cloudformation';
-import { ALARMS_REGION, EnvConfig } from '../../lib/config.js';
+import { EnvConfig } from '../../lib/config.js';
 import { createDeploymentStore } from '../../lambda/shared/deployments.js';
 
 /** Outputs of rollback-factory-demo-frontend-<env>. */
@@ -14,16 +14,7 @@ export interface FrontendOutputs {
   DeploymentsTableName: string;
 }
 
-/** Outputs of rollback-factory-demo-frontend-alarms-<env> (us-east-1). */
-export interface AlarmsOutputs {
-  AlarmTopicArn: string;
-  Alarm4xxName: string;
-  Alarm5xxName: string;
-  RollbackFunctionName: string;
-}
-
 const cfn = new CloudFormationClient({});
-const cfnAlarmsRegion = new CloudFormationClient({ region: ALARMS_REGION });
 
 /** Returns the deployed stack's outputs, or undefined if the stack doesn't exist yet. */
 async function getOutputs(stackName: string, client = cfn): Promise<Record<string, string> | undefined> {
@@ -60,14 +51,6 @@ export const requireFrontendOutputs = (config: EnvConfig) =>
       'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName',
     ],
     `Deploy it first: npx cdk deploy --all -c env=${config.envName}`,
-  );
-
-export const requireAlarmsOutputs = (config: EnvConfig) =>
-  requireOutputs<AlarmsOutputs>(
-    config.alarmsStackName,
-    ['AlarmTopicArn', 'Alarm4xxName', 'Alarm5xxName', 'RollbackFunctionName'],
-    `Deploy it first: npx cdk deploy --all -c env=${config.envName}`,
-    cfnAlarmsRegion,
   );
 
 

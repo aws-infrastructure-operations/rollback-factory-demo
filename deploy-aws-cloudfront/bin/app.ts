@@ -7,7 +7,6 @@ const app = new cdk.App();
 const ctx = (key: string) => app.node.tryGetContext(key);
 const config = getConfig(ctx('env') ?? process.env.FRONTEND_ENV ?? 'dev', {
   alarmNotifications: ctx('alarmNotifications'),
-  alarmEmail: ctx('alarmEmail'),
   rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
   liveReleaseId: ctx('liveReleaseId'),
   integrationReleaseId: ctx('integrationReleaseId'),
