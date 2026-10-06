@@ -4,6 +4,7 @@ name: cleanup
 #   api       deploy-aws-api-gateway-<env>
 #   frontend  deploy-aws-cloudfront-<env> + deploy-aws-cloudfront-alarms-<env> (us-east-1)
 #   lambda    deploy-aws-lambda-<env>
+#   rollback-service  rollback-service-<env> + rollback-service-us-east-1-<env>
 # Type "destroy <env>" to confirm. Each project's job takes that project's deploy lock, so it never
 # runs while a deploy or rollback of that environment does, and runs in the GitHub environment, so
 # required reviewers on it (e.g. prod) gate the cleanup too.
@@ -29,7 +30,7 @@ on:
       projects:
         description: Which projects' stacks to destroy
         type: choice
-        options: [all, api, frontend, lambda]
+        options: [all, api, frontend, lambda, rollback-service]
         default: all
       confirm:
         description: 'Type "destroy <environment>" (e.g. destroy dev) to confirm'
@@ -153,9 +154,39 @@ jobs:
       - name: Destroy deploy-aws-lambda-${{ inputs.environment }}
         run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
 
+  rollback-service:
+    if: inputs.projects == 'all' || inputs.projects == 'rollback-service'
+    needs: confirm
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    # Shared with rollback-service-deploy.yml.
+    concurrency:
+      group: rollback-service-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: rollback-service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rollback-service/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      # --all destroys the main stack first, then the us-east-1 topic stack it depends on.
+      - name: Destroy rollback-service-${{ inputs.environment }} and rollback-service-us-east-1-${{ inputs.environment }}
+        run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
+
   summary:
     if: always() && needs.confirm.result == 'success'
-    needs: [confirm, api, frontend, lambda]
+    needs: [confirm, api, frontend, lambda, rollback-service]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
@@ -170,6 +201,7 @@ jobs:
           API: ${{ needs.api.result }}
           FRONTEND: ${{ needs.frontend.result }}
           LAMBDA: ${{ needs.lambda.result }}
+          ROLLBACK_SERVICE: ${{ needs.rollback-service.result }}
         run: |
           {
             echo "### cleanup of $ENV_NAME"
@@ -178,12 +210,13 @@ jobs:
             echo "| api | $API |"
             echo "| frontend | $FRONTEND |"
             echo "| lambda | $LAMBDA |"
+            echo "| rollback-service | $ROLLBACK_SERVICE |"
             echo
-            echo "deploy-aws-* stacks of $ENV_NAME still in AWS:"
+            echo "deploy-aws-* and rollback-service-* stacks of $ENV_NAME still in AWS:"
             echo '```'
             for region in "$AWS_REGION" us-east-1; do
               aws cloudformation list-stacks --region "$region" --output text \
-                --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && starts_with(StackName, 'deploy-aws-') && ends_with(StackName, '-$ENV_NAME')].[StackName, StackStatus]" \
+                --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && (starts_with(StackName, 'deploy-aws-') || starts_with(StackName, 'rollback-service-')) && ends_with(StackName, '-$ENV_NAME')].[StackName, StackStatus]" \
                 | sed "s/^/$region  /"
             done
             echo '```'

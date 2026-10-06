@@ -1,5 +1,5 @@
 import type { SNSEvent } from 'aws-lambda';
-import type { DeploymentRecord } from '../shared/deployments.js';
+import type { DeploymentRecord } from './deployments.js';
 
 export type RollbackPlan =
   | { action: 'rollback'; from: DeploymentRecord; to: DeploymentRecord }

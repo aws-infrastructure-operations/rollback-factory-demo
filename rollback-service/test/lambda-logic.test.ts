@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { functionFromAlarm, rollbackGuard, stableFor } from '../lambda/rollback/rollback.js';
-import type { Registration } from '../lambda/rollback/registry.js';
-import { sessionPolicy } from '../lambda/rollback/scoped.js';
-import { formatDuration, s3Key, versionSk } from '../lambda/rollback/util.js';
+import { functionFromAlarm, rollbackGuard, stableFor } from '../lambda/managers/lambda/rollback.js';
+import type { Registration } from '../lambda/managers/lambda/registry.js';
+import { sessionPolicy } from '../lambda/managers/lambda/scoped.js';
+import { formatDuration, s3Key, versionSk } from '../lambda/managers/lambda/util.js';
 
 const NOW = Date.parse('2026-10-06T12:00:00.000Z');
 const minutesAgo = (m: number) => new Date(NOW - m * 60_000).toISOString();

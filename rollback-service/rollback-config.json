@@ -7,7 +7,7 @@
       "enabled": true,
       "alias": "live",
       "alarms": [
-        "rollback-factory-demo-service-lambda-errors-<env>"
+        "rollback-factory-demo-lambda-service-lambda-errors-<env>"
       ]
     }
   ]

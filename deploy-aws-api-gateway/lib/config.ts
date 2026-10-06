@@ -3,10 +3,8 @@ export const ENV_NAMES = ['dev', 'testing', 'staging', 'prod'] as const;
 export type EnvName = (typeof ENV_NAMES)[number];
 
 export interface AlarmConfig {
-  /** Alarm actions (SNS -> rollback Lambda) on/off. Alarms still change state either way. */
+  /** Alarm actions (SNS -> rollback service) on/off. Alarms still change state either way. */
   notificationsEnabled: boolean;
-  /** Optional e-mail subscribed to the alarm topic. */
-  email?: string;
   /** Alarm when more than this % of requests in a minute are 4xx ... */
   error4xxRatePercent: number;
   /** ... and the minute had at least this many requests (keeps integration tests from tripping it). */
@@ -25,13 +23,22 @@ export interface EnvConfig {
   stackName: string;
   /** Every other resource: rollback-factory-demo-<resource>-<env>. */
   resourceName: (resource: string) => string;
-  /** The two alarms the rollback Lambda reacts to. */
+  /**
+   * The two alarms that trigger a rollback, named rollback-factory-demo-apigateway-<name>-<env>:
+   * the rollback service picks its API Gateway manager from the "apigateway" type in the name.
+   */
   alarmNames: { error4xx: string; error5xx: string };
   /**
    * Paired with alarmNames: the same rates, counting only errors the backend Lambda
-   * produced. While one is in ALARM the rollback Lambda skips the API rollback.
+   * produced. While one is in ALARM the rollback service skips the API rollback.
    */
   lambdaAlarmNames: { error4xx: string; error5xx: string };
+  /** Notification only: unhandled errors of the handler. */
+  lambdaErrorsAlarmName: string;
+  /** The rollback service's topic in this region (rollback-service), which the alarms publish to. */
+  rollbackTopicName: string;
+  /** The rollback service's Lambda (rollback-service), invoked by the restore and trigger scripts. */
+  rollbackServiceFunctionName: string;
   /** CloudWatch namespace of the metrics derived from the access logs. */
   metricsNamespace: string;
   stageName: string;
@@ -45,16 +52,15 @@ export interface EnvConfig {
   /** Whether stateful resources (user pool, bucket, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
-  /** The rollback Lambda only acts if the latest deployment is younger than this. */
+  /** The rollback service only acts if the latest deployment is younger than this. */
   rollbackWindowMinutes: number;
   /** 0..1 share of API requests the backend fails with a 500 - for demoing rollbacks. */
   chaosFailureRate: number;
 }
 
-/** Optional overrides, e.g. from `cdk deploy -c alarmEmail=... -c chaosFailureRate=1`. */
+/** Optional overrides, e.g. from `cdk deploy -c chaosFailureRate=1`. */
 export interface ConfigOverrides {
   alarmNotifications?: string | boolean;
-  alarmEmail?: string;
   rollbackWindowMinutes?: string | number;
   chaosFailureRate?: string | number;
   liveDeploymentId?: string;
@@ -85,8 +91,17 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     apiName: `${API_NAME}-${envName}`,
     stackName: `${STACK_PREFIX}-${envName}`,
     resourceName,
-    alarmNames: { error4xx: resourceName(`${API_NAME}-4xx-rate`), error5xx: resourceName(`${API_NAME}-5xx-rate`) },
-    lambdaAlarmNames: { error4xx: resourceName('lambda-4xx-rate'), error5xx: resourceName('lambda-5xx-rate') },
+    alarmNames: {
+      error4xx: resourceName(`apigateway-${API_NAME}-4xx-rate`),
+      error5xx: resourceName(`apigateway-${API_NAME}-5xx-rate`),
+    },
+    lambdaAlarmNames: {
+      error4xx: resourceName(`apigateway-${API_NAME}-handler-4xx-rate`),
+      error5xx: resourceName(`apigateway-${API_NAME}-handler-5xx-rate`),
+    },
+    lambdaErrorsAlarmName: resourceName(`apigateway-${API_NAME}-handler-errors`),
+    rollbackTopicName: resourceName('rollback-notifications'),
+    rollbackServiceFunctionName: resourceName('rollback-service'),
     metricsNamespace: `${PROJECT_NAME}/${API_NAME}-${envName}`,
     stageName: STAGE_NAME,
     integrationStageName: INTEGRATION_STAGE_NAME,
@@ -96,7 +111,6 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     retainData: envName === 'prod',
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',
-      email: overrides.alarmEmail || undefined,
       error4xxRatePercent: 25,
       minRequests4xx: 20,
       error5xxRatePercent: 5,

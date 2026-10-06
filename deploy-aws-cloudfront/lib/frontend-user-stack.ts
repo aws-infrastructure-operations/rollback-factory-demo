@@ -124,5 +124,15 @@ export class FrontendUserStack extends cdk.Stack {
     out('SiteBucketName', this.siteBucket.bucketName);
     out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
     out('DeploymentsTableName', this.deploymentsTable.tableName);
+    // What the rollback service's CloudFront manager needs, as one JSON output it reads at runtime
+    // (rollback-service/lambda/managers/cloudfront/manager.ts: CloudFrontRollbackTarget). Only the
+    // distribution clients use: the integration distribution is never rolled back.
+    out('RollbackTarget', cdk.Stack.of(this).toJsonString({
+      frontendName: config.frontendName,
+      distributionId: this.distribution.distributionId,
+      table: this.deploymentsTable.tableName,
+      alarmNames: Object.values(config.alarmNames),
+      rollbackWindowMinutes: config.rollbackWindowMinutes,
+    }));
   }
 }

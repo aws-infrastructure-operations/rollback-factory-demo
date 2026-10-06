@@ -36,69 +36,26 @@ test('keeps published versions and describes them with the commit', () => {
   });
 });
 
-test('names the functions per environment', () => {
+test('names the function per environment; no rollback function of its own', () => {
   const t = synth('staging');
   t.hasResourceProperties('AWS::Lambda::Function', { FunctionName: 'service-lambda-staging', Runtime: 'nodejs24.x' });
-  t.hasResourceProperties('AWS::Lambda::Function', {
-    FunctionName: 'rollback-factory-demo-lambda-rollback-staging',
-    Timeout: 120,
-    MemorySize: 512,
-    Environment: { Variables: Match.objectLike({ ENV_NAME: 'staging', ROLLBACK_COOLDOWN_MINUTES: '3' }) },
-  });
+  t.resourceCountIs('AWS::Lambda::Function', 1);
+  t.resourceCountIs('AWS::SNS::Topic', 0);
+  t.resourceCountIs('AWS::Events::Rule', 0);
+  t.resourceCountIs('AWS::DynamoDB::GlobalTable', 0);
 });
 
 test('alarms on errors of live and $LATEST only, never on the integration alias', () => {
   const t = synth();
   const [alarm] = Object.values(t.findResources('AWS::CloudWatch::Alarm')) as any[];
-  assert.equal(alarm.Properties.AlarmName, 'rollback-factory-demo-service-lambda-errors-dev');
+  assert.equal(alarm.Properties.AlarmName, 'rollback-factory-demo-lambda-service-lambda-errors-dev');
   assert.equal(alarm.Properties.Threshold, 1);
   const resources = alarm.Properties.Metrics.filter((m: any) => m.MetricStat)
     .map((m: any) => m.MetricStat.Metric.Dimensions.find((d: any) => d.Name === 'Resource').Value).sort();
   assert.deepEqual(resources, ['service-lambda-dev', 'service-lambda-dev:$LATEST', 'service-lambda-dev:live']);
   assert.ok(!JSON.stringify(alarm).includes(':integration'));
-  t.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmActions: [{ Ref: Match.stringLikeRegexp('RollbackTopic') }] });
-});
-
-test('the topic is TLS only and lets CloudWatch publish for the registered alarms', () => {
-  synth().hasResourceProperties('AWS::SNS::TopicPolicy', {
-    PolicyDocument: {
-      Statement: Match.arrayWith([
-        Match.objectLike({ Effect: 'Deny', Condition: { Bool: { 'aws:SecureTransport': 'false' } } }),
-        Match.objectLike({
-          Sid: 'AllowCloudWatchAlarms',
-          Principal: { Service: 'cloudwatch.amazonaws.com' },
-          Condition: Match.objectLike({ StringEquals: { 'aws:SourceAccount': Match.anyValue() } }),
-        }),
-      ]),
-    },
-  });
-});
-
-test('the rollback role may only touch registered functions, their S3 folder and table items', () => {
-  const t = synth();
-  const policies = Object.values(t.findResources('AWS::IAM::Policy')) as any[];
-  const statements = policies.flatMap((p) => p.Properties.PolicyDocument.Statement);
-  const text = JSON.stringify(statements);
-  const lambdaStatement = statements.find((s) => [s.Action].flat().includes('lambda:UpdateAlias'));
-  assert.match(JSON.stringify(lambdaStatement.Resource), /function:service-lambda-dev/);
-  assert.match(text, /service-lambda-dev\/\*/);
-  assert.match(text, /"dynamodb:LeadingKeys":\["service-lambda-dev"\]/);
-});
-
-test('keeps the versions table and artifacts bucket in prod only', () => {
-  for (const [env, policy] of [['dev', 'Delete'], ['prod', 'Retain']]) {
-    const t = synth(env);
-    t.hasResource('AWS::DynamoDB::GlobalTable', { DeletionPolicy: policy });
-    t.hasResource('AWS::S3::Bucket', { DeletionPolicy: policy });
-  }
-});
-
-test('runs the scheduled check every 5 minutes', () => {
-  synth().hasResourceProperties('AWS::Events::Rule', {
-    Name: 'rollback-factory-demo-lambda-rollback-check-dev',
-    ScheduleExpression: 'rate(5 minutes)',
-    Targets: [Match.objectLike({ Input: JSON.stringify({ type: 'scheduled-check' }) })],
-  });
+  // publishes to the rollback service's topic
+  assert.match(JSON.stringify(alarm.Properties.AlarmActions), /:rollback-factory-demo-rollback-notifications-dev/);
 });
 
 test('prefixes export names, so they never clash with the API or frontend stacks', () => {

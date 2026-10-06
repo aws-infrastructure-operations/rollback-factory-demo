@@ -22,6 +22,13 @@
 
 ## Implementation status
 
+> **Since the move to [`rollback-service`](../rollback-service):** the rollback Lambda described below
+> no longer lives in this stack. One Lambda, `rollback-factory-demo-rollback-service-<env>`, does the rollbacks
+> of every project, picking the manager from the alarm name (`rollback-factory-demo-<type>-<name>-<env>`).
+> Its topic is `rollback-factory-demo-rollback-notifications-<env>`, and this stack's alarms are now named
+> `rollback-factory-demo-apigateway-api-user-*`. The logic and guards are unchanged; the names
+> below are the ones from when the story was implemented.
+
 Every item is implemented. Each PR was branched from `origin/main`.
 **Nothing has been deployed to AWS yet.** The first CI deploy is the first end-to-end run.
 Usage details are in [README.md](README.md).
@@ -94,7 +101,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 
 #### 9. Alarms + SNS
 
-- **Alarms:** `rollback-factory-demo-api-user-4xx-rate-<env>` and `rollback-factory-demo-api-user-5xx-rate-<env>` on stage `v1`.
+- **Alarms:** `rollback-factory-demo-apigateway-api-user-4xx-rate-<env>` and `rollback-factory-demo-apigateway-api-user-5xx-rate-<env>` on stage `v1`.
   - Each fires on the error *rate*: 4xx above 25 %, or 5xx above 5 %, in 2 of 3 one-minute periods.
   - Minutes with too few requests are ignored, so a few intentional 4xx responses (such as the integration tests) can't trigger a rollback.
 - **Optional SNS:** alarm actions go to the topic `rollback-factory-demo-notifications-<env>`.

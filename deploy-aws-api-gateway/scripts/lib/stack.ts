@@ -12,10 +12,8 @@ export interface StackOutputs {
   UserPoolClientId: string;
   SpecBucketName: string;
   DeploymentsTableName: string;
-  AlarmTopicArn: string;
   Alarm4xxName: string;
   Alarm5xxName: string;
-  RollbackFunctionName: string;
   LambdaErrorsAlarmName: string;
   AccessLogGroupName: string;
 }

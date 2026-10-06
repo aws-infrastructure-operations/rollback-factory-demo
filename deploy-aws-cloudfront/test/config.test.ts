@@ -25,20 +25,17 @@ test('rejects unknown environments', () => {
 test('parses overrides from CDK context strings', () => {
   const config = getConfig('dev', {
     alarmNotifications: 'false',
-    alarmEmail: 'ops@example.com',
     rollbackWindowMinutes: '15',
     liveReleaseId: '20261006T123005Z',
     integrationReleaseId: '20261006T124500Z',
   });
   assert.equal(config.alarms.notificationsEnabled, false);
-  assert.equal(config.alarms.email, 'ops@example.com');
   assert.equal(config.rollbackWindowMinutes, 15);
   assert.equal(config.liveReleaseId, '20261006T123005Z');
   assert.equal(config.integrationReleaseId, '20261006T124500Z');
 
   const defaults = getConfig('dev', { liveReleaseId: '' });
   assert.equal(defaults.alarms.notificationsEnabled, true);
-  assert.equal(defaults.alarms.email, undefined);
   assert.equal(defaults.rollbackWindowMinutes, 30);
   assert.equal(defaults.liveReleaseId, undefined);
 });

@@ -30,11 +30,11 @@ test('every tsx script points at an existing file', () => {
 test('the names the workflows build from the environment match the config', () => {
   const config = getConfig('dev');
   const text = files.map(read).join('\n').replaceAll('${{ inputs.environment }}', 'dev');
-  for (const name of [config.functionName, config.rollbackFunctionName, config.versionsTableName]) {
+  for (const name of [config.functionName, config.rollbackServiceFunctionName, config.versionsTableName]) {
     assert.ok(text.includes(name), `${name} not found in the workflows`);
   }
-  for (const hardCoded of text.matchAll(/(rollback-factory-demo-lambda-[\w-]+?|service-lambda)-dev\b/g)) {
-    assert.ok([config.functionName, config.rollbackFunctionName, config.versionsTableName].includes(hardCoded[0]),
+  for (const hardCoded of text.matchAll(/(rollback-factory-demo-(?:lambda|rollback-service)[\w-]*?|service-lambda)-dev\b/g)) {
+    assert.ok([config.functionName, config.rollbackServiceFunctionName, config.versionsTableName].includes(hardCoded[0]),
       `unexpected name ${hardCoded[0]}`);
   }
 });

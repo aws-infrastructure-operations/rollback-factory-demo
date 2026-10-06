@@ -52,16 +52,14 @@ test('saves Logs Insights queries for 5xx by cause and the latest 5xx requests',
 
 test('alarms on Lambda errors without triggering a rollback', () => {
   t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-    AlarmName: 'rollback-factory-demo-lambda-errors-dev',
+    AlarmName: 'rollback-factory-demo-apigateway-api-user-handler-errors-dev',
     Namespace: 'AWS/Lambda',
     MetricName: 'Errors',
     Threshold: 0,
     ComparisonOperator: 'GreaterThanThreshold',
-    AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
   });
-  // the rollback Lambda only receives the 4xx / 5xx alarms
-  t.hasResourceProperties('AWS::SNS::Subscription', {
-    Protocol: 'lambda',
-    FilterPolicy: { AlarmName: ['rollback-factory-demo-api-user-4xx-rate-dev', 'rollback-factory-demo-api-user-5xx-rate-dev'] },
-  });
+  // the rollback service's API Gateway manager only rolls back on these two (RollbackTarget.alarmNames)
+  const target = JSON.stringify(t.findOutputs('RollbackTarget').RollbackTarget.Value);
+  assert.ok(target.includes('rollback-factory-demo-apigateway-api-user-4xx-rate-dev'));
+  assert.ok(!target.includes('"alarmNames":["rollback-factory-demo-apigateway-api-user-handler-errors-dev'));
 });

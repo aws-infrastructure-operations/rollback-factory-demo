@@ -1,0 +1,93 @@
+name: rollback-service
+
+# PRs: typecheck, unit tests, synth.
+# main / manual, per environment (dev -> testing -> staging -> prod): deploy the rollback service
+# (us-east-1 topic, then the main stack) -> integration tests -> move to the next environment.
+# Deploy it before the projects: their alarms publish to its topics, and deploy-aws-lambda's deploy
+# invokes it to sync.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - rollback-service/**
+      - .github/workflows/rollback-service*.yml
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - rollback-service/**
+      - .github/workflows/rollback-service*.yml
+      - "!**/*.md"
+  workflow_dispatch:
+    inputs:
+      promote_to_prod:
+        description: Deploy to prod after the earlier environments are green
+        type: boolean
+        default: true
+
+# One run of this workflow at a time; a new run waits for the running one. Pull request checks
+# have their own group, so they never wait for (or replace) a waiting deploy from main.
+concurrency:
+  group: rollback-service-${{ github.event_name == 'pull_request' && 'checks' || 'deploy' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rollback-service
+    env:
+      # no credentials here: synth only needs a region
+      AWS_REGION: eu-central-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: rollback-service/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Synth dev and prod
+        run: |
+          npx cdk synth -c env=dev -q -o cdk.out/dev
+          npx cdk synth -c env=prod -q -o cdk.out/prod
+
+  deploy-dev:
+    if: github.event_name != 'pull_request'
+    needs: test
+    uses: ./.github/workflows/rollback-service-deploy.yml
+    with:
+      environment: dev
+    secrets: inherit
+
+  deploy-testing:
+    if: github.event_name != 'pull_request'
+    needs: deploy-dev
+    uses: ./.github/workflows/rollback-service-deploy.yml
+    with:
+      environment: testing
+    secrets: inherit
+
+  deploy-staging:
+    if: github.event_name != 'pull_request'
+    needs: deploy-testing
+    uses: ./.github/workflows/rollback-service-deploy.yml
+    with:
+      environment: staging
+    secrets: inherit
+
+  deploy-prod:
+    if: github.event_name == 'push' || inputs.promote_to_prod
+    needs: deploy-staging
+    uses: ./.github/workflows/rollback-service-deploy.yml
+    with:
+      environment: prod
+    secrets: inherit
