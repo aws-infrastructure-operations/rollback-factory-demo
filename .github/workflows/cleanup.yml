@@ -25,7 +25,7 @@ on:
       environment:
         description: Environment to clean up
         type: choice
-        options: [dev, testing, staging, prod]
+        options: [dev, prod]
         default: dev
       projects:
         description: Which projects' stacks to destroy

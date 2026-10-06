@@ -10,7 +10,7 @@ on:
       environment:
         description: Environment to roll back
         type: choice
-        options: [dev, testing, staging, prod]
+        options: [dev, prod]
         default: dev
       commit:
         description: 'Deployed commit to roll back to (last 5 that went live in dev, newest first)'

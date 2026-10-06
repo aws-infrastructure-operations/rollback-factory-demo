@@ -11,7 +11,7 @@ on:
       environment:
         description: Environment to roll back
         type: choice
-        options: [dev, testing, staging, prod]
+        options: [dev, prod]
         default: dev
       target_version:
         description: Lambda version to roll back to (leave empty for the previous version that was live)
