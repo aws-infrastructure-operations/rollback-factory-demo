@@ -83,3 +83,21 @@ Every deployment of stage `v1` is recorded by `npm run deployment:record -- --en
 `npm run deployment:list -- --env dev` shows the latest records. The logic lives in [`lambda/shared/deployments.ts`](lambda/shared/deployments.ts) so the rollback Lambda can reuse it.
 
 > Deployments made outside these scripts (e.g. "Deploy API" in the console) are not recorded.
+
+## Integration tests
+
+[`integration/`](integration) holds tests that run against the **deployed** API of `API_ENV` (default `dev`):
+
+```bash
+API_ENV=dev npm run test:integration            # bash
+$env:API_ENV='dev'; npm run test:integration    # PowerShell
+```
+
+The tests cover:
+- `GET` and `POST` on `/users` and `/messages` with a valid token (200 / 201, echoed message, caller email)
+- requests with no token or an invalid token get 401
+- a `POST` body without `message` gets 400 from the request validator
+
+For each run, the suite creates a throwaway Cognito user with a random password and deletes it afterwards, so CI needs only AWS credentials.
+To test as an existing user instead, set `API_USERNAME` and `API_PASSWORD`.
+The 3 negative tests do add to the API's 4XXError metric, so keep them few.

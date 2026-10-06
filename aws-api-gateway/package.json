@@ -16,7 +16,8 @@
     "token": "tsx scripts/get-token.ts",
     "user:create": "tsx scripts/create-user.ts",
     "deployment:record": "tsx scripts/record-deployment.ts",
-    "deployment:list": "tsx scripts/list-deployments.ts"
+    "deployment:list": "tsx scripts/list-deployments.ts",
+    "test:integration": "tsx --test --test-concurrency=1 integration/*.test.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",
