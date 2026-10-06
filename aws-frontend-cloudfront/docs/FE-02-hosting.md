@@ -19,7 +19,7 @@ Control. The active release is chosen by the origin path.
   - comment / name `frontend-user-<env>`
   - S3 origin with **OAC** (`S3BucketOrigin.withOriginAccessControl`). The bucket policy only allows
     this distribution (`AWS:SourceArn`).
-  - `viewerProtocolPolicy: REDIRECT_TO_HTTPS`, minimum TLS 1.2, HTTP/2 + HTTP/3
+  - `viewerProtocolPolicy: REDIRECT_TO_HTTPS`, HTTP/2 + HTTP/3. (A minimum TLS version can only be set with a custom domain certificate; the default `*.cloudfront.net` certificate is used here.)
   - `defaultRootObject: index.html`
   - **origin path** `/releases/<liveReleaseId>`, from `-c liveReleaseId=` (same pattern as the API's
     `scripts/live-context.ts`). Without it, use `/releases/initial` and a placeholder page deployed
