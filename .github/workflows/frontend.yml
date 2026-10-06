@@ -74,9 +74,25 @@ jobs:
       environment: dev
     secrets: inherit
 
+  deploy-testing:
+    if: github.event_name != 'pull_request'
+    needs: deploy-dev
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: testing
+    secrets: inherit
+
+  deploy-staging:
+    if: github.event_name != 'pull_request'
+    needs: deploy-testing
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: staging
+    secrets: inherit
+
   deploy-prod:
     if: github.event_name == 'push' || inputs.promote_to_prod
-    needs: deploy-dev
+    needs: deploy-staging
     uses: ./.github/workflows/frontend-deploy.yml
     with:
       environment: prod
