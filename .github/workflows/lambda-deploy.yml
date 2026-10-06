@@ -31,7 +31,7 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-lambda
+        working-directory: deploy-aws-lambda
     env:
       LAMBDA_ENV: ${{ inputs.environment }}
       FUNCTION_NAME: service-lambda-${{ inputs.environment }}
@@ -45,7 +45,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-lambda/package-lock.json
+          cache-dependency-path: deploy-aws-lambda/package-lock.json
       - run: npm ci
 
       - uses: aws-actions/configure-aws-credentials@v6

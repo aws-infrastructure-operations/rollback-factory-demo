@@ -6,9 +6,9 @@ CloudWatch alarm fires shortly after a deployment.
 
 | Project | Rolls back by | Details |
 |---|---|---|
-| [API](#api-api-user-env) (`aws-api-gateway`) | re-importing the previous verified OpenAPI spec into stage `v1` | [README](aws-api-gateway/README.md), [story](aws-api-gateway/story-implementation.md) |
-| [Lambda](#lambda-service-lambda-env) (`aws-lambda`) | pointing `live` back at the previous version that went live, restoring `$LATEST` from its archived zip | [README](aws-lambda/README.md) |
-| [Frontend](#frontend-frontend-user-env) (`aws-frontend-cloudfront`) | pointing the CloudFront origin path back at the previous verified release | [README](aws-frontend-cloudfront/README.md), [story](aws-frontend-cloudfront/story-implementation.md) |
+| [API](#api-api-user-env) (`deploy-aws-api-gateway`) | re-importing the previous verified OpenAPI spec into stage `v1` | [README](deploy-aws-api-gateway/README.md), [story](deploy-aws-api-gateway/story-implementation.md) |
+| [Lambda](#lambda-service-lambda-env) (`deploy-aws-lambda`) | pointing `live` back at the previous version that went live, restoring `$LATEST` from its archived zip | [README](deploy-aws-lambda/README.md) |
+| [Frontend](#frontend-frontend-user-env) (`deploy-aws-cloudfront`) | pointing the CloudFront origin path back at the previous verified release | [README](deploy-aws-cloudfront/README.md), [story](deploy-aws-cloudfront/story-implementation.md) |
 
 Shared conventions:
 
@@ -24,7 +24,7 @@ Shared conventions:
 
 ![api-user architecture: request flow, alarm-driven rollback and CI pipeline](architecture.png)
 
-The diagram was generated from [`aws-api-gateway/docs/architecture-diagram-prompt.md`](aws-api-gateway/docs/architecture-diagram-prompt.md).
+The diagram was generated from [`deploy-aws-api-gateway/docs/architecture-diagram-prompt.md`](deploy-aws-api-gateway/docs/architecture-diagram-prompt.md).
 The numbered arrows are the request flow, the lettered arrows the rollback, and the dashed arrows CI.
 
 ### Request flow (1–5)
@@ -110,7 +110,7 @@ branch to dev and sends traffic, to show an alarm rollback.
 
 ## Lambda (`service-lambda-<env>`)
 
-No diagram yet: generate one from [`aws-lambda/docs/architecture-diagram-prompt.md`](aws-lambda/docs/architecture-diagram-prompt.md). In short:
+No diagram yet: generate one from [`deploy-aws-lambda/docs/architecture-diagram-prompt.md`](deploy-aws-lambda/docs/architecture-diagram-prompt.md). In short:
 
 - **Deploy:** `cdk deploy` publishes a new version to the `integration` alias while `live` stays
   pinned. CI invokes `service-lambda-<env>:integration` in the integration tests, and only then
@@ -125,11 +125,11 @@ No diagram yet: generate one from [`aws-lambda/docs/architecture-diagram-prompt.
 - **Scheduled check:** every 5 minutes it syncs, marks long-healthy versions stable, and re-handles
   alarms still in `ALARM`.
 
-See the [Lambda README](aws-lambda/README.md) for details.
+See the [Lambda README](deploy-aws-lambda/README.md) for details.
 
 ## Frontend (`frontend-user-<env>`)
 
-No diagram yet: generate one from [`aws-frontend-cloudfront/docs/architecture-diagram-prompt.md`](aws-frontend-cloudfront/docs/architecture-diagram-prompt.md). In short:
+No diagram yet: generate one from [`deploy-aws-cloudfront/docs/architecture-diagram-prompt.md`](deploy-aws-cloudfront/docs/architecture-diagram-prompt.md). In short:
 
 - **Hosting:** a simple Vite + TypeScript page is served by the CloudFront distribution `frontend-user-<env>`
   from a private S3 bucket, through Origin Access Control and HTTPS only. It shows the environment and
@@ -143,4 +143,4 @@ No diagram yet: generate one from [`aws-frontend-cloudfront/docs/architecture-di
   rollback Lambda there, which points the origin path back at the previous verified release,
   invalidates the cache, and records the rollback in the deployments table in `eu-central-1`.
 
-See the [frontend README](aws-frontend-cloudfront/README.md) for details.
+See the [frontend README](deploy-aws-cloudfront/README.md) for details.

@@ -55,12 +55,12 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: |
-            tools/aws-api-gateway/package-lock.json
-            broken/aws-api-gateway/package-lock.json
+            tools/deploy-aws-api-gateway/package-lock.json
+            broken/deploy-aws-api-gateway/package-lock.json
       - name: Install
         run: |
-          npm ci --prefix tools/aws-api-gateway
-          npm ci --prefix broken/aws-api-gateway
+          npm ci --prefix tools/deploy-aws-api-gateway
+          npm ci --prefix broken/deploy-aws-api-gateway
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -69,26 +69,26 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Preflight - dev has a deployment to roll back to
-        working-directory: tools/aws-api-gateway
+        working-directory: tools/deploy-aws-api-gateway
         run: npm run -s demo:traffic -- --env dev --preflight
 
       - name: Deploy broken API to dev
-        working-directory: broken/aws-api-gateway
+        working-directory: broken/deploy-aws-api-gateway
         run: npx cdk deploy -c env=dev --require-approval never
 
       - name: Record the broken deployment
-        working-directory: broken/aws-api-gateway
+        working-directory: broken/deploy-aws-api-gateway
         run: >-
           npm run -s deployment:record -- --env dev
           --description "break-api-demo: $BROKEN_REF (run $GITHUB_RUN_ID)"
 
       - name: Send traffic
-        working-directory: tools/aws-api-gateway
+        working-directory: tools/deploy-aws-api-gateway
         run: npm run -s demo:traffic -- --env dev --minutes "$TRAFFIC_MINUTES"
 
       - name: Deployment history
         if: always()
-        working-directory: tools/aws-api-gateway
+        working-directory: tools/deploy-aws-api-gateway
         run: |
           {
             echo "### api-user-dev deployments"

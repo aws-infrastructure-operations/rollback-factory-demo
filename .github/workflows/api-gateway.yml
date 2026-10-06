@@ -9,12 +9,12 @@ on:
   push:
     branches: [main]
     paths:
-      - aws-api-gateway/**
+      - deploy-aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
       - "!**/*.md"
   pull_request:
     paths:
-      - aws-api-gateway/**
+      - deploy-aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
       - "!**/*.md"
   workflow_dispatch:
@@ -42,14 +42,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: aws-api-gateway
+        working-directory: deploy-aws-api-gateway
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-api-gateway/package-lock.json
+          cache-dependency-path: deploy-aws-api-gateway/package-lock.json
       - run: npm ci
       - name: Typecheck
         run: npm run build

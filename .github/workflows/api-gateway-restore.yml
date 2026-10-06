@@ -43,7 +43,7 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-api-gateway
+        working-directory: deploy-aws-api-gateway
     env:
       API_ENV: ${{ inputs.environment }}
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -55,7 +55,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-api-gateway/package-lock.json
+          cache-dependency-path: deploy-aws-api-gateway/package-lock.json
       - run: npm ci
 
       - uses: aws-actions/configure-aws-credentials@v6
