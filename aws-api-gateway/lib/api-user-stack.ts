@@ -31,11 +31,12 @@ export class ApiUserStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ApiUserStackProps) {
     super(scope, id, props);
     const { config } = props;
+    const name = config.resourceName;
     const removalPolicy = config.retainData ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY;
 
     // --- Auth -----------------------------------------------------------------
     this.userPool = new cognito.UserPool(this, 'UserPool', {
-      userPoolName: `${config.apiName}-users`,
+      userPoolName: name('users'),
       selfSignUpEnabled: false,
       signInAliases: { email: true },
       passwordPolicy: { minLength: 12, requireSymbols: true },
@@ -44,7 +45,7 @@ export class ApiUserStack extends cdk.Stack {
     });
 
     this.userPoolClient = this.userPool.addClient('ApiClient', {
-      userPoolClientName: `${config.apiName}-client`,
+      userPoolClientName: name('client'),
       generateSecret: false,
       // USER_PASSWORD_AUTH lets scripts / CI fetch tokens without a browser flow.
       authFlows: { userPassword: true, userSrp: true },
@@ -53,14 +54,14 @@ export class ApiUserStack extends cdk.Stack {
     });
 
     const authorizer = new apigw.CognitoUserPoolsAuthorizer(this, 'CognitoAuthorizer', {
-      authorizerName: `${config.apiName}-cognito`,
+      authorizerName: name('cognito'),
       cognitoUserPools: [this.userPool],
       identitySource: apigw.IdentitySource.header('Authorization'),
     });
 
     // --- Backend --------------------------------------------------------------
     const handler = new NodejsFunction(this, 'ApiHandler', {
-      functionName: `${config.apiName}-handler`,
+      functionName: name('handler'),
       entry: path.join(__dirname, '..', 'lambda', 'api', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
@@ -130,7 +131,7 @@ export class ApiUserStack extends cdk.Stack {
     // --- Deployment tracking ----------------------------------------------------
     // One OpenAPI export per deployment, stored under specs/<timestamp>/ (see lambda/shared/deployments.ts).
     this.specBucket = new s3.Bucket(this, 'SpecBucket', {
-      bucketName: `${config.apiName}-${cdk.Aws.ACCOUNT_ID}-deployments`,
+      bucketName: name(`${cdk.Aws.ACCOUNT_ID}-deployments`),
       versioned: true,
       encryption: s3.BucketEncryption.S3_MANAGED,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -141,7 +142,7 @@ export class ApiUserStack extends cdk.Stack {
 
     // One item per deployment: pk = apiName, sk = deployedAt (ISO 8601), newest first via ScanIndexForward=false.
     this.deploymentsTable = new dynamodb.TableV2(this, 'DeploymentsTable', {
-      tableName: `${config.apiName}-deployments`,
+      tableName: name('deployments'),
       partitionKey: { name: 'apiName', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'deployedAt', type: dynamodb.AttributeType.STRING },
       billing: dynamodb.Billing.onDemand(),
@@ -151,7 +152,7 @@ export class ApiUserStack extends cdk.Stack {
 
     // --- Alarms & rollback ------------------------------------------------------
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
-      topicName: `${config.apiName}-alarms`,
+      topicName: name('notifications'),
       displayName: `${config.apiName} alarms`,
       enforceSSL: true,
     });
@@ -166,7 +167,7 @@ export class ApiUserStack extends cdk.Stack {
     for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
 
     this.rollbackFunction = new NodejsFunction(this, 'RollbackFunction', {
-      functionName: `${config.apiName}-rollback`,
+      functionName: name('rollback'),
       description: `Rolls ${config.apiName}/${config.stageName} back to the previous deployment's spec on alarm`,
       entry: path.join(__dirname, '..', 'lambda', 'rollback', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -181,6 +182,7 @@ export class ApiUserStack extends cdk.Stack {
         SPEC_BUCKET: this.specBucket.bucketName,
         DEPLOYMENTS_TABLE: this.deploymentsTable.tableName,
         ROLLBACK_WINDOW_MINUTES: String(config.rollbackWindowMinutes),
+        ALARM_NAMES: Object.values(config.alarmNames).join(','),
       },
       logGroup: new logs.LogGroup(this, 'RollbackLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
@@ -188,7 +190,14 @@ export class ApiUserStack extends cdk.Stack {
       }),
       bundling: { minify: true, sourceMap: true },
     });
-    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction));
+    // Only this API's alarms trigger a rollback, even if something else publishes to the topic.
+    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction, {
+      filterPolicyWithMessageBody: {
+        AlarmName: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.stringFilter({
+          allowlist: Object.values(config.alarmNames),
+        })),
+      },
+    }));
 
     this.specBucket.grantReadWrite(this.rollbackFunction);
     this.deploymentsTable.grantReadWriteData(this.rollbackFunction);
@@ -208,7 +217,7 @@ export class ApiUserStack extends cdk.Stack {
 
     // --- Outputs --------------------------------------------------------------
     const out = (name: string, value: string) =>
-      new cdk.CfnOutput(this, name, { value, exportName: `${config.apiName}-${name}` });
+      new cdk.CfnOutput(this, name, { value, exportName: config.resourceName(name) });
     out('ApiId', this.api.restApiId);
     out('ApiUrl', this.api.url);
     out('StageName', config.stageName);
@@ -242,7 +251,7 @@ export class ApiUserStack extends cdk.Stack {
     const kind = metricName.slice(0, 3).toLowerCase();
 
     return new cloudwatch.Alarm(this, `Alarm${kind}`, {
-      alarmName: `${config.apiName}-${config.stageName}-${kind}-rate`,
+      alarmName: metricName === '4XXError' ? config.alarmNames.error4xx : config.alarmNames.error5xx,
       alarmDescription:
         `More than ${thresholdPercent}% ${kind} responses (min ${minRequests} requests/min) on `
         + `${config.apiName}/${config.stageName}. Triggers the rollback Lambda via SNS.`,

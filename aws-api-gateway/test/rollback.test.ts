@@ -6,7 +6,7 @@ import type { SNSEvent } from 'aws-lambda';
 import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 import type { DeploymentRecord } from '../lambda/shared/deployments.js';
-import { lambdaArnsFromSpec, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
+import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
 
 const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
@@ -19,7 +19,7 @@ describe('stack', () => {
   test('creates a 4xx and a 5xx rate alarm wired to the SNS topic', () => {
     for (const [kind, threshold, min] of [['4xx', 25, 20], ['5xx', 5, 5]] as const) {
       t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-        AlarmName: `api-user-dev-v1-${kind}-rate`,
+        AlarmName: `rollback-factory-demo-${kind}-rate-dev`,
         Threshold: threshold,
         ActionsEnabled: true,
         AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
@@ -36,8 +36,14 @@ describe('stack', () => {
   });
 
   test('subscribes the rollback Lambda (and optional e-mail) to the topic', () => {
-    t.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'api-user-dev-alarms' });
-    t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'lambda' });
+    for (const env of ['dev', 'prod']) {
+      synth(env).hasResourceProperties('AWS::SNS::Topic', { TopicName: `rollback-factory-demo-notifications-${env}` });
+    }
+    t.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'lambda',
+      FilterPolicyScope: 'MessageBody',
+      FilterPolicy: { AlarmName: ['rollback-factory-demo-4xx-rate-dev', 'rollback-factory-demo-5xx-rate-dev'] },
+    });
     t.resourcePropertiesCountIs('AWS::SNS::Subscription', { Protocol: 'email' }, 0);
     synth('dev', { alarmEmail: 'ops@example.com' })
       .hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email', Endpoint: 'ops@example.com' });
@@ -45,13 +51,17 @@ describe('stack', () => {
 
   test('configures the rollback Lambda', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'api-user-dev-rollback',
+      FunctionName: 'rollback-factory-demo-rollback-dev',
       Environment: {
-        Variables: Match.objectLike({ STAGE_NAME: 'v1', ROLLBACK_WINDOW_MINUTES: '30' }),
+        Variables: Match.objectLike({
+          STAGE_NAME: 'v1',
+          ROLLBACK_WINDOW_MINUTES: '30',
+          ALARM_NAMES: 'rollback-factory-demo-4xx-rate-dev,rollback-factory-demo-5xx-rate-dev',
+        }),
       },
     });
     synth('dev', { rollbackWindowMinutes: '10' }).hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'api-user-dev-rollback',
+      FunctionName: 'rollback-factory-demo-rollback-dev',
       Environment: { Variables: Match.objectLike({ ROLLBACK_WINDOW_MINUTES: '10' }) },
     });
   });
@@ -69,7 +79,7 @@ describe('stack', () => {
 
   test('chaosFailureRate reaches the API handler', () => {
     synth('dev', { chaosFailureRate: '1' }).hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'api-user-dev-handler',
+      FunctionName: 'rollback-factory-demo-handler-dev',
       Environment: { Variables: Match.objectLike({ CHAOS_FAILURE_RATE: '1' }) },
     });
     assert.throws(() => getConfig('dev', { chaosFailureRate: '2' }), /between 0 and 1/);
@@ -111,16 +121,16 @@ describe('planRollback', () => {
 test('parses CloudWatch alarm notifications from SNS', () => {
   const event = {
     Records: [{ Sns: { Message: JSON.stringify({
-      AlarmName: 'api-user-dev-v1-5xx-rate', NewStateValue: 'ALARM', NewStateReason: 'Threshold Crossed',
+      AlarmName: 'rollback-factory-demo-5xx-rate-dev', NewStateValue: 'ALARM', NewStateReason: 'Threshold Crossed',
     }) } }],
   } as unknown as SNSEvent;
   assert.deepEqual(parseAlarms(event), [
-    { alarmName: 'api-user-dev-v1-5xx-rate', newState: 'ALARM', reason: 'Threshold Crossed' },
+    { alarmName: 'rollback-factory-demo-5xx-rate-dev', newState: 'ALARM', reason: 'Threshold Crossed' },
   ]);
 });
 
 test('finds the versioned Lambda ARNs in an exported spec', () => {
-  const fn = 'arn:aws:lambda:eu-west-1:123456789012:function:api-user-dev-handler:7';
+  const fn = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev:7';
   const integration = {
     type: 'aws_proxy',
     uri: `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${fn}/invocations`,
@@ -132,4 +142,16 @@ test('finds the versioned Lambda ARNs in an exported spec', () => {
     },
   };
   assert.deepEqual(lambdaArnsFromSpec(spec), [fn]);
+});
+
+test('only acts on ALARM transitions of its own API', () => {
+  const alarms = [
+    { alarmName: 'rollback-factory-demo-5xx-rate-dev', newState: 'ALARM', reason: '' },
+    { alarmName: 'rollback-factory-demo-5xx-rate-prod', newState: 'ALARM', reason: '' },
+    { alarmName: 'rollback-factory-demo-4xx-rate-dev', newState: 'OK', reason: '' },
+  ];
+  const dev = Object.values(getConfig('dev').alarmNames);
+  const prod = Object.values(getConfig('prod').alarmNames);
+  assert.deepEqual(ownAlarms(alarms, dev).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-dev']);
+  assert.deepEqual(ownAlarms(alarms, prod).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-prod']);
 });

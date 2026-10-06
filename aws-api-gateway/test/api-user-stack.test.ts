@@ -1,3 +1,4 @@
+import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -47,4 +48,15 @@ test('rejects unknown environments', () => {
     return;
   }
   throw new Error('expected getConfig to throw');
+});
+
+test('names every resource rollback-factory-demo-<resource>-<env>', () => {
+  const config = getConfig('prod');
+  assert.equal(config.stackName, 'rollback-factory-demo-prod');
+  assert.equal(config.resourceName('users'), 'rollback-factory-demo-users-prod');
+  const t = synth('prod');
+  t.hasResourceProperties('AWS::Cognito::UserPool', { UserPoolName: 'rollback-factory-demo-users-prod' });
+  t.hasResourceProperties('AWS::Cognito::UserPoolClient', { ClientName: 'rollback-factory-demo-client-prod' });
+  t.hasResourceProperties('AWS::ApiGateway::Authorizer', { Name: 'rollback-factory-demo-cognito-prod' });
+  t.hasOutput('ApiId', { Export: { Name: 'rollback-factory-demo-ApiId-prod' } });
 });

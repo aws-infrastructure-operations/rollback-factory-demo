@@ -7,14 +7,17 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | Resource | Name |
 |---|---|
 | REST API (regional) | `api-user-dev` / `api-user-prod`, stage `v1` |
-| Cognito user pool + app client | `api-user-<env>-users` / `api-user-<env>-client` |
-| Cognito authorizer | `api-user-<env>-cognito` (`Authorization: <ID token>`) |
-| Lambda backend (Node 24, arm64) | `api-user-<env>-handler` |
-| S3 bucket (versioned) for OpenAPI specs | `api-user-<env>-<account>-deployments` |
-| DynamoDB deployments table | `api-user-<env>-deployments` |
-| CloudWatch alarms (4xx rate, 5xx rate) | `api-user-<env>-v1-4xx-rate`, `api-user-<env>-v1-5xx-rate` |
-| SNS alarm topic | `api-user-<env>-alarms` |
-| Rollback Lambda | `api-user-<env>-rollback` |
+| CloudFormation stack | `rollback-factory-demo-<env>` |
+| Cognito user pool + app client | `rollback-factory-demo-users-<env>` / `rollback-factory-demo-client-<env>` |
+| Cognito authorizer | `rollback-factory-demo-cognito-<env>` (`Authorization: <ID token>`) |
+| Lambda backend (Node 24, arm64) | `rollback-factory-demo-handler-<env>` |
+| S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
+| DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
+| CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-4xx-rate-<env>`, `rollback-factory-demo-5xx-rate-<env>` |
+| SNS notification topic | `rollback-factory-demo-notifications-<env>` |
+| Rollback Lambda | `rollback-factory-demo-rollback-<env>` |
+
+The REST API keeps the `api-user-<env>` name from the story. Every other resource is named `rollback-factory-demo-<resource>-<env>`, built by `resourceName()` in [`lib/config.ts`](lib/config.ts).
 
 ### Endpoints
 
@@ -39,7 +42,7 @@ npm run deploy:prod
 
 The first deploy to an account/region needs `npx cdk bootstrap`.
 
-Stack outputs (exported as `api-user-<env>-<Name>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`, `AlarmTopicArn`, `Alarm4xxName`, `Alarm5xxName`, `RollbackFunctionName`.
+Stack outputs (exported as `rollback-factory-demo-<Name>-<env>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`, `AlarmTopicArn`, `Alarm4xxName`, `Alarm5xxName`, `RollbackFunctionName`.
 
 ## Bruno collection & Cognito token
 
@@ -70,8 +73,8 @@ Every deployment of stage `v1` is recorded by `npm run deployment:record -- --en
 
 1. reads the deployment id the stage currently points to (if it matches the latest record, nothing changed and nothing is recorded; `--force` overrides)
 2. exports the stage as OpenAPI 3 JSON **with API Gateway extensions** (integrations, authorizers, validators), so it can be re-imported for a rollback
-3. uploads it to `s3://api-user-<env>-<account>-deployments/specs/<yyyymmddThhmmssZ>/openapi.json`
-4. writes an item to `api-user-<env>-deployments`:
+3. uploads it to `s3://rollback-factory-demo-<account>-deployments-<env>/specs/<yyyymmddThhmmssZ>/openapi.json`
+4. writes an item to `rollback-factory-demo-deployments-<env>`:
 
 | Attribute | Example |
 |---|---|
@@ -108,7 +111,7 @@ The 3 negative tests do add to the API's 4XXError metric, so keep them few.
 ## Alarms & automatic rollback
 
 ```
-4xx / 5xx alarm ──► SNS api-user-<env>-alarms ──► rollback Lambda ──► PutRestApi(previous spec) + CreateDeployment(v1)
+4xx / 5xx alarm ──► SNS rollback-factory-demo-notifications-<env> ──► rollback Lambda ──► PutRestApi(previous spec) + CreateDeployment(v1)
                                           └─► optional e-mail
 ```
 

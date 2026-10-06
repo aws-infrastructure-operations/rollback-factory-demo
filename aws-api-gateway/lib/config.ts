@@ -18,8 +18,13 @@ export interface AlarmConfig {
 
 export interface EnvConfig {
   envName: EnvName;
+  /** The REST API keeps the story's name: api-user-<env>. */
   apiName: string;
   stackName: string;
+  /** Every other resource: rollback-factory-demo-<resource>-<env>. */
+  resourceName: (resource: string) => string;
+  /** The two alarms the rollback Lambda reacts to. */
+  alarmNames: { error4xx: string; error5xx: string };
   stageName: string;
   /** Whether stateful resources (user pool, bucket, table) survive stack deletion. */
   retainData: boolean;
@@ -39,6 +44,7 @@ export interface ConfigOverrides {
 }
 
 export const STAGE_NAME = 'v1';
+export const PROJECT_NAME = 'rollback-factory-demo';
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
   if (envName !== 'dev' && envName !== 'prod') {
@@ -49,10 +55,14 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     throw new Error(`chaosFailureRate must be between 0 and 1, got ${overrides.chaosFailureRate}`);
   }
 
+  const resourceName = (resource: string) => `${PROJECT_NAME}-${resource}-${envName}`;
+
   return {
     envName,
     apiName: `api-user-${envName}`,
-    stackName: `ApiUserStack-${envName}`,
+    stackName: `${PROJECT_NAME}-${envName}`,
+    resourceName,
+    alarmNames: { error4xx: resourceName('4xx-rate'), error5xx: resourceName('5xx-rate') },
     stageName: STAGE_NAME,
     retainData: envName === 'prod',
     alarms: {
