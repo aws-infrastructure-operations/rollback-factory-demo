@@ -62,7 +62,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     errorsAlarmName: resourceName(`lambda-${SERVICE_NAME}-errors`),
     rollbackTopicName: resourceName('rollback-notifications'),
     rollbackServiceFunctionName: resourceName('rollback-service'),
-    versionsTableName: resourceName('lambda-versions'),
+    versionsTableName: resourceName('lambda-archive'),
     liveLambdaVersion,
     retainData: envName === 'prod',
   };

@@ -89,8 +89,9 @@ export class RollbackServiceStack extends cdk.Stack {
       removalPolicy,
     });
     // Package of every archived version, as <fn>/<fn>-<version>.zip. Rollbacks restore $LATEST from here.
+    // (Not deploy-aws-lambda's old ...-lambda-artifacts-<env> name, which prod keeps.)
     const artifactsBucket = new s3.Bucket(this, 'ArtifactsBucket', {
-      bucketName: name(`${cdk.Aws.ACCOUNT_ID}-lambda-artifacts`),
+      bucketName: name(`${cdk.Aws.ACCOUNT_ID}-lambda-archive`),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -201,8 +202,9 @@ export class RollbackServiceStack extends cdk.Stack {
     // It assumes this role with a session policy scoped to a single function (managers/lambda/scoped.ts).
     // This role is the upper bound: registered functions only.
     const registered = [...resolveRegistry(rollbackConfig, env).values()];
+    // No fixed name: deploy-aws-lambda's stacks created rollback-factory-demo-lambda-rollback-execution-<env>
+    // before the rollback service existed, and a fixed name would collide with it.
     const lambdaRole = new iam.Role(this, 'LambdaRollbackRole', {
-      roleName: name('lambda-rollback-execution'),
       assumedBy: this.service.role!,
       maxSessionDuration: cdk.Duration.hours(1),
     });

@@ -61,11 +61,12 @@ run(async () => {
     getStackOutputs(config).catch((err) => log(`  WARN: cannot read stack outputs (${err.message})`)),
     awsRegion().catch(() => undefined),
   ]);
-  if (!outputs) log(`  ${config.stackName} outputs unavailable - keeping existing environment values`);
+  // a stack that failed its first create exists without outputs: treat it as not deployed
+  if (!outputs?.ApiUrl) log(`  ${config.stackName} outputs unavailable - keeping existing environment values`);
 
   mkdirSync(path.dirname(envFile), { recursive: true });
   writeFileSync(envFile, renderEnvironment({
-    baseUrl: outputs?.ApiUrl.replace(/\/$/, '') ?? previous.baseUrl ?? 'https://deploy-first.invalid',
+    baseUrl: outputs?.ApiUrl?.replace(/\/$/, '') ?? previous.baseUrl ?? 'https://deploy-first.invalid',
     region: region ?? previous.region ?? '',
     userPoolId: outputs?.UserPoolId ?? previous.userPoolId ?? '',
     userPoolClientId: outputs?.UserPoolClientId ?? previous.userPoolClientId ?? '',
