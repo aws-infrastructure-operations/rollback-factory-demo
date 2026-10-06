@@ -6,7 +6,7 @@ import type { SNSEvent } from 'aws-lambda';
 import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 import type { DeploymentRecord } from '../lambda/shared/deployments.js';
-import { lambdaArnsFromSpec, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
+import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
 
 const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
@@ -36,8 +36,14 @@ describe('stack', () => {
   });
 
   test('subscribes the rollback Lambda (and optional e-mail) to the topic', () => {
-    t.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'api-user-dev-alarms' });
-    t.hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'lambda' });
+    for (const env of ['dev', 'prod']) {
+      synth(env).hasResourceProperties('AWS::SNS::Topic', { TopicName: 'rollback-factory-demo-notifications' });
+    }
+    t.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'lambda',
+      FilterPolicyScope: 'MessageBody',
+      FilterPolicy: { AlarmName: [{ prefix: 'api-user-dev-v1-' }] },
+    });
     t.resourcePropertiesCountIs('AWS::SNS::Subscription', { Protocol: 'email' }, 0);
     synth('dev', { alarmEmail: 'ops@example.com' })
       .hasResourceProperties('AWS::SNS::Subscription', { Protocol: 'email', Endpoint: 'ops@example.com' });
@@ -132,4 +138,14 @@ test('finds the versioned Lambda ARNs in an exported spec', () => {
     },
   };
   assert.deepEqual(lambdaArnsFromSpec(spec), [fn]);
+});
+
+test('only acts on ALARM transitions of its own API', () => {
+  const alarms = [
+    { alarmName: 'api-user-dev-v1-5xx-rate', newState: 'ALARM', reason: '' },
+    { alarmName: 'api-user-prod-v1-5xx-rate', newState: 'ALARM', reason: '' },
+    { alarmName: 'api-user-dev-v1-4xx-rate', newState: 'OK', reason: '' },
+  ];
+  assert.deepEqual(ownAlarms(alarms, 'api-user-dev-v1-').map((a) => a.alarmName), ['api-user-dev-v1-5xx-rate']);
+  assert.deepEqual(ownAlarms(alarms, 'api-user-prod-v1-').map((a) => a.alarmName), ['api-user-prod-v1-5xx-rate']);
 });

@@ -13,7 +13,7 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | S3 bucket (versioned) for OpenAPI specs | `api-user-<env>-<account>-deployments` |
 | DynamoDB deployments table | `api-user-<env>-deployments` |
 | CloudWatch alarms (4xx rate, 5xx rate) | `api-user-<env>-v1-4xx-rate`, `api-user-<env>-v1-5xx-rate` |
-| SNS alarm topic | `api-user-<env>-alarms` |
+| SNS notification topic (shared by all environments) | `rollback-factory-demo-notifications` |
 | Rollback Lambda | `api-user-<env>-rollback` |
 
 ### Endpoints
@@ -108,7 +108,7 @@ The 3 negative tests do add to the API's 4XXError metric, so keep them few.
 ## Alarms & automatic rollback
 
 ```
-4xx / 5xx alarm ──► SNS api-user-<env>-alarms ──► rollback Lambda ──► PutRestApi(previous spec) + CreateDeployment(v1)
+4xx / 5xx alarm ──► SNS rollback-factory-demo-notifications ──► rollback Lambda ──► PutRestApi(previous spec) + CreateDeployment(v1)
                                           └─► optional e-mail
 ```
 

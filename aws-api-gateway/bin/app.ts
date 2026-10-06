@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { getConfig } from '../lib/config.js';
+import { getConfig, PROJECT_NAME } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 
 const app = new cdk.App();
@@ -21,5 +21,5 @@ new ApiUserStack(app, config.stackName, {
   description: `${config.apiName} REST API with Cognito authorizer`,
 });
 
-cdk.Tags.of(app).add('project', 'rollback-factory-demo');
+cdk.Tags.of(app).add('project', PROJECT_NAME);
 cdk.Tags.of(app).add('environment', config.envName);

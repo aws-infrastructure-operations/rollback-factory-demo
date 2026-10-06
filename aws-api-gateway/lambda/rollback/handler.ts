@@ -11,7 +11,8 @@ import { AddPermissionCommand, LambdaClient, ResourceConflictException } from '@
 import {
   claimRollback, DeploymentTarget, getSpec, listDeployments, recordDeployment,
 } from '../shared/deployments.js';
-import { lambdaArnsFromSpec, parseAlarms, planRollback } from './plan.js';
+import { alarmNamePrefix } from '../../lib/config.js';
+import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from './plan.js';
 
 const env = (name: string) => {
   const value = process.env[name];
@@ -57,10 +58,10 @@ async function ensureInvokePermission(functionArn: string) {
 }
 
 export const handler = async (event: SNSEvent) => {
-  const alarms = parseAlarms(event).filter((a) => a.newState === 'ALARM');
+  const alarms = ownAlarms(parseAlarms(event), alarmNamePrefix(target.apiName, target.stageName));
   if (alarms.length === 0) {
-    log('no ALARM transition in event, nothing to do');
-    return { action: 'skip', reason: 'no ALARM transition' };
+    log('no ALARM transition of this API in event, nothing to do');
+    return { action: 'skip', reason: 'no ALARM transition of this API' };
   }
   const alarmNames = alarms.map((a) => a.alarmName).join(', ');
   log('alarm received', { alarms });

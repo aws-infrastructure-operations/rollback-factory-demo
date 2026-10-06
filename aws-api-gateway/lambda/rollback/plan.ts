@@ -11,6 +11,10 @@ export interface AlarmNotification {
   reason: string;
 }
 
+/** Keeps the ALARM transitions of this API's own alarms (the topic is shared across environments). */
+export const ownAlarms = (alarms: AlarmNotification[], prefix: string) =>
+  alarms.filter((a) => a.newState === 'ALARM' && a.alarmName?.startsWith(prefix));
+
 /** CloudWatch alarm notifications carried by an SNS event. */
 export function parseAlarms(event: SNSEvent): AlarmNotification[] {
   return event.Records.map((r) => {

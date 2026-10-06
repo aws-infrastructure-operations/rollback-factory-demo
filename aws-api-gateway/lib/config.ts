@@ -39,6 +39,12 @@ export interface ConfigOverrides {
 }
 
 export const STAGE_NAME = 'v1';
+export const PROJECT_NAME = 'rollback-factory-demo';
+/** Shared by every environment's alarms - subscribers filter on alarmNamePrefix. */
+export const NOTIFICATION_TOPIC_NAME = `${PROJECT_NAME}-notifications`;
+
+/** Every alarm of an API stage is named `<apiName>-<stage>-...`. */
+export const alarmNamePrefix = (apiName: string, stageName: string) => `${apiName}-${stageName}-`;
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
   if (envName !== 'dev' && envName !== 'prod') {

@@ -13,7 +13,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
-import { EnvConfig } from './config.js';
+import { alarmNamePrefix, EnvConfig, NOTIFICATION_TOPIC_NAME } from './config.js';
 
 export interface ApiUserStackProps extends cdk.StackProps {
   config: EnvConfig;
@@ -151,8 +151,8 @@ export class ApiUserStack extends cdk.Stack {
 
     // --- Alarms & rollback ------------------------------------------------------
     this.alarmTopic = new sns.Topic(this, 'AlarmTopic', {
-      topicName: `${config.apiName}-alarms`,
-      displayName: `${config.apiName} alarms`,
+      topicName: NOTIFICATION_TOPIC_NAME,
+      displayName: `${NOTIFICATION_TOPIC_NAME} alarms`,
       enforceSSL: true,
     });
     if (config.alarms.email) {
@@ -188,7 +188,14 @@ export class ApiUserStack extends cdk.Stack {
       }),
       bundling: { minify: true, sourceMap: true },
     });
-    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction));
+    // The topic is shared across environments: only deliver this API's alarms to its rollback Lambda.
+    this.alarmTopic.addSubscription(new snsSubs.LambdaSubscription(this.rollbackFunction, {
+      filterPolicyWithMessageBody: {
+        AlarmName: sns.FilterOrPolicy.filter(sns.SubscriptionFilter.stringFilter({
+          matchPrefixes: [alarmNamePrefix(config.apiName, config.stageName)],
+        })),
+      },
+    }));
 
     this.specBucket.grantReadWrite(this.rollbackFunction);
     this.deploymentsTable.grantReadWriteData(this.rollbackFunction);
@@ -242,7 +249,7 @@ export class ApiUserStack extends cdk.Stack {
     const kind = metricName.slice(0, 3).toLowerCase();
 
     return new cloudwatch.Alarm(this, `Alarm${kind}`, {
-      alarmName: `${config.apiName}-${config.stageName}-${kind}-rate`,
+      alarmName: `${alarmNamePrefix(config.apiName, config.stageName)}${kind}-rate`,
       alarmDescription:
         `More than ${thresholdPercent}% ${kind} responses (min ${minRequests} requests/min) on `
         + `${config.apiName}/${config.stageName}. Triggers the rollback Lambda via SNS.`,
