@@ -82,6 +82,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
   - `source`: `manual`, `cicd` or `rollback`
   - the actor, commit and CI run link
 - **Writers:** the record script (manual and CI deploys) and the rollback Lambda. `npm run deployment:list` shows the history.
+- **Verified:** CI sets `verifiedAt` once the integration tests pass (`deployment:verify`). The rollback Lambda only restores verified deployments that were never rolled back; the manual `api-gateway-restore` workflow can restore any recorded deployment.
 - **Limitation:** a deployment made outside these paths, such as "Deploy API" in the AWS console, is not recorded.
 
 #### 8. Integration tests

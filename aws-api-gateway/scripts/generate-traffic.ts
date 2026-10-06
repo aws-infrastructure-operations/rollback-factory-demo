@@ -35,9 +35,16 @@ run(async () => {
 
   if (values.preflight) {
     const target = deploymentTarget(config, outputs);
-    const [baseline] = await listDeployments(target.table, target.apiName, 1);
-    if (!baseline) throw new Error(`No deployment recorded for ${config.apiName} - deploy main first, nothing to roll back to`);
-    log(`Rollback target available: ${baseline.deployedAt} (${baseline.source}, deployment ${baseline.deploymentId})`);
+    // Same rule as the rollback Lambda: only a verified, never rolled back deployment is a target.
+    const records = await listDeployments(target.table, target.apiName, 20);
+    const baseline = records.find((r) => r.verifiedAt && !r.rolledBackAt);
+    if (!baseline) {
+      throw new Error(
+        `No verified deployment of ${config.apiName} - deploy main through CI (integration tests mark it verified) first, `
+        + 'otherwise there is nothing safe to roll back to',
+      );
+    }
+    log(`Rollback target available: ${baseline.deployedAt} (${baseline.source}, deployment ${baseline.deploymentId}, verified ${baseline.verifiedAt})`);
     return;
   }
 

@@ -26,13 +26,15 @@ export function parseAlarms(event: SNSEvent): AlarmNotification[] {
 /**
  * Decides whether to roll back, given the deployment history (newest first).
  * Only the latest deployment is ever rolled back, and only if it is recent:
- * an alarm long after a deploy is unlikely to be caused by it.
+ * an alarm long after a deploy is unlikely to be caused by it. The target is the
+ * newest earlier deployment that passed integration tests (verifiedAt) and was
+ * never rolled back itself - never just "the previous one", which may be broken.
  */
 export function planRollback(records: DeploymentRecord[], now: Date, windowMinutes: number): RollbackPlan {
   const [latest] = records;
   if (!latest) return { action: 'skip', reason: 'no deployments recorded' };
-  if (latest.source === 'rollback') {
-    return { action: 'skip', reason: `latest deployment (${latest.deployedAt}) is already a rollback` };
+  if (latest.source === 'rollback' || latest.source === 'restore') {
+    return { action: 'skip', reason: `latest deployment (${latest.deployedAt}) is already a ${latest.source}` };
   }
   if (latest.rolledBackAt) {
     return { action: 'skip', reason: `latest deployment was already rolled back at ${latest.rolledBackAt}` };
@@ -46,10 +48,21 @@ export function planRollback(records: DeploymentRecord[], now: Date, windowMinut
     };
   }
 
-  const to = records.find((r) => r.deployedAt < latest.deployedAt && r.deploymentId !== latest.deploymentId);
-  if (!to) return { action: 'skip', reason: 'no earlier deployment to roll back to' };
+  const to = records.find((r) => r.deployedAt < latest.deployedAt
+    && r.deploymentId !== latest.deploymentId
+    && r.verifiedAt
+    && !r.rolledBackAt);
+  if (!to) return { action: 'skip', reason: 'no earlier verified deployment to roll back to' };
   return { action: 'rollback', from: latest, to };
 }
+
+/** Manual restore request, sent by scripts/restore-deployment.ts instead of an SNS event. */
+export interface RestoreRequest {
+  restore: { deployedAt: string; reason?: string; actor?: string };
+}
+
+export const isRestoreRequest = (event: unknown): event is RestoreRequest =>
+  typeof (event as RestoreRequest)?.restore?.deployedAt === 'string';
 
 /** Lambda function ARNs (incl. version qualifier) used by the spec's integrations. */
 export function lambdaArnsFromSpec(spec: any): string[] {

@@ -129,10 +129,20 @@ The 4 intentional 4xx calls do add to the API's 4XXError metric, so keep them fe
 Minutes with fewer requests than the minimum are ignored, so a handful of intentional 401/400 responses (such as the integration tests) can't trigger a rollback.
 
 **Rollback Lambda.** When an alarm enters `ALARM`, the Lambda:
-1. loads the deployment history and **only acts if the latest deployment is younger than the rollback window** (default 30 min), is not itself a rollback, and has an earlier deployment to go back to
-2. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once
-3. downloads the previous deployment's OpenAPI spec from S3, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
-4. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export
+1. loads the deployment history and **only acts if the latest deployment is younger than the rollback window** (default 30 min) and is not itself a rollback or restore
+2. picks the target: the newest earlier deployment that is **verified** (it passed the integration tests, `verifiedAt`) and was never rolled back. It never just takes "the previous deployment", which may be untested or broken. No verified target means no rollback.
+3. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once
+4. downloads the target's OpenAPI spec from S3, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
+5. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
+
+**Verified deployments.** CI runs `npm run deployment:verify -- --env <env>` after the integration tests pass. It marks the deployment the stage serves as verified, after checking that it is the latest record.
+A deployment made by hand only becomes a rollback target after you run the integration tests and then `deployment:verify`.
+
+**Restoring a chosen deployment.** If the live API is in a bad state the automatic rollback won't fix (for example, no verified target), restore any recorded deployment:
+- GitHub: Actions → `api-gateway-restore` → Run workflow with the environment and the `deployed_at` value (from `npm run deployment:list` or a deploy run's job summary). The workflow restores that deployment, runs the integration tests and marks it verified if they pass.
+- Locally: `npm run deployment:restore -- --env dev --to <deployedAt> [--reason "..."]`, then the integration tests and `deployment:verify`.
+
+The rollback Lambda does the restore (`source=restore` in the history). A restored deployment counts as unverified until the tests pass again.
 
 **Code rollback.** The API integrates with a *published Lambda version* instead of `$LATEST`, so every exported spec pins the exact backend code it ran with. Re-importing an old spec therefore rolls back the Lambda code too. Old versions are retained, and the rollback Lambda gives API Gateway permission again to invoke the version it restores.
 
@@ -208,6 +218,7 @@ main / manual ─► test ─► deploy dev ────────────
                          ├ cdk deploy
                          ├ record deployment (spec -> S3, record -> DynamoDB)
                          ├ integration tests ── fail ─► rollback:trigger, job fails
+                         ├ mark deployment verified (only verified deployments are rollback targets)
                          └ deployment history -> job summary
 ```
 
