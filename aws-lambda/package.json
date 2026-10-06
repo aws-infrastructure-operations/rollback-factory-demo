@@ -1,0 +1,38 @@
+{
+  "name": "aws-lambda",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "app": "bin/app.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "cdk": "cdk",
+    "synth:dev": "cdk synth -c env=dev",
+    "synth:prod": "cdk synth -c env=prod",
+    "test:integration": "tsx --test --test-concurrency=1 integration/*.test.ts",
+    "live:context": "tsx scripts/live-context.ts",
+    "deployment:promote": "tsx scripts/promote.ts",
+    "deployment:sync": "tsx scripts/sync.ts",
+    "versions:list": "tsx scripts/list-versions.ts"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.272.0",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cloudformation": "^3.1146.0",
+    "@aws-sdk/client-cloudwatch": "^3.1146.0",
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
+    "@aws-sdk/client-lambda": "^3.1146.0",
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/client-sts": "^3.1146.0",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^26.6.4",
+    "aws-cdk": "^2.1144.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
