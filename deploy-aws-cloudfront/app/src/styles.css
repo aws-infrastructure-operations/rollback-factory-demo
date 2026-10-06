@@ -191,3 +191,14 @@ tr.clickable:hover:not(.selected) { background: #f7f9fc; }
 .config-list dt { color: var(--muted); }
 .config-list dd { margin: 0; overflow-wrap: anywhere; }
 .stacked { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+
+/* --- Lambda monitoring ------------------------------------------------------------------------------ */
+.metrics-range { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.metric-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 0; }
+.metric-tiles > div { padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.metric-tiles dt { color: var(--muted); font-size: 12px; }
+.metric-tiles dd { margin: 4px 0 0; font-size: 20px; font-weight: 600; }
+.metric-tiles .bad dd { color: #b42318; }
+/* narrow detail tables: tags and dates may take two lines */
+.stacked .tags { flex-wrap: wrap; }
+td.date-wrap { white-space: normal; min-width: 90px; }

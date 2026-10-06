@@ -44,8 +44,11 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   [`lambda/dashboard-api`](lambda/dashboard-api)) behind a function URL with IAM auth, which only these two
   distributions can call (Origin Access Control). Never cached. It reads, and can only read, the stack region's
   API Gateways: the API list, each API, and its stages and deployments (`apigateway:GET`, one API id per
-  path, so no stage exports). It has no sign-in: anyone with the site URL can see the API names, stages and
-  deployments.
+  path, so no stage exports). It also lists the region's Lambda functions
+  with their aliases and versions (`lambda:ListFunctions`, `ListAliases`, `ListVersionsByFunction`) and reads
+  their last 24 hours of metrics (`cloudwatch:GetMetricData`). Function configurations come with environment
+  variables: the reader copies named fields only, so they never reach the page. It has no sign-in: anyone
+  with the site URL can see the API and function names, stages, versions and settings.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -63,8 +66,13 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   (and the selected API). Next to it, the selected API's **stages** (and the deployment each serves), its latest
   **deployments** and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`.
   The Rollback buttons are disabled until the dashboard has sign-in.
-- **Lambda Functions** and **CloudFront Distributions** are still **sample data**
-  ([`app/src/mock-data.ts`](app/src/mock-data.ts)); their tabs and rollback buttons are visual only.
+- **Lambda Functions** is live too: the functions with their runtime, aliases and last change, from
+  `GET /api/lambda-functions`. Next to it, the selected function's published **versions** (and the aliases
+  serving each), its **aliases** (with weights), its **configuration**, and **monitoring**: invocations,
+  errors, throttles, durations and concurrency over 24 hours, fetched only when that tab opens. Rollback
+  is disabled there too.
+- **CloudFront Distributions** is still **sample data**
+  ([`app/src/mock-data.ts`](app/src/mock-data.ts)); its tabs and rollback buttons are visual only.
 
 The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"

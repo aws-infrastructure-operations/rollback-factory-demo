@@ -77,6 +77,21 @@ export class FrontendUserStack extends cdk.Stack {
         (resource) => `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::${resource}`,
       ),
     }));
+    // Lambda: list the functions (no resource-level permission), then each one's aliases and
+    // versions. Not GetFunction: no code download links, and environment variables are never sent on.
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:ListFunctions'],
+      resources: ['*'],
+    }));
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:ListAliases', 'lambda:ListVersionsByFunction'],
+      resources: [`arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`],
+    }));
+    // CloudWatch: the Monitoring tab's metrics (GetMetricData has no resource-level permission)
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricData'],
+      resources: ['*'],
+    }));
     const dashboardApiUrl = this.dashboardApi.addFunctionUrl({ authType: lambda.FunctionUrlAuthType.AWS_IAM });
 
     // --- Distributions ------------------------------------------------------------

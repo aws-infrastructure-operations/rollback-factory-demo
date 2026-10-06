@@ -7,9 +7,16 @@ import {
   ApiGatewayV2Client, GetApiCommand, GetApisCommand, GetDeploymentsCommand as GetV2DeploymentsCommand,
   GetStagesCommand as GetV2StagesCommand,
 } from '@aws-sdk/client-apigatewayv2';
+import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
+import {
+  LambdaClient, ListAliasesCommand, ListFunctionsCommand, ListVersionsByFunctionCommand,
+} from '@aws-sdk/client-lambda';
 import { getApiGatewayDetails } from '../lambda/dashboard-api/api-gateway-details.js';
 import { listApiGateways } from '../lambda/dashboard-api/api-gateways.js';
 import { handler } from '../lambda/dashboard-api/handler.js';
+import {
+  getLambdaFunctionDetails, getLambdaFunctionMetrics, lambdaDate, listLambdaFunctions,
+} from '../lambda/dashboard-api/lambda-functions.js';
 
 const date = (iso: string) => new Date(iso);
 
@@ -153,4 +160,105 @@ test('rejects malformed ids and types before calling AWS', async () => {
   assert.equal((await handler(query('/api/api-gateways/abc', 'type=REST'))).statusCode, 400);
   assert.equal((await handler(query('/api/api-gateways/r1xyz98uvw', 'type=SOAP'))).statusCode, 400);
   assert.equal((await handler(query('/api/api-gateways/r1xyz98uvw/stages', 'type=REST'))).statusCode, 404);
+});
+
+// --- Lambda functions --------------------------------------------------------------------------
+
+const fakeLambda = (functions: Record<string, { versions: any[]; aliases: any[] }>) => ({
+  send: async (command: any) => {
+    const fn = functions[command.input.FunctionName];
+    if (command instanceof ListFunctionsCommand) {
+      return {
+        Functions: Object.entries(functions).map(([name, f]) => ({
+          ...f.versions.find((v) => v.Version === '$LATEST'), FunctionName: name, Environment: { Variables: { SECRET: 'x' } },
+        })),
+      };
+    }
+    if (!fn) throw Object.assign(new Error('Function not found'), { name: 'ResourceNotFoundException' });
+    if (command instanceof ListAliasesCommand) return { Aliases: fn.aliases };
+    if (command instanceof ListVersionsByFunctionCommand) return { Versions: fn.versions };
+    throw new Error(`unexpected ${command.constructor.name}`);
+  },
+}) as unknown as LambdaClient;
+
+const serviceLambda = {
+  versions: [
+    {
+      Version: '$LATEST', FunctionArn: 'arn:aws:lambda:eu-central-1:123:function:service-lambda-dev:$LATEST',
+      Runtime: 'nodejs24.x', Handler: 'index.handler', MemorySize: 256, Timeout: 10, Architectures: ['arm64'],
+      LastModified: '2026-10-06T13:21:00.000+0000', Environment: { Variables: { SECRET: 'never sent' } },
+    },
+    { Version: '1', Description: 'commit abc1234', LastModified: '2026-10-05T10:00:00.000+0000' },
+    { Version: '10', Description: 'commit def5678', LastModified: '2026-10-06T13:00:00.000+0000' },
+    { Version: '2', LastModified: '2026-10-05T12:00:00.000+0000' },
+  ],
+  aliases: [
+    { Name: 'live', FunctionVersion: '2', RoutingConfig: { AdditionalVersionWeights: { 10: 0.1 } } },
+    { Name: 'integration', FunctionVersion: '10' },
+  ],
+};
+
+test('lists Lambda functions with their aliases, never their environment', async () => {
+  const functions = await listLambdaFunctions(fakeLambda({ 'service-lambda-dev': serviceLambda }));
+  assert.deepEqual(functions, [{
+    name: 'service-lambda-dev',
+    arn: 'arn:aws:lambda:eu-central-1:123:function:service-lambda-dev:$LATEST',
+    runtime: 'nodejs24.x',
+    aliases: ['integration', 'live'],
+    lastModified: '2026-10-06T13:21:00.000Z',
+  }]);
+});
+
+test('details of a function: versions newest first with the aliases serving them, aliases, configuration', async () => {
+  const details = await getLambdaFunctionDetails(fakeLambda({ 'service-lambda-dev': serviceLambda }), 'service-lambda-dev');
+  assert.equal(details!.arn, 'arn:aws:lambda:eu-central-1:123:function:service-lambda-dev');
+  assert.deepEqual(details!.versions.map((v) => [v.version, v.aliases]), [
+    ['10', ['integration', 'live']], // live sends 10% to version 10
+    ['2', ['live']],
+    ['1', []],
+  ]);
+  assert.deepEqual(details!.aliases[1], { name: 'live', version: '2', additionalVersions: { 10: 0.1 } });
+  const config = Object.fromEntries(details!.configuration.map((c) => [c.label, c.value]));
+  assert.equal(config.Memory, '256 MB');
+  assert.equal(config.Architecture, 'arm64');
+  assert.doesNotMatch(JSON.stringify(details), /never sent|SECRET/);
+});
+
+test('details of a function that does not exist are undefined', async () => {
+  assert.equal(await getLambdaFunctionDetails(fakeLambda({}), 'missing'), undefined);
+});
+
+test('reads 24 hours of metrics for the function', async () => {
+  let input: any;
+  const cloudwatch = {
+    send: async (command: any) => {
+      input = command.input;
+      return { MetricDataResults: [
+        { Id: 'invocations', Values: [100, 20] },
+        { Id: 'errors', Values: [3] },
+        { Id: 'throttles', Values: [] },
+        { Id: 'avgDuration', Values: [40.4] },
+        { Id: 'maxDuration', Values: [900.6] },
+        { Id: 'maxConcurrency', Values: [4] },
+      ] };
+    },
+  } as unknown as CloudWatchClient;
+  const metrics = await getLambdaFunctionMetrics(cloudwatch, 'service-lambda-dev', new Date('2026-10-07T12:00:00Z'));
+  assert.deepEqual(metrics, {
+    from: '2026-10-06T12:00:00.000Z', to: '2026-10-07T12:00:00.000Z',
+    invocations: 120, errors: 3, throttles: 0, averageDuration: 40, maxDuration: 901, maxConcurrency: 4,
+  });
+  assert.equal(input.MetricDataQueries[0].MetricStat.Metric.Dimensions[0].Value, 'service-lambda-dev');
+});
+
+test('parses Lambda dates', () => {
+  assert.equal(lambdaDate('2026-10-06T13:21:00.000+0000'), '2026-10-06T13:21:00.000Z');
+  assert.equal(lambdaDate('2026-10-06T15:21:00.000+0200'), '2026-10-06T13:21:00.000Z');
+  assert.equal(lambdaDate(undefined), undefined);
+});
+
+test('rejects function names that are ARNs or have qualifiers', async () => {
+  const get = (rawPath: string) => handler({ rawPath, requestContext: { http: { method: 'GET' } } });
+  assert.equal((await get('/api/lambda-functions/arn:aws:lambda:x')).statusCode, 400);
+  assert.equal((await get('/api/lambda-functions/fn/versions')).statusCode, 404);
 });

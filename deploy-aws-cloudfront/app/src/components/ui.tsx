@@ -1,6 +1,5 @@
 // Building blocks shared by the service sections: tables, tags, buttons.
 import type { ReactNode } from 'react';
-import type { Env } from '../mock-data.js';
 import { Icon } from './Icon.js';
 
 export interface Column<T> {
@@ -47,10 +46,6 @@ export function DataTable<T>({ columns, rows, rowKey, selectedKey, onSelect, mes
     </div>
   );
 }
-
-export const EnvTags = ({ envs }: { envs: Env[] }) => (
-  <span className="tags">{envs.map((e) => <span key={e} className={`tag tag-${e}`}>{e}</span>)}</span>
-);
 
 /** Stage names are free text: the usual ones get the env colors, any other is neutral. */
 const stageTag = (stage: string) =>

@@ -1,44 +1,12 @@
 // API Gateways: the region's APIs from the dashboard API, with search and refresh, and the
 // selected API's stages, deployments and configuration next to them.
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   fetchApiGatewayDetails, fetchApiGateways, type ApiGateway, type ApiGatewayDetails, type ApiGatewayList,
 } from '../api.js';
+import { DateCell, loadState, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, RollbackButton, StageTags, type TableMessage } from './ui.js';
-
-interface Loaded<T> {
-  /** the last data that loaded; kept on screen while refreshing */
-  data?: T;
-  loading: boolean;
-  failed: boolean;
-}
-
-/** Loads with `load` whenever `key` changes; data of another key is dropped, not shown stale. */
-function useLoad<T>(key: string | undefined, load: (signal: AbortSignal) => Promise<T>): Loaded<T> {
-  const [loaded, setLoaded] = useState<Loaded<T> & { key?: string }>({ loading: true, failed: false });
-  useEffect(() => {
-    if (key === undefined) return;
-    const controller = new AbortController();
-    setLoaded((current) => ({ ...(current.key?.split('#')[0] === key.split('#')[0] ? current : {}), key, loading: true, failed: false }));
-    load(controller.signal).then(
-      (data) => setLoaded({ key, data, loading: false, failed: false }),
-      (err) => {
-        if (controller.signal.aborted) return;
-        console.warn(`Could not load ${key}`, err);
-        setLoaded((current) => ({ ...current, loading: false, failed: true }));
-      },
-    );
-    return () => controller.abort();
-    // `key` identifies what `load` loads, so it is the only dependency
-  }, [key]);
-  return loaded;
-}
-
-const formatDate = new Intl.DateTimeFormat('en-US', {
-  month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
-const DateCell = ({ iso }: { iso?: string }) => (iso ? <time dateTime={iso}>{formatDate.format(new Date(iso))}</time> : <>—</>);
 
 const matches = (api: ApiGateway, query: string) =>
   [api.name, api.id, api.type, ...api.stages].some((value) => value.toLowerCase().includes(query));
@@ -72,7 +40,7 @@ export function ApiGatewaySection() {
     <div className="panel-row">
       <ListPanel
         id="api-gateways" icon="apiGateway" tint="tint-api" title="API Gateways"
-        state={list.loading ? 'loading' : list.failed ? 'error' : 'ready'}
+        state={loadState(list)}
         count={list.data && (shown.length === apis.length ? `${apis.length}` : `${shown.length} of ${apis.length}`)}
         description={`The REST, HTTP and WebSocket APIs${list.data ? ` in ${list.data.region}` : ''}, with their stages and latest deployment.`}
         searchPlaceholder="Search APIs..." search={{ value: query, onChange: setQuery }}
@@ -122,7 +90,7 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
       badge={api.stages.length ? 'Deployed' : undefined}
       subtitle={<>{api.id} &nbsp; {typeLabel[api.type]}</>}
       tabs={['Stages', 'Deployments', 'Configuration']}
-      state={details.loading ? 'loading' : details.failed ? 'error' : 'ready'}
+      state={loadState(details)}
     >
       {(tab) => {
         if (tab === 'Stages') {
