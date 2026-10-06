@@ -64,6 +64,8 @@ export interface ConfigOverrides {
 export const STAGE_NAME = 'v1';
 export const INTEGRATION_STAGE_NAME = 'integration';
 export const PROJECT_NAME = 'rollback-factory-demo';
+/** The REST API's name without the environment: api-user-<env> is the API, api-user names its alarms. */
+export const API_NAME = 'api-user';
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
   if (!ENV_NAMES.includes(envName as EnvName)) {
@@ -78,12 +80,12 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
 
   return {
     envName: envName as EnvName,
-    apiName: `api-user-${envName}`,
+    apiName: `${API_NAME}-${envName}`,
     stackName: `${PROJECT_NAME}-${envName}`,
     resourceName,
-    alarmNames: { error4xx: resourceName('4xx-rate'), error5xx: resourceName('5xx-rate') },
+    alarmNames: { error4xx: resourceName(`${API_NAME}-4xx-rate`), error5xx: resourceName(`${API_NAME}-5xx-rate`) },
     lambdaAlarmNames: { error4xx: resourceName('lambda-4xx-rate'), error5xx: resourceName('lambda-5xx-rate') },
-    metricsNamespace: `${PROJECT_NAME}/api-user-${envName}`,
+    metricsNamespace: `${PROJECT_NAME}/${API_NAME}-${envName}`,
     stageName: STAGE_NAME,
     integrationStageName: INTEGRATION_STAGE_NAME,
     live: overrides.liveDeploymentId || overrides.liveLambdaVersion

@@ -14,7 +14,7 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | API stages | `v1` (clients) and `integration` (CI tests each deploy here before it is promoted to `v1`) |
 | S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
 | DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
-| CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-4xx-rate-<env>`, `rollback-factory-demo-5xx-rate-<env>` |
+| CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-api-user-4xx-rate-<env>`, `rollback-factory-demo-api-user-5xx-rate-<env>` |
 | SNS notification topic | `rollback-factory-demo-notifications-<env>` |
 | Rollback Lambda | `rollback-factory-demo-rollback-<env>` |
 | Lambda 4xx / 5xx rate alarms (block the API rollback) | `rollback-factory-demo-lambda-4xx-rate-<env>`, `rollback-factory-demo-lambda-5xx-rate-<env>` |

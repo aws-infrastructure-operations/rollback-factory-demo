@@ -94,7 +94,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 
 #### 9. Alarms + SNS
 
-- **Alarms:** `rollback-factory-demo-4xx-rate-<env>` and `rollback-factory-demo-5xx-rate-<env>` on stage `v1`.
+- **Alarms:** `rollback-factory-demo-api-user-4xx-rate-<env>` and `rollback-factory-demo-api-user-5xx-rate-<env>` on stage `v1`.
   - Each fires on the error *rate*: 4xx above 25 %, or 5xx above 5 %, in 2 of 3 one-minute periods.
   - Minutes with too few requests are ignored, so a few intentional 4xx responses (such as the integration tests) can't trigger a rollback.
 - **Optional SNS:** alarm actions go to the topic `rollback-factory-demo-notifications-<env>`.
