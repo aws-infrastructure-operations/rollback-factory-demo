@@ -81,7 +81,7 @@ jobs:
     needs: deploy-dev
     uses: ./.github/workflows/api-gateway-deploy.yml
     with:
-      environment: dev
+      environment: testing
       chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
     secrets: inherit
   
@@ -90,7 +90,7 @@ jobs:
     needs: deploy-testing
     uses: ./.github/workflows/api-gateway-deploy.yml
     with:
-      environment: dev
+      environment: staging
       chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
     secrets: inherit
 
