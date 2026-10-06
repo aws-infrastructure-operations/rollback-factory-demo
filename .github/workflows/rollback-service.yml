@@ -68,25 +68,9 @@ jobs:
       environment: dev
     secrets: inherit
 
-  deploy-testing:
-    if: github.event_name != 'pull_request'
-    needs: deploy-dev
-    uses: ./.github/workflows/rollback-service-deploy.yml
-    with:
-      environment: testing
-    secrets: inherit
-
-  deploy-staging:
-    if: github.event_name != 'pull_request'
-    needs: deploy-testing
-    uses: ./.github/workflows/rollback-service-deploy.yml
-    with:
-      environment: staging
-    secrets: inherit
-
   deploy-prod:
     if: github.event_name == 'push' || inputs.promote_to_prod
-    needs: deploy-staging
+    needs: deploy-dev
     uses: ./.github/workflows/rollback-service-deploy.yml
     with:
       environment: prod
