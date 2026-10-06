@@ -85,16 +85,46 @@ describe('stack', () => {
     });
   });
 
-  test('integrates the API with the live alias of the handler', () => {
-    const [aliasId, alias] = Object.entries(t.findResources('AWS::Lambda::Alias'))[0] as [string, any];
-    assert.equal(alias.Properties.Name, 'live');
+  const aliases = (template: Template): Record<string, any> => Object.fromEntries(
+    Object.entries(template.findResources('AWS::Lambda::Alias')).map(([id, r]: [string, any]) => [r.Properties.Name, { id, ...r.Properties }]),
+  );
+  const stage = (template: Template, name: string) =>
+    (Object.values(template.findResources('AWS::ApiGateway::Stage')) as any[]).find((r) => r.Properties.StageName === name)!.Properties;
+
+  test('each stage invokes its own alias of the handler (stage variable lambdaAlias)', () => {
     const uris = Object.values(t.findResources('AWS::ApiGateway::Method'))
       .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS') // CORS preflights are mock integrations
       .map((m: any) => JSON.stringify(m.Properties.Integration.Uri));
     assert.equal(uris.length, 4);
-    for (const uri of uris) assert.ok(uri.includes(`"Ref":"${aliasId}"`), uri);
-    // specs recorded before the alias reference versions, keep them
+    for (const uri of uris) assert.ok(uri.includes(':${stageVariables.lambdaAlias}/invocations'), uri);
+
+    assert.deepEqual(Object.keys(aliases(t)).sort(), ['integration', 'live']);
+    assert.deepEqual(stage(t, 'v1').Variables, { lambdaAlias: 'live' });
+    assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration' });
+    for (const { id } of Object.values(aliases(t))) {
+      t.hasResourceProperties('AWS::Lambda::Permission', {
+        FunctionName: { Ref: id },
+        Principal: 'apigateway.amazonaws.com',
+      });
+    }
+    // v1 may serve an older deployment than the integration stage, and old specs reference versions
+    t.hasResource('AWS::ApiGateway::Deployment', { DeletionPolicy: 'Retain' });
     t.hasResource('AWS::Lambda::Version', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+  });
+
+  test('without live context, a deploy updates v1 and both aliases directly', () => {
+    const { integration, live } = aliases(t);
+    assert.deepEqual(live.FunctionVersion, integration.FunctionVersion);
+    assert.deepEqual(stage(t, 'v1').DeploymentId, stage(t, 'integration').DeploymentId);
+  });
+
+  test('with live context (CI), a deploy leaves v1 and the live alias where they are', () => {
+    const pinned = synth('dev', { liveDeploymentId: 'dep123', liveLambdaVersion: '7' });
+    assert.equal(stage(pinned, 'v1').DeploymentId, 'dep123');
+    assert.equal(aliases(pinned).live.FunctionVersion, '7');
+    // the integration stage and alias still get the new deployment and version
+    assert.ok(JSON.stringify(stage(pinned, 'integration').DeploymentId).includes('ApiDeployment'));
+    assert.ok(JSON.stringify(aliases(pinned).integration.FunctionVersion).includes('ApiHandlerCurrentVersion'));
   });
 
   test('pairs each API alarm with an alarm on the errors the Lambda produced', () => {
@@ -136,7 +166,7 @@ describe('stack', () => {
         lambdaMetric: 'Lambda5XXError',
       },
     ]);
-    assert.ok(vars.HANDLER_ALIAS_ARN, 'rollback Lambda needs the alias to point restored specs at');
+    assert.ok(vars.HANDLER_FUNCTION_ARN, 'rollback Lambda needs the handler to point restored specs at its stage alias');
   });
 
   test('chaosFailureRate reaches the API handler', () => {

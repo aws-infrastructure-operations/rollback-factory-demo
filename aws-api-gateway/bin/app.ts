@@ -10,6 +10,8 @@ const config = getConfig(ctx('env') ?? process.env.API_ENV ?? 'dev', {
   alarmEmail: ctx('alarmEmail'),
   rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
   chaosFailureRate: ctx('chaosFailureRate'),
+  liveDeploymentId: ctx('liveDeploymentId'),
+  liveLambdaVersion: ctx('liveLambdaVersion'),
 });
 
 new ApiUserStack(app, config.stackName, {

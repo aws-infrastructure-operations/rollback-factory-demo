@@ -6,6 +6,8 @@ export interface StackOutputs {
   ApiId: string;
   ApiUrl: string;
   StageName: string;
+  IntegrationApiUrl: string;
+  IntegrationStageName: string;
   UserPoolId: string;
   UserPoolClientId: string;
   SpecBucketName: string;
@@ -48,4 +50,5 @@ export const deploymentTarget = (config: EnvConfig, outputs: StackOutputs): Depl
   stageName: outputs.StageName,
   specBucket: outputs.SpecBucketName,
   table: outputs.DeploymentsTableName,
+  handlerFunction: config.resourceName('handler'),
 });

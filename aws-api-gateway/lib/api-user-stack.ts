@@ -80,12 +80,21 @@ export class ApiUserStack extends cdk.Stack {
       // Keep every published version: specs recorded before the "live" alias reference them.
       currentVersionOptions: { removalPolicy: cdk.RemovalPolicy.RETAIN },
     });
-    // The API invokes this alias, which every `cdk deploy` moves to the newly published
-    // version. An API rollback re-imports an old spec but keeps the alias, so it never
-    // rolls the code back (see pointToAlias in lambda/rollback/plan.ts).
+    // Each stage invokes its own alias, named by its `lambdaAlias` stage variable:
+    // - `integration` moves to the newly published version on every `cdk deploy`
+    // - `live` (stage v1) stays where it is when CI passes config.live; scripts/promote-deployment.ts
+    //   moves it once the integration tests passed. Without config.live it moves on deploy too.
+    // An API rollback re-imports an old spec but keeps the alias, so it never rolls the code
+    // back (see pointToAlias in lambda/rollback/plan.ts).
+    const integrationAlias = new lambda.Alias(this, 'ApiHandlerIntegration', {
+      aliasName: 'integration',
+      version: handler.currentVersion,
+    });
     const handlerAlias = new lambda.Alias(this, 'ApiHandlerLive', {
       aliasName: 'live',
-      version: handler.currentVersion,
+      version: config.live?.lambdaVersion
+        ? lambda.Version.fromVersionAttributes(this, 'LiveVersion', { lambda: handler, version: config.live.lambdaVersion })
+        : handler.currentVersion,
     });
 
     // --- Access logs ----------------------------------------------------------
@@ -128,8 +137,12 @@ export class ApiUserStack extends cdk.Stack {
       // per account and region, shared by all APIs, so keep it if this stack is deleted.
       cloudWatchRole: true,
       cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Stage v1 may still serve an older deployment while the integration stage tests the
+      // new one, so CloudFormation must not delete replaced deployments.
+      retainDeployments: true,
       deployOptions: {
         stageName: config.stageName,
+        variables: { lambdaAlias: handlerAlias.aliasName },
         metricsEnabled: true,
         throttlingRateLimit: 50,
         throttlingBurstLimit: 100,
@@ -200,9 +213,14 @@ export class ApiUserStack extends cdk.Stack {
       validateRequestBody: true,
     });
 
-    // Integrate with the "live" alias: the API always runs the latest deployed code,
-    // also after an API rollback.
-    const integration = new apigw.LambdaIntegration(handlerAlias);
+    // Integrate with the stage's alias (stage variable lambdaAlias), so v1 runs the promoted
+    // code and the integration stage the code under test - also after an API rollback.
+    const integration = new apigw.Integration({
+      type: apigw.IntegrationType.AWS_PROXY,
+      integrationHttpMethod: 'POST',
+      uri: `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}:lambda:path/2015-03-31/functions/`
+        + `${handler.functionArn}:\${stageVariables.lambdaAlias}/invocations`,
+    });
     for (const resourceName of ['users', 'messages']) {
       const resource = this.api.root.addResource(resourceName);
       resource.addMethod('GET', integration);
@@ -211,6 +229,27 @@ export class ApiUserStack extends cdk.Stack {
         requestModels: { 'application/json': messageModel },
       });
     }
+    for (const alias of [handlerAlias, integrationAlias]) {
+      alias.addPermission('ApiGatewayInvoke', {
+        principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+        sourceArn: this.api.arnForExecuteApi('*', '/*', '*'),
+      });
+    }
+
+    // CI keeps stage v1 on the deployment it serves and deploys to the integration stage;
+    // scripts/promote-deployment.ts moves v1 once the integration tests passed.
+    if (config.live?.deploymentId) {
+      (this.api.deploymentStage.node.defaultChild as apigw.CfnStage).deploymentId = config.live.deploymentId;
+    }
+    // No access logs / detailed metrics: test traffic must not count toward v1's alarms
+    // (the API metrics are per stage anyway).
+    const integrationStage = new apigw.Stage(this, 'IntegrationStage', {
+      deployment: this.api.latestDeployment!,
+      stageName: config.integrationStageName,
+      variables: { lambdaAlias: integrationAlias.aliasName },
+      throttlingRateLimit: 10,
+      throttlingBurstLimit: 20,
+    });
 
     // --- Deployment tracking ----------------------------------------------------
     // One OpenAPI export per deployment, stored under <apiName>/<timestamp>/ (see lambda/shared/deployments.ts).
@@ -365,7 +404,6 @@ export class ApiUserStack extends cdk.Stack {
         METRICS_NAMESPACE: config.metricsNamespace,
         EVALUATION_MINUTES: String(config.alarms.evaluationPeriods),
         HANDLER_FUNCTION_ARN: handler.functionArn,
-        HANDLER_ALIAS_ARN: handlerAlias.functionArn,
       },
       logGroup: new logs.LogGroup(this, 'RollbackLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
@@ -393,8 +431,9 @@ export class ApiUserStack extends cdk.Stack {
       ],
     }));
     this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // make sure API Gateway may invoke the alias the restored spec points to
-      actions: ['lambda:AddPermission'],
+      // AddPermission: make sure API Gateway may invoke other functions a restored spec points to
+      // GetAlias: record the version the live alias serves (lambdaVersion)
+      actions: ['lambda:AddPermission', 'lambda:GetAlias'],
       resources: [handler.functionArn, `${handler.functionArn}:*`],
     }));
     this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -413,6 +452,8 @@ export class ApiUserStack extends cdk.Stack {
       new cdk.CfnOutput(this, name, { value, exportName: config.resourceName(name) });
     out('ApiId', this.api.restApiId);
     out('ApiUrl', this.api.url);
+    out('IntegrationStageName', integrationStage.stageName);
+    out('IntegrationApiUrl', integrationStage.urlForPath());
     out('StageName', config.stageName);
     out('UserPoolId', this.userPool.userPoolId);
     out('UserPoolClientId', this.userPoolClient.userPoolClientId);

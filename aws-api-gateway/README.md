@@ -10,7 +10,8 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | CloudFormation stack | `rollback-factory-demo-<env>` |
 | Cognito user pool + app client | `rollback-factory-demo-users-<env>` / `rollback-factory-demo-client-<env>` |
 | Cognito authorizer | `rollback-factory-demo-cognito-<env>` (`Authorization: <ID token>`) |
-| Lambda backend (Node 24, arm64) | `rollback-factory-demo-handler-<env>`, invoked through its `live` alias |
+| Lambda backend (Node 24, arm64) | `rollback-factory-demo-handler-<env>`, aliases `live` (stage `v1`) and `integration` (stage `integration`) |
+| API stages | `v1` (clients) and `integration` (CI tests each deploy here before it is promoted to `v1`) |
 | S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
 | DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
 | CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-4xx-rate-<env>`, `rollback-factory-demo-5xx-rate-<env>` |
@@ -134,7 +135,7 @@ Minutes with fewer requests than the minimum are ignored, so a handful of intent
 2. checks that the errors are **not the backend Lambda's fault** (see below). An API rollback can't fix those, so it is skipped
 3. picks the target: the newest earlier deployment that is **verified** (it passed the integration tests, `verifiedAt`) and was never rolled back. It never just takes "the previous deployment", which may be untested or broken. No verified target means no rollback.
 4. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once, and marks it unstable (`stable=false`, no `stableFor`)
-5. downloads the target's OpenAPI spec from S3, points its integrations at the handler's `live` alias, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
+5. downloads the target's OpenAPI spec from S3, points its integrations at the stage's alias (`live` for `v1`), re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 6. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export. It inherits the target's `verifiedAt`, since it serves the same spec.
 
 **Current and stable deployments.** The record the stage serves has `current=true`. Recording a new deployment (deploy, rollback or restore) moves `current` to it and, in the same transaction, marks the previous one `stable=true` with `stableFor` = seconds between its deployment and the next one. A deployment an alarm rolled back is instead left `stable=false` without `stableFor`. `npm run deployment:list` shows both.
@@ -148,7 +149,7 @@ A deployment made by hand only becomes a rollback target after you run the integ
 
 The rollback Lambda does the restore (`source=restore` in the history). A restored deployment counts as unverified until the tests pass again.
 
-**API rollbacks keep the latest code.** The API invokes the handler through its `live` alias, which every `cdk deploy` moves to the newly published version. A rollback or restore only brings back the API config (routes, authorizer, validators, integrations). Before re-importing a spec, the rollback Lambda points its integrations at the alias, including specs recorded before the alias existed, which reference a fixed version.
+**API rollbacks keep the latest code.** Each stage invokes the handler through the alias its `lambdaAlias` stage variable names: `v1` → `live`, `integration` → `integration` (see [CI/CD](#cicd-github-actions) for how they move). A rollback or restore only brings back the API config (routes, authorizer, validators, integrations). Before re-importing a spec, the rollback Lambda points its integrations at the stage's alias, including specs recorded with a fixed version or alias.
 
 **Is the Lambda at fault?** Each API alarm has a paired Lambda alarm with the same threshold. It counts only the 4xx / 5xx of requests that reached the Lambda: the access-log line has a `lambdaRequestId`, so the Lambda returned, threw or timed out. Errors API Gateway produced on its own (authorizer, validator, unknown route, throttling, invoke permissions) are left out. When an API alarm fires, the rollback Lambda skips the rollback if
 - the paired Lambda alarm (`rollback-factory-demo-lambda-<4xx|5xx>-rate-<env>`) is in `ALARM`, or
@@ -175,7 +176,7 @@ API_ENV=dev npm run test:integration                # generate traffic -> 5xx al
 
 The 500s come from the Lambda, so the `lambda-5xx-rate` alarm fires too and the rollback Lambda logs `rollback skipped: errors come from the backend Lambda`. Only an API-side failure (e.g. a broken route or integration config) is rolled back.
 
-To exercise the rollback logic without waiting for real errors, run `npm run rollback:trigger -- --env dev [--alarm 4xx|5xx] [--reason "..."]`. It invokes the rollback Lambda with an ALARM event, the same way SNS does. CI uses it when integration tests fail.
+To exercise the rollback logic without waiting for real errors, run `npm run rollback:trigger -- --env dev [--alarm 4xx|5xx] [--reason "..."]`. It invokes the rollback Lambda with an ALARM event, the same way SNS does.
 
 > After a rollback the live API config differs from what CloudFormation last applied. CloudFormation only updates the API resources whose template changed, so after rolling forward, check that the stage behaves as expected; the integration tests do that in CI.
 
@@ -228,16 +229,21 @@ PR ───────► test (typecheck, unit tests, synth dev+prod, Bruno c
 main / manual ─► test ─► deploy dev ──────────────────────────► deploy prod (same steps)
                          ├ cdk bootstrap
                          ├ create / update Bruno collection (uploaded as artifact)
-                         ├ cdk deploy
+                         ├ live:context (what v1 and the live alias serve now)
+                         ├ cdk deploy -> stage integration + alias integration (v1 untouched)
+                         ├ integration tests on stage integration ── fail ─► failures -> job summary, stop
+                         ├ deployment:promote (v1 -> tested deployment, alias live -> tested version)
                          ├ record deployment (spec -> S3, record -> DynamoDB)
-                         ├ integration tests ── fail ─► rollback:trigger, job fails
                          ├ mark deployment verified (only verified deployments are rollback targets)
                          └ deployment history -> job summary
 ```
 
+**Integration stage.** `cdk deploy` in CI gets `-c liveDeploymentId=... -c liveLambdaVersion=...` from `npm run live:context`, so CloudFormation keeps stage `v1` on the deployment it serves and the `live` alias on its version. Only stage `integration` and the `integration` alias get the new API config and code. The tests run there (`API_STAGE=integration npm run test:integration`). If they pass, `npm run deployment:promote` points `v1` at the tested deployment and `live` at the tested version. If they fail, the job stops: `v1` was never changed, so there is nothing to roll back, and the test output goes to the job summary.
+A `cdk deploy` without that context (e.g. `npm run deploy:dev`, or the break-api demo) updates `v1` and both aliases directly.
+
 Prod is deployed only when every dev step passes, including the integration tests.
 The workflow does not watch the alarms after a deploy; that part is done in AWS. A 4xx or 5xx alarm notifies SNS, which invokes the rollback Lambda (see [Alarms & automatic rollback](#alarms--automatic-rollback)), whether or not a workflow is running.
-A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate=1` to demo a rollback in dev.
+A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate=1`: the integration tests then fail on the integration stage and `v1` stays as it is.
 
 ### Rollback demo (manual workflow)
 
@@ -268,7 +274,8 @@ Each needs:
 The deploy user needs CDK deploy rights (or permission to assume the CDK bootstrap roles), plus everything the scripts use:
 - read the CloudFormation stack outputs
 - Cognito admin user calls (create/delete the throwaway test user)
-- API Gateway `GET` (exports)
+- API Gateway `GET` (exports, stages) and `PATCH` on the stages (promotion)
+- `lambda:GetAlias` and `lambda:UpdateAlias` on the handler (promotion, records)
 - S3 `PutObject` on the spec bucket
 - DynamoDB on the deployments table
 - `lambda:InvokeFunction` on the rollback Lambda

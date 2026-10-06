@@ -99,9 +99,9 @@ export function lambdaFault(pair: AlarmPair, evidence: LambdaEvidence): string |
 }
 
 /**
- * Points every integration of the backend function in a spec at its "live" alias,
- * whatever version or alias the spec was recorded with, so an API rollback keeps
- * the latest code. Integrations of other functions are left alone.
+ * Points every integration of the backend function in a spec at `aliasArn` (the
+ * stage's alias), whatever version or alias the spec was recorded with, so an API
+ * rollback keeps the latest code. Integrations of other functions are left alone.
  */
 export function pointToAlias(spec: any, functionArn: string, aliasArn: string): any {
   const copy = structuredClone(spec);
