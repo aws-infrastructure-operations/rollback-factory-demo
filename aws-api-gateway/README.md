@@ -12,6 +12,9 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | Lambda backend (Node 24, arm64) | `api-user-<env>-handler` |
 | S3 bucket (versioned) for OpenAPI specs | `api-user-<env>-<account>-deployments` |
 | DynamoDB deployments table | `api-user-<env>-deployments` |
+| CloudWatch alarms (4xx rate, 5xx rate) | `api-user-<env>-v1-4xx-rate`, `api-user-<env>-v1-5xx-rate` |
+| SNS alarm topic | `api-user-<env>-alarms` |
+| Rollback Lambda | `api-user-<env>-rollback` |
 
 ### Endpoints
 
@@ -36,7 +39,7 @@ npm run deploy:prod
 
 The first deploy to an account/region needs `npx cdk bootstrap`.
 
-Stack outputs (exported as `api-user-<env>-<Name>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`.
+Stack outputs (exported as `api-user-<env>-<Name>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`, `AlarmTopicArn`, `Alarm4xxName`, `Alarm5xxName`, `RollbackFunctionName`.
 
 ## Bruno collection & Cognito token
 
@@ -101,3 +104,49 @@ The tests cover:
 For each run, the suite creates a throwaway Cognito user with a random password and deletes it afterwards, so CI needs only AWS credentials.
 To test as an existing user instead, set `API_USERNAME` and `API_PASSWORD`.
 The 3 negative tests do add to the API's 4XXError metric, so keep them few.
+
+## Alarms & automatic rollback
+
+```
+4xx / 5xx alarm ──► SNS api-user-<env>-alarms ──► rollback Lambda ──► PutRestApi(previous spec) + CreateDeployment(v1)
+                                          └─► optional e-mail
+```
+
+**Alarms.** Each alarm watches the share of 4xx or 5xx responses per minute on stage `v1`:
+
+| Alarm | Fires when | Ignores minutes with |
+|---|---|---|
+| 4xx | > 25 % of requests in 2 of 3 minutes | < 20 requests |
+| 5xx | > 5 % of requests in 2 of 3 minutes | < 5 requests |
+
+Minutes with fewer requests than the minimum are ignored, so a handful of intentional 401/400 responses (such as the integration tests) can't trigger a rollback.
+
+**Rollback Lambda.** When an alarm enters `ALARM`, the Lambda:
+1. loads the deployment history and **only acts if the latest deployment is younger than the rollback window** (default 30 min), is not itself a rollback, and has an earlier deployment to go back to
+2. claims the bad deployment record (`rolledBackAt`), so the 4xx and 5xx alarms firing together roll back only once
+3. downloads the previous deployment's OpenAPI spec from S3, re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
+4. records the rollback in the table (`source=rollback`, `rolledBackFrom=<bad deployedAt>`) with its own spec export
+
+**Code rollback.** The API integrates with a *published Lambda version* instead of `$LATEST`, so every exported spec pins the exact backend code it ran with. Re-importing an old spec therefore rolls back the Lambda code too. Old versions are retained, and the rollback Lambda gives API Gateway permission again to invoke the version it restores.
+
+### Options (CDK context)
+
+| Context | Default | |
+|---|---|---|
+| `-c alarmNotifications=false` | `true` | turn the alarm actions (SNS -> rollback) off; the alarms still change state |
+| `-c alarmEmail=ops@example.com` | – | also subscribe an e-mail to the topic |
+| `-c rollbackWindowMinutes=15` | `30` | the "X minutes" after a deployment in which rollbacks happen |
+| `-c chaosFailureRate=1` | `0` | share of requests the backend fails with 500, to demo a rollback |
+
+### Demo a rollback
+
+```bash
+npm run deploy:dev                                  # good deployment (recorded)
+npx cdk deploy -c env=dev -c chaosFailureRate=1 --require-approval never   && npm run deployment:record -- --env dev         # bad deployment (all 500s)
+API_ENV=dev npm run test:integration                # generate traffic -> 5xx alarm in ~2-3 min
+npm run deployment:list -- --env dev                # shows the rollback record
+```
+
+To exercise the rollback logic without waiting for real errors, run `npm run rollback:simulate -- --env dev [--alarm 4xx|5xx]`. It invokes the rollback Lambda with a synthetic ALARM event.
+
+> After a rollback the live API no longer matches the CDK template. The next `cdk deploy` that changes the API replaces it with the template again (this is intended: roll forward with a fix).
