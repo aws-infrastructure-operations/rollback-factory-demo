@@ -55,6 +55,9 @@ export interface ReleaseManifest {
   apiUrl: string;
   userPoolId: string;
   userPoolClientId: string;
+  /** Set on releases broken on purpose by the break-frontend demo (release:upload --break). */
+  broken?: string;
+  /** What was uploaded (for a broken release: without the files it leaves out). */
   files: ManifestFile[];
 }
 

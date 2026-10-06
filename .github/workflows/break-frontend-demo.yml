@@ -1,0 +1,106 @@
+name: break-frontend-demo
+
+# Manual demo of the alarm-driven frontend rollback, in dev only:
+#   1. check dev has a verified release to roll back to
+#   2. build a release from this branch, upload it BROKEN (the HTML without its assets/, so
+#      every script and style answers 403), activate and record it - no tests, not verified
+#   3. load the site like a browser for traffic_minutes, reporting status codes and the live release
+#
+# The workflow never rolls back and doesn't wait for one: the 4xx alarm -> SNS -> rollback
+# Lambda path does that on its own (watch the traffic log, CloudWatch or the Lambda logs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      traffic_minutes:
+        description: Minutes to send traffic to the broken site
+        type: string
+        default: "12"
+
+# Shared with frontend-deploy.yml / frontend-restore.yml for dev
+concurrency:
+  group: frontend-deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  break-frontend:
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: aws-frontend-cloudfront
+    env:
+      FRONTEND_ENV: dev
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TRAFFIC_MINUTES: ${{ inputs.traffic_minutes }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Preflight - dev has a verified release to roll back to
+        run: npm run -s demo:traffic -- --env dev --preflight
+
+      - name: Build a release
+        id: build
+        run: |
+          release="$(npm run -s release:build -- --env dev)"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+      - name: Upload it broken (HTML without assets/)
+        run: npm run -s release:upload -- --env dev --break missing-assets
+
+      - name: Activate and record the broken release (no tests, so never verified)
+        id: activate
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+        run: |
+          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          npm run -s release:activate -- --env dev --release "$RELEASE" --wait > activation.json
+          cat activation.json
+          previous="$(jq -r '.previousReleaseId // ""' activation.json)"
+          npm run -s deployment:record -- --env dev --release "$RELEASE" \
+            --invalidation "$(jq -r '.invalidationId' activation.json)" ${previous:+--previous "$previous"} \
+            --description "break-frontend-demo: missing assets (run $GITHUB_RUN_ID)"
+          {
+            echo "started=$started"
+            echo "live_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Send traffic
+        run: npm run -s demo:traffic -- --env dev --minutes "$TRAFFIC_MINUTES"
+
+      - name: Result and deployment history
+        if: always() && steps.activate.outcome == 'success'
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          STARTED: ${{ steps.activate.outputs.started }}
+          LIVE_AT: ${{ steps.activate.outputs.live_at }}
+        run: |
+          live="$(npm run -s live:context -- --env dev | sed 's/.*liveReleaseId=//')"
+          {
+            echo "### break-frontend-demo"
+            echo "Broken release \`$RELEASE\`: activation started $STARTED, live everywhere at $LIVE_AT."
+            if [ "$live" = "$RELEASE" ]; then
+              echo ":warning: dev still serves the broken release - check the alarms and the rollback Lambda logs."
+            else
+              echo ":white_check_mark: dev serves release \`$live\` again - see the \`rollback\` record below for when it switched."
+            fi
+            echo '```'
+            npm run -s deployment:list -- --env dev --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

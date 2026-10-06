@@ -4,7 +4,11 @@
  * <frontendName>/<id>/manifest.json. Releases are immutable: an existing prefix is an error.
  * Doesn't change what the site serves - that's release:activate.
  *
- * Usage: npx tsx scripts/upload-release.ts --env dev
+ * Usage: npx tsx scripts/upload-release.ts --env dev [--break missing-assets]
+ *
+ * --break missing-assets (break-frontend demo only) uploads the HTML but none of assets/, so
+ * every page loads but its scripts and styles answer 403 - the 4xx alarm should roll it back.
+ * The manifest lists only what was uploaded, so release:activate accepts the release.
  */
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -19,9 +23,13 @@ import { requireFrontendOutputs } from './lib/stack.js';
 
 const s3 = new S3Client({});
 const UPLOAD_CONCURRENCY = 8;
+const BREAKS = ['missing-assets'];
 
 run(async () => {
-  const { config } = parseCli();
+  const { config, values } = parseCli(['break']);
+  if (values.break && !BREAKS.includes(values.break)) {
+    throw new Error(`--break must be one of ${BREAKS.join(', ')}, got "${values.break}"`);
+  }
   const release: BuiltRelease = JSON.parse(await readFile(RELEASE_FILE, 'utf8').catch(() => {
     throw new Error('release.json not found - run npm run release:build first');
   }));
@@ -34,7 +42,9 @@ run(async () => {
   const existing = await s3.send(new ListObjectsV2Command({ Bucket: outputs.SiteBucketName, Prefix: `${prefix}/`, MaxKeys: 1 }));
   if (existing.KeyCount) throw new Error(`s3://${outputs.SiteBucketName}/${prefix}/ already exists - releases are never overwritten`);
 
-  const files = await describeFiles(DIST_DIR);
+  const built = await describeFiles(DIST_DIR);
+  const files = values.break === 'missing-assets' ? built.filter((f) => !f.path.startsWith('assets/')) : built;
+  if (values.break) log(`BROKEN ON PURPOSE (${values.break}): leaving out ${built.length - files.length} of ${built.length} files`);
   const queue = [...files];
   await Promise.all(Array.from({ length: UPLOAD_CONCURRENCY }, async () => {
     for (let file = queue.shift(); file; file = queue.shift()) {
@@ -60,6 +70,7 @@ run(async () => {
     apiUrl: release.apiUrl,
     userPoolId: release.userPoolId,
     userPoolClientId: release.userPoolClientId,
+    broken: values.break,
     files,
   };
   const key = manifestKey(config.frontendName, release.releaseId);
