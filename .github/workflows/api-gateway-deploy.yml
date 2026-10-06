@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     timeout-minutes: 60
+    # Shared with break-api-demo.yml: never two deploys to the same environment at once.
+    concurrency:
+      group: api-gateway-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
     defaults:
       run:
         working-directory: aws-api-gateway

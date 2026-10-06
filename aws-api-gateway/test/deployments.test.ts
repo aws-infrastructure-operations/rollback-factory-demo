@@ -33,10 +33,10 @@ test('creates the deployments table keyed by api and time', () => {
   t.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
 });
 
-test('names spec objects by deployment timestamp', () => {
+test('names spec objects <apiName>/<timestamp>/openapi.json', () => {
   const date = new Date('2026-10-06T12:30:05.123Z');
   assert.equal(compactTimestamp(date), '20261006T123005Z');
-  assert.equal(specKey(date), 'specs/20261006T123005Z/openapi.json');
+  assert.equal(specKey('api-user-dev', date), 'api-user-dev/20261006T123005Z/openapi.json');
 });
 
 test('builds a deployment record', () => {
@@ -53,7 +53,7 @@ test('builds a deployment record', () => {
     stageName: 'v1',
     deploymentId: 'dep42',
     specBucket: 'bucket',
-    specKey: 'specs/20261006T123005Z/openapi.json',
+    specKey: 'api-user-dev/20261006T123005Z/openapi.json',
     source: 'cicd',
     actor: 'github:someone',
     commitSha: 'deadbeef',

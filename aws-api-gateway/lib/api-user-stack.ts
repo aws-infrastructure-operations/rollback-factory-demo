@@ -129,7 +129,7 @@ export class ApiUserStack extends cdk.Stack {
     }
 
     // --- Deployment tracking ----------------------------------------------------
-    // One OpenAPI export per deployment, stored under specs/<timestamp>/ (see lambda/shared/deployments.ts).
+    // One OpenAPI export per deployment, stored under <apiName>/<timestamp>/ (see lambda/shared/deployments.ts).
     this.specBucket = new s3.Bucket(this, 'SpecBucket', {
       bucketName: name(`${cdk.Aws.ACCOUNT_ID}-deployments`),
       versioned: true,
