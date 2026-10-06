@@ -6,7 +6,9 @@ import type { SNSEvent } from 'aws-lambda';
 import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 import type { DeploymentRecord } from '../lambda/shared/deployments.js';
-import { isRestoreRequest, lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
+import {
+  AlarmPair, isRestoreRequest, lambdaArnsFromSpec, lambdaFault, ownAlarms, parseAlarms, planRollback, pointToAlias,
+} from '../lambda/rollback/plan.js';
 
 const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
@@ -83,16 +85,88 @@ describe('stack', () => {
     });
   });
 
-  test('integrates the API with a published Lambda version', () => {
-    const versions = Object.keys(t.findResources('AWS::Lambda::Version'));
-    assert.equal(versions.length, 1);
+  const aliases = (template: Template): Record<string, any> => Object.fromEntries(
+    Object.entries(template.findResources('AWS::Lambda::Alias')).map(([id, r]: [string, any]) => [r.Properties.Name, { id, ...r.Properties }]),
+  );
+  const stage = (template: Template, name: string) =>
+    (Object.values(template.findResources('AWS::ApiGateway::Stage')) as any[]).find((r) => r.Properties.StageName === name)!.Properties;
+
+  test('each stage invokes its own alias of the handler (stage variable lambdaAlias)', () => {
     const uris = Object.values(t.findResources('AWS::ApiGateway::Method'))
       .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS') // CORS preflights are mock integrations
       .map((m: any) => JSON.stringify(m.Properties.Integration.Uri));
     assert.equal(uris.length, 4);
-    for (const uri of uris) assert.ok(uri.includes(`"Ref":"${versions[0]}"`), uri);
-    // old versions must survive replacement, rollbacks re-point the API at them
+    for (const uri of uris) assert.ok(uri.includes(':${stageVariables.lambdaAlias}/invocations'), uri);
+
+    assert.deepEqual(Object.keys(aliases(t)).sort(), ['integration', 'live']);
+    assert.deepEqual(stage(t, 'v1').Variables, { lambdaAlias: 'live' });
+    assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration' });
+    for (const { id } of Object.values(aliases(t))) {
+      t.hasResourceProperties('AWS::Lambda::Permission', {
+        FunctionName: { Ref: id },
+        Principal: 'apigateway.amazonaws.com',
+      });
+    }
+    // v1 may serve an older deployment than the integration stage, and old specs reference versions
+    t.hasResource('AWS::ApiGateway::Deployment', { DeletionPolicy: 'Retain' });
     t.hasResource('AWS::Lambda::Version', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
+  });
+
+  test('without live context, a deploy updates v1 and both aliases directly', () => {
+    const { integration, live } = aliases(t);
+    assert.deepEqual(live.FunctionVersion, integration.FunctionVersion);
+    assert.deepEqual(stage(t, 'v1').DeploymentId, stage(t, 'integration').DeploymentId);
+  });
+
+  test('with live context (CI), a deploy leaves v1 and the live alias where they are', () => {
+    const pinned = synth('dev', { liveDeploymentId: 'dep123', liveLambdaVersion: '7' });
+    assert.equal(stage(pinned, 'v1').DeploymentId, 'dep123');
+    assert.equal(aliases(pinned).live.FunctionVersion, '7');
+    // the integration stage and alias still get the new deployment and version
+    assert.ok(JSON.stringify(stage(pinned, 'integration').DeploymentId).includes('ApiDeployment'));
+    assert.ok(JSON.stringify(aliases(pinned).integration.FunctionVersion).includes('ApiHandlerCurrentVersion'));
+  });
+
+  test('pairs each API alarm with an alarm on the errors the Lambda produced', () => {
+    for (const [kind, threshold, min] of [['4xx', 25, 20], ['5xx', 5, 5]] as const) {
+      t.hasResourceProperties('AWS::Logs::MetricFilter', {
+        FilterName: `rollback-factory-demo-lambda-${kind}-dev`,
+        FilterPattern: `{ ($.status = "${kind[0]}*") && ($.lambdaRequestId != "-") }`,
+        MetricTransformations: [{
+          MetricNamespace: 'rollback-factory-demo/api-user-dev',
+          MetricName: `Lambda${kind.toUpperCase()}Error`,
+          MetricValue: '1',
+          DefaultValue: 0,
+        }],
+      });
+      t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        AlarmName: `rollback-factory-demo-lambda-${kind}-rate-dev`,
+        Threshold: threshold,
+        AlarmActions: [{ Ref: Match.stringLikeRegexp('AlarmTopic') }],
+        Metrics: Match.arrayWith([
+          Match.objectLike({ Expression: `IF(requests >= ${min}, 100 * errors / requests, 0)` }),
+        ]),
+      });
+    }
+    const [fn] = Object.values(t.findResources('AWS::Lambda::Function', {
+      Properties: { FunctionName: 'rollback-factory-demo-rollback-dev' },
+    })) as any[];
+    const vars = fn.Properties.Environment.Variables;
+    assert.deepEqual(JSON.parse(vars.ALARM_PAIRS), [
+      {
+        apiAlarm: 'rollback-factory-demo-4xx-rate-dev',
+        lambdaAlarm: 'rollback-factory-demo-lambda-4xx-rate-dev',
+        apiMetric: '4XXError',
+        lambdaMetric: 'Lambda4XXError',
+      },
+      {
+        apiAlarm: 'rollback-factory-demo-5xx-rate-dev',
+        lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
+        apiMetric: '5XXError',
+        lambdaMetric: 'Lambda5XXError',
+      },
+    ]);
+    assert.ok(vars.HANDLER_FUNCTION_ARN, 'rollback Lambda needs the handler to point restored specs at its stage alias');
   });
 
   test('chaosFailureRate reaches the API handler', () => {
@@ -198,4 +272,45 @@ test('only acts on ALARM transitions of its own API', () => {
   const prod = Object.values(getConfig('prod').alarmNames);
   assert.deepEqual(ownAlarms(alarms, dev).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-dev']);
   assert.deepEqual(ownAlarms(alarms, prod).map((a) => a.alarmName), ['rollback-factory-demo-5xx-rate-prod']);
+});
+
+describe('lambdaFault', () => {
+  const pair: AlarmPair = {
+    apiAlarm: 'rollback-factory-demo-5xx-rate-dev',
+    lambdaAlarm: 'rollback-factory-demo-lambda-5xx-rate-dev',
+    apiMetric: '5XXError',
+    lambdaMetric: 'Lambda5XXError',
+  };
+
+  test('blames the Lambda while its paired alarm is in ALARM', () => {
+    assert.match(lambdaFault(pair, { lambdaAlarmState: 'ALARM', apiErrors: 10, lambdaErrors: 0 })!, /lambda-5xx-rate-dev is in ALARM/);
+  });
+
+  test('blames the Lambda when it produced at least half of the errors, even before its alarm fires', () => {
+    assert.match(lambdaFault(pair, { lambdaAlarmState: 'OK', apiErrors: 10, lambdaErrors: 5 })!, /5 of the 10 5XXError/);
+  });
+
+  test('lets the API roll back when API Gateway produced most errors', () => {
+    assert.equal(lambdaFault(pair, { lambdaAlarmState: 'OK', apiErrors: 10, lambdaErrors: 4 }), undefined);
+    assert.equal(lambdaFault(pair, { lambdaAlarmState: 'INSUFFICIENT_DATA', apiErrors: 0, lambdaErrors: 0 }), undefined);
+  });
+});
+
+test('points restored specs at the live alias, whatever version they were recorded with', () => {
+  const fn = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev';
+  const other = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev-other:3';
+  const uri = (arn: string) => `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${arn}/invocations`;
+  const op = (arn: string) => ({ 'x-amazon-apigateway-integration': { type: 'aws_proxy', uri: uri(arn) } });
+  const spec = {
+    paths: {
+      '/users': { get: op(`${fn}:7`), post: op(`${fn}:live`) },
+      '/messages': { get: op(fn), post: op(other) },
+      '/health': { get: { 'x-amazon-apigateway-integration': { type: 'mock' } } },
+    },
+  };
+  const result = pointToAlias(spec, fn, `${fn}:live`);
+  assert.deepEqual(lambdaArnsFromSpec(result).sort(), [`${fn}:live`, other].sort());
+  assert.equal(result.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${fn}:live`));
+  // the input is not modified
+  assert.equal(spec.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${fn}:7`));
 });

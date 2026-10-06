@@ -11,6 +11,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { GetAliasCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 /** rollback = automatic (alarm / failed tests), restore = a deployment chosen by hand */
@@ -24,6 +25,8 @@ export interface DeploymentRecord {
   stageName: string;
   /** API Gateway deployment id the stage pointed to */
   deploymentId: string;
+  /** Backend Lambda version the stage's `live` alias pointed to */
+  lambdaVersion?: string;
   specBucket: string;
   specKey: string;
   source: DeploymentSource;
@@ -50,6 +53,8 @@ export interface DeploymentRecord {
   stable?: boolean;
   /** Seconds the deployment stayed live (until the next deployment). Only on stable deployments. */
   stableFor?: number;
+  /** stableFor as text, e.g. "2 hours 30 minutes" (see formatDuration). */
+  stableForHumanReadable?: string;
 }
 
 export interface DeploymentTarget {
@@ -58,6 +63,8 @@ export interface DeploymentTarget {
   stageName: string;
   specBucket: string;
   table: string;
+  /** Backend Lambda (name or ARN); its `live` alias version is recorded as lambdaVersion */
+  handlerFunction?: string;
 }
 
 export interface RecordOptions {
@@ -72,6 +79,7 @@ export interface RecordOptions {
 }
 
 const apigw = new APIGatewayClient({});
+const lambda = new LambdaClient({});
 const s3 = new S3Client({});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
@@ -88,6 +96,7 @@ export function buildRecord(
   target: DeploymentTarget,
   deploymentId: string,
   opts: RecordOptions,
+  lambdaVersion?: string,
 ): DeploymentRecord {
   const now = opts.now ?? new Date();
   return {
@@ -96,6 +105,7 @@ export function buildRecord(
     restApiId: target.restApiId,
     stageName: target.stageName,
     deploymentId,
+    lambdaVersion,
     specBucket: target.specBucket,
     specKey: specKey(target.apiName, now),
     source: opts.source,
@@ -110,21 +120,48 @@ export function buildRecord(
 }
 
 /**
+ * Human-readable duration in days, hours and minutes; seconds only below a minute.
+ * 9006 -> "2 hours 30 minutes", 90061 -> "1 day 1 hour 1 minute", 45 -> "45 seconds"
+ */
+export function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total} ${total === 1 ? 'second' : 'seconds'}`;
+  const parts: [number, string][] = [
+    [Math.floor(total / 86_400), 'day'],
+    [Math.floor((total % 86_400) / 3600), 'hour'],
+    [Math.floor((total % 3600) / 60), 'minute'],
+  ];
+  return parts.filter(([n]) => n > 0).map(([n, unit]) => `${n} ${unit}${n === 1 ? '' : 's'}`).join(' ');
+}
+
+/**
  * The fields to set on the previous current deployment when `next` replaces it.
  * A deployment an alarm rollback claimed (rolledBackAt) is unstable; any other is
  * stable for the time between its deployment and the next one.
  */
 export function retirement(previous: DeploymentRecord, next: DeploymentRecord):
-  Pick<DeploymentRecord, 'current' | 'stable' | 'stableFor'> {
+  Pick<DeploymentRecord, 'current' | 'stable' | 'stableFor' | 'stableForHumanReadable'> {
   if (previous.rolledBackAt) return { current: false, stable: false };
   const ms = new Date(next.deployedAt).getTime() - new Date(previous.deployedAt).getTime();
-  return { current: false, stable: true, stableFor: Math.round(ms / 1000) };
+  const stableFor = Math.round(ms / 1000);
+  return { current: false, stable: true, stableFor, stableForHumanReadable: formatDuration(stableFor) };
 }
 
 export async function getStageDeploymentId(restApiId: string, stageName: string): Promise<string> {
   const stage = await apigw.send(new GetStageCommand({ restApiId, stageName }));
   if (!stage.deploymentId) throw new Error(`Stage ${stageName} of ${restApiId} has no deployment`);
   return stage.deploymentId;
+}
+
+/** Version a Lambda alias points to, or undefined if the alias doesn't exist. */
+export async function getAliasVersion(functionName: string, alias: string): Promise<string | undefined> {
+  try {
+    const { FunctionVersion } = await lambda.send(new GetAliasCommand({ FunctionName: functionName, Name: alias }));
+    return FunctionVersion;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ResourceNotFoundException') return undefined;
+    throw err;
+  }
 }
 
 /** OpenAPI 3 JSON of the stage, including x-amazon-apigateway-* extensions. */
@@ -159,17 +196,18 @@ export async function listDeployments(
  * Exports the stage's current spec to S3 and records the deployment as current.
  * The previous current deployment is retired in the same transaction (see retirement).
  * Returns undefined (and records nothing) when the stage still points at the
- * same deployment as the latest record, i.e. nothing was actually deployed.
+ * same deployment and Lambda version as the latest record, i.e. nothing was deployed.
  */
 export async function recordDeployment(
   target: DeploymentTarget,
   opts: RecordOptions & { force?: boolean },
 ): Promise<DeploymentRecord | undefined> {
   const deploymentId = await getStageDeploymentId(target.restApiId, target.stageName);
+  const lambdaVersion = target.handlerFunction ? await getAliasVersion(target.handlerFunction, 'live') : undefined;
   const [latest] = await listDeployments(target.table, target.apiName, 1);
-  if (!opts.force && latest?.deploymentId === deploymentId) return undefined;
+  if (!opts.force && latest?.deploymentId === deploymentId && latest.lambdaVersion === lambdaVersion) return undefined;
 
-  const record = buildRecord(target, deploymentId, opts);
+  const record = buildRecord(target, deploymentId, opts, lambdaVersion);
   const spec = await exportStageSpec(target.restApiId, target.stageName);
   await s3.send(new PutObjectCommand({
     Bucket: target.specBucket,
@@ -187,7 +225,7 @@ export async function recordDeployment(
     await ddb.send(new PutCommand(put));
     return record;
   }
-  const { stable, stableFor } = retirement(latest, record);
+  const { stable, stableFor, stableForHumanReadable } = retirement(latest, record);
   await ddb.send(new TransactWriteCommand({
     TransactItems: [
       { Put: put },
@@ -197,14 +235,20 @@ export async function recordDeployment(
           Key: { apiName: latest.apiName, deployedAt: latest.deployedAt },
           // CURRENT is a DynamoDB reserved word
           UpdateExpression: stableFor === undefined
-            ? 'SET #current = :false, #stable = :stable REMOVE #stableFor'
-            : 'SET #current = :false, #stable = :stable, #stableFor = :stableFor',
+            ? 'SET #current = :false, #stable = :stable REMOVE #stableFor, #stableForHumanReadable'
+            : 'SET #current = :false, #stable = :stable, #stableFor = :stableFor, '
+              + '#stableForHumanReadable = :stableForHumanReadable',
           ConditionExpression: 'attribute_exists(deployedAt)',
-          ExpressionAttributeNames: { '#current': 'current', '#stable': 'stable', '#stableFor': 'stableFor' },
+          ExpressionAttributeNames: {
+            '#current': 'current',
+            '#stable': 'stable',
+            '#stableFor': 'stableFor',
+            '#stableForHumanReadable': 'stableForHumanReadable',
+          },
           ExpressionAttributeValues: {
             ':false': false,
             ':stable': stable,
-            ...(stableFor === undefined ? {} : { ':stableFor': stableFor }),
+            ...(stableFor === undefined ? {} : { ':stableFor': stableFor, ':stableForHumanReadable': stableForHumanReadable }),
           },
         },
       },
@@ -240,7 +284,7 @@ export async function getSpec(bucket: string, key: string): Promise<string> {
 }
 
 /**
- * Marks a deployment as being rolled back, and as unstable (stableFor removed).
+ * Marks a deployment as being rolled back, and as unstable (stableFor / stableForHumanReadable removed).
  * Returns false if another rollback already claimed it, so concurrent alarms
  * (4xx + 5xx) roll back only once.
  */
@@ -249,9 +293,9 @@ export async function claimRollback(table: string, record: DeploymentRecord, now
     await ddb.send(new UpdateCommand({
       TableName: table,
       Key: { apiName: record.apiName, deployedAt: record.deployedAt },
-      UpdateExpression: 'SET rolledBackAt = :now, #stable = :false REMOVE #stableFor',
+      UpdateExpression: 'SET rolledBackAt = :now, #stable = :false REMOVE #stableFor, #stableForHumanReadable',
       ConditionExpression: 'attribute_exists(deployedAt) AND attribute_not_exists(rolledBackAt)',
-      ExpressionAttributeNames: { '#stable': 'stable', '#stableFor': 'stableFor' },
+      ExpressionAttributeNames: { '#stable': 'stable', '#stableFor': 'stableFor', '#stableForHumanReadable': 'stableForHumanReadable' },
       ExpressionAttributeValues: { ':now': now.toISOString(), ':false': false },
     }));
     return true;

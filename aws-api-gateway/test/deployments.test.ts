@@ -4,7 +4,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
-import { buildRecord, compactTimestamp, DeploymentRecord, retirement, specKey } from '../lambda/shared/deployments.js';
+import { buildRecord, compactTimestamp, DeploymentRecord, formatDuration, retirement, specKey } from '../lambda/shared/deployments.js';
 
 const synth = (env: string) => {
   const app = new cdk.App();
@@ -52,6 +52,7 @@ test('builds a deployment record', () => {
     restApiId: 'abc123',
     stageName: 'v1',
     deploymentId: 'dep42',
+    lambdaVersion: undefined,
     specBucket: 'bucket',
     specKey: 'api-user-dev/20261006T123005Z/openapi.json',
     source: 'cicd',
@@ -72,10 +73,21 @@ const record = (deployedAt: string, extra: Partial<DeploymentRecord> = {}) => ({
 test('a replaced deployment is stable for the time until the next deployment', () => {
   const previous = record('2026-10-06T10:00:00.000Z');
   const next = record('2026-10-06T12:30:05.600Z');
-  assert.deepEqual(retirement(previous, next), { current: false, stable: true, stableFor: 9006 });
+  assert.deepEqual(retirement(previous, next), {
+    current: false, stable: true, stableFor: 9006, stableForHumanReadable: '2 hours 30 minutes',
+  });
 });
 
-test('a rolled-back deployment is unstable and gets no stableFor', () => {
+test('formats durations in days, hours and minutes', () => {
+  assert.equal(formatDuration(0), '0 seconds');
+  assert.equal(formatDuration(45), '45 seconds');
+  assert.equal(formatDuration(60), '1 minute');
+  assert.equal(formatDuration(9006), '2 hours 30 minutes');
+  assert.equal(formatDuration(3 * 86_400 + 120), '3 days 2 minutes');
+  assert.equal(formatDuration(90_061), '1 day 1 hour 1 minute');
+});
+
+test('a rolled-back deployment is unstable and gets no stableFor(HumanReadable)', () => {
   const previous = record('2026-10-06T10:00:00.000Z', { rolledBackAt: '2026-10-06T10:05:00.000Z' });
   const next = record('2026-10-06T10:05:01.000Z', { source: 'rollback' });
   assert.deepEqual(retirement(previous, next), { current: false, stable: false });

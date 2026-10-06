@@ -25,7 +25,21 @@ export interface EnvConfig {
   resourceName: (resource: string) => string;
   /** The two alarms the rollback Lambda reacts to. */
   alarmNames: { error4xx: string; error5xx: string };
+  /**
+   * Paired with alarmNames: the same rates, counting only errors the backend Lambda
+   * produced. While one is in ALARM the rollback Lambda skips the API rollback.
+   */
+  lambdaAlarmNames: { error4xx: string; error5xx: string };
+  /** CloudWatch namespace of the metrics derived from the access logs. */
+  metricsNamespace: string;
   stageName: string;
+  /** CI deploys here first and runs the integration tests, then promotes to stageName. */
+  integrationStageName: string;
+  /**
+   * What stage v1 and the handler's `live` alias serve right now (from scripts/live-context.ts).
+   * When set, `cdk deploy` leaves them there and only updates the integration stage.
+   */
+  live?: { deploymentId?: string; lambdaVersion?: string };
   /** Whether stateful resources (user pool, bucket, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
@@ -41,9 +55,12 @@ export interface ConfigOverrides {
   alarmEmail?: string;
   rollbackWindowMinutes?: string | number;
   chaosFailureRate?: string | number;
+  liveDeploymentId?: string;
+  liveLambdaVersion?: string;
 }
 
 export const STAGE_NAME = 'v1';
+export const INTEGRATION_STAGE_NAME = 'integration';
 export const PROJECT_NAME = 'rollback-factory-demo';
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
@@ -63,7 +80,13 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     stackName: `${PROJECT_NAME}-${envName}`,
     resourceName,
     alarmNames: { error4xx: resourceName('4xx-rate'), error5xx: resourceName('5xx-rate') },
+    lambdaAlarmNames: { error4xx: resourceName('lambda-4xx-rate'), error5xx: resourceName('lambda-5xx-rate') },
+    metricsNamespace: `${PROJECT_NAME}/api-user-${envName}`,
     stageName: STAGE_NAME,
+    integrationStageName: INTEGRATION_STAGE_NAME,
+    live: overrides.liveDeploymentId || overrides.liveLambdaVersion
+      ? { deploymentId: overrides.liveDeploymentId || undefined, lambdaVersion: overrides.liveLambdaVersion || undefined }
+      : undefined,
     retainData: envName === 'prod',
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',

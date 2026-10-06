@@ -1,9 +1,9 @@
 name: api-gateway
 
 # PRs: typecheck, unit tests, synth, collection check.
-# main / manual: deploy dev -> integration tests -> deploy prod -> integration tests.
-# A failed integration test triggers the rollback Lambda. Alarms after a deploy are handled in AWS
-# (4xx/5xx alarm -> SNS -> rollback Lambda), not by the workflow.
+# main / manual, per environment (dev, then prod): deploy to the "integration" stage ->
+# integration tests -> promote to stage v1. Failed tests stop the run with v1 untouched.
+# Alarms after a deploy are handled in AWS (4xx/5xx alarm -> SNS -> rollback Lambda), not by the workflow.
 
 on:
   push:
@@ -24,7 +24,7 @@ on:
         type: boolean
         default: true
       dev_chaos_failure_rate:
-        description: "Demo only: share of dev requests to fail with 500 (0..1)"
+        description: "Demo only: share of dev requests to fail with 500 (0..1) - fails the integration tests, v1 stays as it is"
         type: string
         default: "0"
 

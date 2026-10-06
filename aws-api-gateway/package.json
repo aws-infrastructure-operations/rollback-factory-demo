@@ -21,7 +21,9 @@
     "rollback:trigger": "tsx scripts/trigger-rollback.ts",
     "demo:traffic": "tsx scripts/generate-traffic.ts",
     "deployment:verify": "tsx scripts/verify-deployment.ts",
-    "deployment:restore": "tsx scripts/restore-deployment.ts"
+    "deployment:restore": "tsx scripts/restore-deployment.ts",
+    "deployment:promote": "tsx scripts/promote-deployment.ts",
+    "live:context": "tsx scripts/live-context.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.272.0",
@@ -30,6 +32,7 @@
   "devDependencies": {
     "@aws-sdk/client-api-gateway": "^3.1146.0",
     "@aws-sdk/client-cloudformation": "^3.1146.0",
+    "@aws-sdk/client-cloudwatch": "^3.1146.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-lambda": "^3.1146.0",

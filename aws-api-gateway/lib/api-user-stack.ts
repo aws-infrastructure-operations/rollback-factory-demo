@@ -77,8 +77,24 @@ export class ApiUserStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
       bundling: { minify: true, sourceMap: true },
-      // Keep every published version: old specs in S3 reference them, and rollbacks need them.
+      // Keep every published version: specs recorded before the "live" alias reference them.
       currentVersionOptions: { removalPolicy: cdk.RemovalPolicy.RETAIN },
+    });
+    // Each stage invokes its own alias, named by its `lambdaAlias` stage variable:
+    // - `integration` moves to the newly published version on every `cdk deploy`
+    // - `live` (stage v1) stays where it is when CI passes config.live; scripts/promote-deployment.ts
+    //   moves it once the integration tests passed. Without config.live it moves on deploy too.
+    // An API rollback re-imports an old spec but keeps the alias, so it never rolls the code
+    // back (see pointToAlias in lambda/rollback/plan.ts).
+    const integrationAlias = new lambda.Alias(this, 'ApiHandlerIntegration', {
+      aliasName: 'integration',
+      version: handler.currentVersion,
+    });
+    const handlerAlias = new lambda.Alias(this, 'ApiHandlerLive', {
+      aliasName: 'live',
+      version: config.live?.lambdaVersion
+        ? lambda.Version.fromVersionAttributes(this, 'LiveVersion', { lambda: handler, version: config.live.lambdaVersion })
+        : handler.currentVersion,
     });
 
     // --- Access logs ----------------------------------------------------------
@@ -121,8 +137,12 @@ export class ApiUserStack extends cdk.Stack {
       // per account and region, shared by all APIs, so keep it if this stack is deleted.
       cloudWatchRole: true,
       cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Stage v1 may still serve an older deployment while the integration stage tests the
+      // new one, so CloudFormation must not delete replaced deployments.
+      retainDeployments: true,
       deployOptions: {
         stageName: config.stageName,
+        variables: { lambdaAlias: handlerAlias.aliasName },
         metricsEnabled: true,
         throttlingRateLimit: 50,
         throttlingBurstLimit: 100,
@@ -193,10 +213,14 @@ export class ApiUserStack extends cdk.Stack {
       validateRequestBody: true,
     });
 
-    // Integrate with a published version, not $LATEST: each deployment's exported spec
-    // then pins the code it ran with, so re-importing an old spec also rolls back the code.
-    // Old versions are retained (currentVersionOptions above) so rollbacks can still invoke them.
-    const integration = new apigw.LambdaIntegration(handler.currentVersion);
+    // Integrate with the stage's alias (stage variable lambdaAlias), so v1 runs the promoted
+    // code and the integration stage the code under test - also after an API rollback.
+    const integration = new apigw.Integration({
+      type: apigw.IntegrationType.AWS_PROXY,
+      integrationHttpMethod: 'POST',
+      uri: `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}:lambda:path/2015-03-31/functions/`
+        + `${handler.functionArn}:\${stageVariables.lambdaAlias}/invocations`,
+    });
     for (const resourceName of ['users', 'messages']) {
       const resource = this.api.root.addResource(resourceName);
       resource.addMethod('GET', integration);
@@ -205,6 +229,27 @@ export class ApiUserStack extends cdk.Stack {
         requestModels: { 'application/json': messageModel },
       });
     }
+    for (const alias of [handlerAlias, integrationAlias]) {
+      alias.addPermission('ApiGatewayInvoke', {
+        principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+        sourceArn: this.api.arnForExecuteApi('*', '/*', '*'),
+      });
+    }
+
+    // CI keeps stage v1 on the deployment it serves and deploys to the integration stage;
+    // scripts/promote-deployment.ts moves v1 once the integration tests passed.
+    if (config.live?.deploymentId) {
+      (this.api.deploymentStage.node.defaultChild as apigw.CfnStage).deploymentId = config.live.deploymentId;
+    }
+    // No access logs / detailed metrics: test traffic must not count toward v1's alarms
+    // (the API metrics are per stage anyway).
+    const integrationStage = new apigw.Stage(this, 'IntegrationStage', {
+      deployment: this.api.latestDeployment!,
+      stageName: config.integrationStageName,
+      variables: { lambdaAlias: integrationAlias.aliasName },
+      throttlingRateLimit: 10,
+      throttlingBurstLimit: 20,
+    });
 
     // --- Deployment tracking ----------------------------------------------------
     // One OpenAPI export per deployment, stored under <apiName>/<timestamp>/ (see lambda/shared/deployments.ts).
@@ -238,11 +283,66 @@ export class ApiUserStack extends cdk.Stack {
       this.alarmTopic.addSubscription(new snsSubs.EmailSubscription(config.alarms.email));
     }
 
-    const alarms = [
-      this.errorRateAlarm('4XXError', config, config.alarms.error4xxRatePercent, config.alarms.minRequests4xx),
-      this.errorRateAlarm('5XXError', config, config.alarms.error5xxRatePercent, config.alarms.minRequests5xx),
-    ];
+    const apiMetric = (metricName: string) => new cloudwatch.Metric({
+      namespace: 'AWS/ApiGateway',
+      metricName,
+      dimensionsMap: { ApiName: config.apiName, Stage: config.stageName },
+      statistic: cloudwatch.Stats.SUM,
+      period: cdk.Duration.minutes(1),
+    });
+    const { alarms: a } = config;
+    const errorClasses = [
+      { kind: '4xx', metricName: '4XXError', key: 'error4xx', threshold: a.error4xxRatePercent, minRequests: a.minRequests4xx },
+      { kind: '5xx', metricName: '5XXError', key: 'error5xx', threshold: a.error5xxRatePercent, minRequests: a.minRequests5xx },
+    ] as const;
+
+    // API alarms: every 4xx / 5xx the clients received, whoever produced it. They trigger the rollback.
+    const alarms = errorClasses.map((c) => this.errorRateAlarm(`Alarm${c.kind}`, config, {
+      ...c,
+      alarmName: config.alarmNames[c.key],
+      description: `More than ${c.threshold}% ${c.kind} responses (min ${c.minRequests} requests/min) on `
+        + `${config.apiName}/${config.stageName}. Triggers the rollback Lambda via SNS.`,
+      errors: apiMetric(c.metricName),
+      requests: apiMetric('Count'),
+    }));
     for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
+
+    // Paired Lambda alarms: the same rates, counting only the errors of requests that reached
+    // the backend Lambda (the access log has a lambdaRequestId) - errors it returned, threw or
+    // timed out on. Errors API Gateway produced on its own (authorizer, validator, unknown route,
+    // throttling, invoke permissions) are left out. While the paired Lambda alarm is in ALARM the
+    // rollback Lambda skips the API rollback: the API always invokes the latest Lambda, so
+    // re-importing an old spec would not fix the code.
+    const lambdaAlarms = errorClasses.map((c) => {
+      const metricName = `Lambda${c.metricName}`;
+      new logs.MetricFilter(this, `LambdaErrorsFilter${c.kind}`, {
+        logGroup: this.accessLogGroup,
+        filterName: name(`lambda-${c.kind}`),
+        filterPattern: logs.FilterPattern.all(
+          logs.FilterPattern.stringValue('$.status', '=', `${c.kind[0]}*`),
+          logs.FilterPattern.stringValue('$.lambdaRequestId', '!=', '-'),
+        ),
+        metricNamespace: config.metricsNamespace,
+        metricName,
+        metricValue: '1',
+        defaultValue: 0,
+      });
+      return this.errorRateAlarm(`AlarmLambda${c.kind}`, config, {
+        ...c,
+        alarmName: config.lambdaAlarmNames[c.key],
+        description: `More than ${c.threshold}% ${c.kind} responses produced by the backend Lambda `
+          + `(min ${c.minRequests} requests/min) on ${config.apiName}/${config.stageName}. `
+          + `While in ALARM, ${config.alarmNames[c.key]} does not roll the API back.`,
+        errors: new cloudwatch.Metric({
+          namespace: config.metricsNamespace,
+          metricName,
+          statistic: cloudwatch.Stats.SUM,
+          period: cdk.Duration.minutes(1),
+        }),
+        requests: apiMetric('Count'),
+      });
+    });
+    for (const alarm of lambdaAlarms) alarm.addAlarmAction(new cwActions.SnsAction(this.alarmTopic));
 
     // Informational: unhandled errors thrown by the backend Lambda (all versions).
     // Comparing it with the 5xx alarm tells code failures apart from API Gateway
@@ -273,7 +373,7 @@ export class ApiUserStack extends cdk.Stack {
       resources: [this.alarmTopic.topicArn],
       conditions: {
         StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
-        ArnLike: { 'aws:SourceArn': [...alarms, lambdaErrorsAlarm].map((a) => a.alarmArn) },
+        ArnLike: { 'aws:SourceArn': [...alarms, ...lambdaAlarms, lambdaErrorsAlarm].map((a) => a.alarmArn) },
       },
     }));
 
@@ -294,6 +394,16 @@ export class ApiUserStack extends cdk.Stack {
         DEPLOYMENTS_TABLE: this.deploymentsTable.tableName,
         ROLLBACK_WINDOW_MINUTES: String(config.rollbackWindowMinutes),
         ALARM_NAMES: Object.values(config.alarmNames).join(','),
+        // API alarm -> its paired Lambda alarm and the metrics lambdaFault compares (plan.ts)
+        ALARM_PAIRS: JSON.stringify(errorClasses.map((c) => ({
+          apiAlarm: config.alarmNames[c.key],
+          lambdaAlarm: config.lambdaAlarmNames[c.key],
+          apiMetric: c.metricName,
+          lambdaMetric: `Lambda${c.metricName}`,
+        }))),
+        METRICS_NAMESPACE: config.metricsNamespace,
+        EVALUATION_MINUTES: String(config.alarms.evaluationPeriods),
+        HANDLER_FUNCTION_ARN: handler.functionArn,
       },
       logGroup: new logs.LogGroup(this, 'RollbackLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
@@ -321,9 +431,20 @@ export class ApiUserStack extends cdk.Stack {
       ],
     }));
     this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
-      // re-grant API Gateway access to the Lambda version referenced by an old spec
-      actions: ['lambda:AddPermission'],
+      // AddPermission: make sure API Gateway may invoke other functions a restored spec points to
+      // GetAlias: record the version the live alias serves (lambdaVersion)
+      actions: ['lambda:AddPermission', 'lambda:GetAlias'],
       resources: [handler.functionArn, `${handler.functionArn}:*`],
+    }));
+    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
+      // is the paired Lambda alarm in ALARM?
+      actions: ['cloudwatch:DescribeAlarms'],
+      resources: lambdaAlarms.map((alarm) => alarm.alarmArn),
+    }));
+    this.rollbackFunction.addToRolePolicy(new iam.PolicyStatement({
+      // did the Lambda cause the errors? GetMetricData has no resource-level permissions
+      actions: ['cloudwatch:GetMetricData'],
+      resources: ['*'],
     }));
 
     // --- Outputs --------------------------------------------------------------
@@ -331,6 +452,8 @@ export class ApiUserStack extends cdk.Stack {
       new cdk.CfnOutput(this, name, { value, exportName: config.resourceName(name) });
     out('ApiId', this.api.restApiId);
     out('ApiUrl', this.api.url);
+    out('IntegrationStageName', integrationStage.stageName);
+    out('IntegrationApiUrl', integrationStage.urlForPath());
     out('StageName', config.stageName);
     out('UserPoolId', this.userPool.userPoolId);
     out('UserPoolClientId', this.userPoolClient.userPoolClientId);
@@ -341,40 +464,34 @@ export class ApiUserStack extends cdk.Stack {
     out('Alarm5xxName', alarms[1].alarmName);
     out('RollbackFunctionName', this.rollbackFunction.functionName);
     out('LambdaErrorsAlarmName', lambdaErrorsAlarm.alarmName);
+    out('LambdaAlarm4xxName', lambdaAlarms[0].alarmName);
+    out('LambdaAlarm5xxName', lambdaAlarms[1].alarmName);
     out('AccessLogGroupName', this.accessLogGroup.logGroupName);
   }
 
   /**
-   * Alarms on the share of requests in a minute that returned `metricName`,
+   * Alarms on the share of requests in a minute that were `errors`,
    * ignoring minutes with fewer than `minRequests` requests.
    */
-  private errorRateAlarm(
-    metricName: '4XXError' | '5XXError',
-    config: EnvConfig,
-    thresholdPercent: number,
-    minRequests: number,
-  ): cloudwatch.Alarm {
-    const metric = (name: string) => new cloudwatch.Metric({
-      namespace: 'AWS/ApiGateway',
-      metricName: name,
-      dimensionsMap: { ApiName: config.apiName, Stage: config.stageName },
-      statistic: cloudwatch.Stats.SUM,
-      period: cdk.Duration.minutes(1),
-    });
-    const kind = metricName.slice(0, 3).toLowerCase();
-
-    return new cloudwatch.Alarm(this, `Alarm${kind}`, {
-      alarmName: metricName === '4XXError' ? config.alarmNames.error4xx : config.alarmNames.error5xx,
-      alarmDescription:
-        `More than ${thresholdPercent}% ${kind} responses (min ${minRequests} requests/min) on `
-        + `${config.apiName}/${config.stageName}. Triggers the rollback Lambda via SNS.`,
+  private errorRateAlarm(id: string, config: EnvConfig, opts: {
+    alarmName: string;
+    description: string;
+    kind: string;
+    errors: cloudwatch.IMetric;
+    requests: cloudwatch.IMetric;
+    threshold: number;
+    minRequests: number;
+  }): cloudwatch.Alarm {
+    return new cloudwatch.Alarm(this, id, {
+      alarmName: opts.alarmName,
+      alarmDescription: opts.description,
       metric: new cloudwatch.MathExpression({
-        expression: `IF(requests >= ${minRequests}, 100 * errors / requests, 0)`,
-        usingMetrics: { requests: metric('Count'), errors: metric(metricName) },
-        label: `${kind} rate %`,
+        expression: `IF(requests >= ${opts.minRequests}, 100 * errors / requests, 0)`,
+        usingMetrics: { requests: opts.requests, errors: opts.errors },
+        label: `${opts.kind} rate %`,
         period: cdk.Duration.minutes(1),
       }),
-      threshold: thresholdPercent,
+      threshold: opts.threshold,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
       evaluationPeriods: config.alarms.evaluationPeriods,
       datapointsToAlarm: config.alarms.datapointsToAlarm,

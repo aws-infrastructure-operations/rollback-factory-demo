@@ -83,7 +83,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
   - the actor, commit and CI run link
 - **Writers:** the record script (manual and CI deploys) and the rollback Lambda. `npm run deployment:list` shows the history.
 - **Verified:** CI sets `verifiedAt` once the integration tests pass (`deployment:verify`). The rollback Lambda only restores verified deployments that were never rolled back; the manual `api-gateway-restore` workflow can restore any recorded deployment.
-- **Current / stable:** the record the stage serves has `current=true`. When a new deployment is recorded, the previous one gets `stable=true` and `stableFor` (seconds until the next deployment); an alarm rollback marks the rolled-back deployment `stable=false` and removes `stableFor`.
+- **Current / stable:** the record the stage serves has `current=true`. When a new deployment is recorded, the previous one gets `stable=true` and `stableFor` (seconds until the next deployment) plus `stableForHumanReadable` (e.g. `2 hours 30 minutes`); an alarm rollback marks the rolled-back deployment `stable=false` and removes both.
 - **Limitation:** a deployment made outside these paths, such as "Deploy API" in the AWS console, is not recorded.
 
 #### 8. Integration tests
@@ -107,6 +107,7 @@ Every other resource is named `rollback-factory-demo-<resource>-<env>` by `resou
 - the latest deployment is younger than **X = `-c rollbackWindowMinutes`** (default 30)
 - that deployment is not itself a rollback
 - there is an earlier deployment to go back to
+- the errors are not the backend Lambda's fault: its paired alarm (`rollback-factory-demo-lambda-<4xx|5xx>-rate-<env>`, counting only errors of requests that reached the Lambda) is not in `ALARM`, and the Lambda produced less than half of the errors in the last 3 minutes
 
 It then:
 1. marks the bad deployment's record, so the 4xx and 5xx alarms together roll back only once
@@ -114,10 +115,10 @@ It then:
 3. re-imports it with `PutRestApi mode=overwrite` and redeploys stage `v1`
 4. records the rollback
 
-**Addition: code rollback.** The API integrates with a published, retained Lambda **version** instead of `$LATEST`, so every spec pins the backend code it ran with. Re-importing an old spec therefore rolls back the code too. The rollback Lambda gives API Gateway permission again to invoke the version it restores.
+**API rollback only.** Each stage invokes the backend through its own alias (stage variable `lambdaAlias`: `v1` → `live`, `integration` → `integration`). The rollback Lambda points a restored spec's integrations at the stage's alias, so a rollback restores the API config and keeps the latest promoted code. A broken Lambda is not rolled back.
 
 **Demo helpers:**
-- `-c chaosFailureRate=<0..1>` makes the backend return 500s.
+- `-c chaosFailureRate=<0..1>` makes the backend return 500s (the Lambda is at fault, so the rollback is skipped).
 - `npm run rollback:trigger -- --env <env>` invokes the rollback Lambda directly, as SNS would.
 
 #### 11. GitHub workflow
@@ -129,10 +130,11 @@ Files: [`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.ym
 - **`main` / manual run:** for dev, then for prod:
   1. bootstrap
   2. Bruno collection sync
-  3. `cdk deploy`
-  4. record the deployment (spec → S3, record → DynamoDB)
-  5. integration tests. **If they fail, the workflow triggers the rollback Lambda** and the job fails.
-  6. deployment history in the job summary
+  3. `cdk deploy` to the **`integration` stage** only: stage `v1` and the `live` alias are pinned to what they serve (`npm run live:context`)
+  4. integration tests against stage `integration`. **If they fail, the job stops** with the test output in the job summary; `v1` was never touched.
+  5. promote: stage `v1` → the tested deployment, alias `live` → the tested Lambda version (`npm run deployment:promote`)
+  6. record the deployment (spec → S3, record → DynamoDB) and mark it verified
+  7. deployment history in the job summary
 - **Promotion:** prod deploys only when dev is green. Add required reviewers on the `prod` GitHub environment to gate it with an approval.
 - **Alarm rollback:** happens only in AWS (alarm → SNS → rollback Lambda). The workflow doesn't watch alarms after a deploy.
 - **AWS auth:** access-key secrets per GitHub environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`).
