@@ -1,9 +1,9 @@
 name: cleanup
 
 # Manual: destroys the CDK stacks of one environment, for the projects you choose:
-#   api       rollback-factory-demo-<env>                                   (aws-api-gateway)
-#   frontend  rollback-factory-demo-frontend-<env> + -frontend-alarms-<env> (aws-frontend-cloudfront, us-east-1 too)
-#   lambda    rollback-factory-demo-lambda-<env>                            (aws-lambda)
+#   api       deploy-aws-api-gateway-<env>
+#   frontend  deploy-aws-cloudfront-<env> + deploy-aws-cloudfront-alarms-<env> (us-east-1)
+#   lambda    deploy-aws-lambda-<env>
 # Type "destroy <env>" to confirm. Each project's job takes that project's deploy lock, so it never
 # runs while a deploy or rollback of that environment does, and runs in the GitHub environment, so
 # required reviewers on it (e.g. prod) gate the cleanup too.
@@ -13,6 +13,10 @@ name: cleanup
 #   - in prod, the data the stacks keep on deletion (RemovalPolicy.RETAIN): buckets, tables, the
 #     API user pool. They stay, and a later deploy to prod fails until they're deleted by hand,
 #     because their names are fixed. The summary lists the leftover stacks.
+#
+# Stacks deployed before the projects were renamed (rollback-factory-demo-<env>,
+# rollback-factory-demo-frontend[-alarms]-<env>, rollback-factory-demo-lambda-<env>) are not
+# matched by this workflow any more: delete those from the CloudFormation console.
 
 on:
   workflow_dispatch:
@@ -68,14 +72,14 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-api-gateway
+        working-directory: deploy-aws-api-gateway
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-api-gateway/package-lock.json
+          cache-dependency-path: deploy-aws-api-gateway/package-lock.json
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -83,7 +87,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
       # Deleting a stack that doesn't exist is a no-op, so this is safe to re-run.
-      - name: Destroy rollback-factory-demo-${{ inputs.environment }}
+      - name: Destroy deploy-aws-api-gateway-${{ inputs.environment }}
         run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
 
   frontend:
@@ -99,14 +103,14 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-frontend-cloudfront
+        working-directory: deploy-aws-cloudfront
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+          cache-dependency-path: deploy-aws-cloudfront/package-lock.json
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -114,7 +118,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
       # --all destroys the us-east-1 alarms stack first, then the main stack it depends on.
-      - name: Destroy rollback-factory-demo-frontend-${{ inputs.environment }} and -frontend-alarms-${{ inputs.environment }}
+      - name: Destroy deploy-aws-cloudfront-${{ inputs.environment }} and deploy-aws-cloudfront-alarms-${{ inputs.environment }}
         run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
 
   lambda:
@@ -129,7 +133,7 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-lambda
+        working-directory: deploy-aws-lambda
     steps:
       - uses: actions/checkout@v7
         with:
@@ -139,14 +143,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-lambda/package-lock.json
+          cache-dependency-path: deploy-aws-lambda/package-lock.json
       - run: npm ci
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Destroy rollback-factory-demo-lambda-${{ inputs.environment }}
+      - name: Destroy deploy-aws-lambda-${{ inputs.environment }}
         run: npx cdk destroy --all --force -c env="${{ inputs.environment }}"
 
   summary:
@@ -175,11 +179,11 @@ jobs:
             echo "| frontend | $FRONTEND |"
             echo "| lambda | $LAMBDA |"
             echo
-            echo "rollback-factory-demo stacks of $ENV_NAME still in AWS:"
+            echo "deploy-aws-* stacks of $ENV_NAME still in AWS:"
             echo '```'
             for region in "$AWS_REGION" us-east-1; do
               aws cloudformation list-stacks --region "$region" --output text \
-                --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && starts_with(StackName, 'rollback-factory-demo-') && ends_with(StackName, '-$ENV_NAME')].[StackName, StackStatus]" \
+                --query "StackSummaries[?StackStatus!='DELETE_COMPLETE' && starts_with(StackName, 'deploy-aws-') && ends_with(StackName, '-$ENV_NAME')].[StackName, StackStatus]" \
                 | sed "s/^/$region  /"
             done
             echo '```'

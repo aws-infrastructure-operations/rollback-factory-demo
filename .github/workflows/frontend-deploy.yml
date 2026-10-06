@@ -33,7 +33,7 @@ jobs:
       cancel-in-progress: false
     defaults:
       run:
-        working-directory: aws-frontend-cloudfront
+        working-directory: deploy-aws-cloudfront
     env:
       FRONTEND_ENV: ${{ inputs.environment }}
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: aws-frontend-cloudfront/package-lock.json
+          cache-dependency-path: deploy-aws-cloudfront/package-lock.json
       - run: npm ci
 
       - uses: aws-actions/configure-aws-credentials@v6
@@ -91,7 +91,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('aws-frontend-cloudfront/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('deploy-aws-cloudfront/package-lock.json') }}
 
       - name: Install Chromium for the end-to-end test
         run: npx playwright install --with-deps chromium
