@@ -9,9 +9,11 @@ import type { SNSEvent } from 'aws-lambda';
 import { APIGatewayClient, CreateDeploymentCommand, PutRestApiCommand } from '@aws-sdk/client-api-gateway';
 import { AddPermissionCommand, LambdaClient, ResourceConflictException } from '@aws-sdk/client-lambda';
 import {
-  claimRollback, DeploymentTarget, getSpec, listDeployments, recordDeployment,
+  claimRollback, DeploymentRecord, DeploymentTarget, getDeployment, getSpec, listDeployments, recordDeployment,
 } from '../shared/deployments.js';
-import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from './plan.js';
+import {
+  isRestoreRequest, lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback, RestoreRequest,
+} from './plan.js';
 
 const env = (name: string) => {
   const value = process.env[name];
@@ -57,7 +59,49 @@ async function ensureInvokePermission(functionArn: string) {
   }
 }
 
-export const handler = async (event: SNSEvent) => {
+/** Re-imports a recorded deployment's spec (PutRestApi overwrite) and redeploys the stage. */
+async function redeploy(to: DeploymentRecord, description: string): Promise<string | undefined> {
+  const spec = await getSpec(to.specBucket, to.specKey);
+  for (const arn of lambdaArnsFromSpec(JSON.parse(spec))) await ensureInvokePermission(arn);
+
+  await apigw.send(new PutRestApiCommand({
+    restApiId: target.restApiId,
+    mode: 'overwrite',
+    failOnWarnings: false,
+    body: new TextEncoder().encode(spec),
+  }));
+  const deployment = await apigw.send(new CreateDeploymentCommand({
+    restApiId: target.restApiId,
+    stageName: target.stageName,
+    description: description.slice(0, 1024),
+  }));
+  return deployment.id;
+}
+
+/** Manual restore of a chosen deployment (scripts/restore-deployment.ts). No window or verification checks. */
+async function restore({ restore: req }: RestoreRequest) {
+  const to = await getDeployment(target.table, target.apiName, req.deployedAt);
+  if (!to) throw new Error(`No deployment of ${target.apiName} recorded at ${req.deployedAt}`);
+
+  const description = `Restore to ${to.deployedAt} (${to.deploymentId})${req.reason ? `: ${req.reason}` : ''}`;
+  log('restoring', { to: to.deployedAt, toDeployment: to.deploymentId, spec: to.specKey, actor: req.actor });
+  const deploymentId = await redeploy(to, description);
+
+  // Not verified: the restored deployment has to pass the integration tests again.
+  const record = await recordDeployment(target, {
+    source: 'restore',
+    actor: req.actor ?? 'manual',
+    commitSha: to.commitSha,
+    description,
+    force: true,
+  });
+  log('restore complete', { deploymentId, record });
+  return { action: 'restored', to: to.deployedAt, deploymentId, deployedAt: record?.deployedAt };
+}
+
+export const handler = async (event: SNSEvent | RestoreRequest) => {
+  if (isRestoreRequest(event)) return restore(event);
+
   const alarms = ownAlarms(parseAlarms(event), ALARM_NAMES);
   if (alarms.length === 0) {
     log('no ALARM transition of this API in event, nothing to do');
@@ -79,21 +123,8 @@ export const handler = async (event: SNSEvent) => {
   }
   log('rolling back', { from: from.deployedAt, fromDeployment: from.deploymentId, to: to.deployedAt, spec: to.specKey });
 
-  const spec = await getSpec(to.specBucket, to.specKey);
-  for (const arn of lambdaArnsFromSpec(JSON.parse(spec))) await ensureInvokePermission(arn);
-
-  await apigw.send(new PutRestApiCommand({
-    restApiId: target.restApiId,
-    mode: 'overwrite',
-    failOnWarnings: false,
-    body: new TextEncoder().encode(spec),
-  }));
   const description = `Rollback to ${to.deployedAt} (${to.deploymentId}) after alarm: ${alarmNames}`;
-  const deployment = await apigw.send(new CreateDeploymentCommand({
-    restApiId: target.restApiId,
-    stageName: target.stageName,
-    description: description.slice(0, 1024),
-  }));
+  const deploymentId = await redeploy(to, description);
 
   const record = await recordDeployment(target, {
     source: 'rollback',
@@ -101,8 +132,10 @@ export const handler = async (event: SNSEvent) => {
     commitSha: to.commitSha,
     description,
     rolledBackFrom: from.deployedAt,
+    // same spec as the verified target, so it counts as verified too
+    verifiedAt: to.verifiedAt,
     force: true,
   });
-  log('rollback complete', { deploymentId: deployment.id, record });
-  return { action: 'rolled-back', from: from.deployedAt, to: to.deployedAt, deploymentId: deployment.id };
+  log('rollback complete', { deploymentId, record });
+  return { action: 'rolled-back', from: from.deployedAt, to: to.deployedAt, deploymentId };
 };

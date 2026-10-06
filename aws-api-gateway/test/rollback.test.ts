@@ -6,7 +6,7 @@ import type { SNSEvent } from 'aws-lambda';
 import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 import type { DeploymentRecord } from '../lambda/shared/deployments.js';
-import { lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
+import { isRestoreRequest, lambdaArnsFromSpec, ownAlarms, parseAlarms, planRollback } from '../lambda/rollback/plan.js';
 
 const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
@@ -109,10 +109,10 @@ describe('planRollback', () => {
   const rec = (deployedAt: string, deploymentId: string, extra: Partial<DeploymentRecord> = {}) =>
     ({ apiName: 'api-user-dev', deployedAt, deploymentId, source: 'cicd', ...extra }) as DeploymentRecord;
 
-  const good = rec('2026-10-06T11:00:00.000Z', 'good');
+  const good = rec('2026-10-06T11:00:00.000Z', 'good', { verifiedAt: '2026-10-06T11:02:00.000Z' });
   const bad = rec('2026-10-06T12:20:00.000Z', 'bad');
 
-  test('rolls the recent deployment back to the previous one', () => {
+  test('rolls the recent deployment back to the previous verified one', () => {
     assert.deepEqual(planRollback([bad, good], now, 30), { action: 'rollback', from: bad, to: good });
   });
 
@@ -125,6 +125,8 @@ describe('planRollback', () => {
   test('never rolls back a rollback or an already rolled back deployment', () => {
     const rollback = rec('2026-10-06T12:25:00.000Z', 'r1', { source: 'rollback' });
     assert.equal(planRollback([rollback, bad, good], now, 30).action, 'skip');
+    const restore = rec('2026-10-06T12:25:00.000Z', 'r2', { source: 'restore' });
+    assert.equal(planRollback([restore, bad, good], now, 30).action, 'skip');
     assert.equal(planRollback([{ ...bad, rolledBackAt: now.toISOString() }, good], now, 30).action, 'skip');
   });
 
@@ -134,6 +136,30 @@ describe('planRollback', () => {
     assert.equal(planRollback([bad], now, 30).action, 'skip');
     assert.equal(planRollback([], now, 30).action, 'skip');
   });
+
+  // What broke dev on 2026-10-06: a broken demo deploy was never rolled back (the alarm
+  // couldn't publish), so the next failed deploy was "rolled back" onto it.
+  test('never restores an unverified deployment, even if it is the previous one', () => {
+    const untestedBroken = rec('2026-10-06T12:00:00.000Z', 'broken');
+    const plan = planRollback([bad, untestedBroken, good], now, 30);
+    assert.deepEqual(plan, { action: 'rollback', from: bad, to: good });
+    assert.deepEqual(planRollback([bad, untestedBroken], now, 30), {
+      action: 'skip', reason: 'no earlier verified deployment to roll back to',
+    });
+  });
+
+  test('never restores a verified deployment that was rolled back later', () => {
+    const verifiedButRolledBack = rec('2026-10-06T12:00:00.000Z', 'flaky', {
+      verifiedAt: '2026-10-06T12:01:00.000Z', rolledBackAt: '2026-10-06T12:10:00.000Z',
+    });
+    assert.deepEqual(planRollback([bad, verifiedButRolledBack, good], now, 30), { action: 'rollback', from: bad, to: good });
+  });
+});
+
+test('recognises manual restore requests', () => {
+  assert.ok(isRestoreRequest({ restore: { deployedAt: '2026-10-06T11:38:01.784Z' } }));
+  assert.ok(!isRestoreRequest({ Records: [] }));
+  assert.ok(!isRestoreRequest({ restore: {} }));
 });
 
 test('parses CloudWatch alarm notifications from SNS', () => {

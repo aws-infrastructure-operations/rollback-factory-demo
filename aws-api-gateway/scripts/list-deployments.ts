@@ -17,6 +17,8 @@ run(async () => {
     deploymentId: r.deploymentId,
     source: r.source,
     actor: r.actor,
+    verified: r.verifiedAt ? 'yes' : '',
+    rolledBack: r.rolledBackAt ? 'yes' : '',
     commit: r.commitSha?.slice(0, 7) ?? '',
     spec: r.specKey,
   })));

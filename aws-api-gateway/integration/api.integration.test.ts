@@ -52,7 +52,25 @@ before(async () => {
     cleanup = () => deleteUser(outputs.UserPoolId, username!);
   }
   token = await getIdToken(outputs.UserPoolClientId, username, password);
+  await waitUntilReady();
 });
+
+/**
+ * A fresh deployment (and its Lambda invoke permissions) can take a few seconds
+ * to serve everywhere, answering 5xx / 403 meanwhile. Wait up to READY_TIMEOUT_MS
+ * for a normal answer; if it never comes the tests run anyway and report the failure.
+ */
+const READY_TIMEOUT_MS = 60_000;
+async function waitUntilReady() {
+  const until = Date.now() + READY_TIMEOUT_MS;
+  let last = 0;
+  while (Date.now() < until) {
+    last = (await call('GET', '/users', { token })).status;
+    if (last < 500 && last !== 403) return;
+    await new Promise((r) => setTimeout(r, 3_000));
+  }
+  console.warn(`API not ready after ${READY_TIMEOUT_MS / 1000}s (last GET /users: ${last}) - running tests anyway`);
+}
 
 after(async () => {
   await cleanup?.();

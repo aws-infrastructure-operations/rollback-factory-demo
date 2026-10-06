@@ -60,5 +60,6 @@ test('builds a deployment record', () => {
     runUrl: undefined,
     description: undefined,
     rolledBackFrom: undefined,
+    verifiedAt: undefined,
   });
 });

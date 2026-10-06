@@ -8,10 +8,11 @@
  */
 import { APIGatewayClient, GetExportCommand, GetStageCommand } from '@aws-sdk/client-api-gateway';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-export type DeploymentSource = 'manual' | 'cicd' | 'rollback';
+/** rollback = automatic (alarm / failed tests), restore = a deployment chosen by hand */
+export type DeploymentSource = 'manual' | 'cicd' | 'rollback' | 'restore';
 
 export interface DeploymentRecord {
   apiName: string;
@@ -32,6 +33,12 @@ export interface DeploymentRecord {
   rolledBackFrom?: string;
   /** Set on a deployment once a rollback has claimed it (see claimRollback) */
   rolledBackAt?: string;
+  /**
+   * Set once integration tests passed against this deployment (CI: deployment:verify).
+   * Rollbacks only ever restore verified deployments. A rollback record inherits the
+   * verifiedAt of the deployment it restored, since it serves the same spec.
+   */
+  verifiedAt?: string;
 }
 
 export interface DeploymentTarget {
@@ -49,6 +56,7 @@ export interface RecordOptions {
   runUrl?: string;
   description?: string;
   rolledBackFrom?: string;
+  verifiedAt?: string;
   now?: Date;
 }
 
@@ -85,6 +93,7 @@ export function buildRecord(
     runUrl: opts.runUrl,
     description: opts.description,
     rolledBackFrom: opts.rolledBackFrom,
+    verifiedAt: opts.verifiedAt,
   };
 }
 
@@ -150,6 +159,26 @@ export async function recordDeployment(
     ConditionExpression: 'attribute_not_exists(deployedAt)',
   }));
   return record;
+}
+
+export async function getDeployment(
+  table: string,
+  apiName: string,
+  deployedAt: string,
+): Promise<DeploymentRecord | undefined> {
+  const { Item } = await ddb.send(new GetCommand({ TableName: table, Key: { apiName, deployedAt } }));
+  return Item as DeploymentRecord | undefined;
+}
+
+/** Marks a deployment as having passed the integration tests. */
+export async function markVerified(table: string, record: DeploymentRecord, now = new Date()) {
+  await ddb.send(new UpdateCommand({
+    TableName: table,
+    Key: { apiName: record.apiName, deployedAt: record.deployedAt },
+    UpdateExpression: 'SET verifiedAt = :now',
+    ConditionExpression: 'attribute_exists(deployedAt)',
+    ExpressionAttributeValues: { ':now': now.toISOString() },
+  }));
 }
 
 export async function getSpec(bucket: string, key: string): Promise<string> {

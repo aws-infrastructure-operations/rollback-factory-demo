@@ -1,0 +1,79 @@
+name: api-gateway-restore
+
+# Manual recovery: restore a recorded deployment of the API (re-import its OpenAPI
+# spec and redeploy stage v1 via the rollback Lambda), run the integration tests
+# against it and mark it verified if they pass.
+# Find the deployed_at value with `npm run deployment:list -- --env <env>` or in a
+# deploy run's job summary.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to restore
+        type: choice
+        options: [dev, prod]
+        default: dev
+      deployed_at:
+        description: deployedAt of the deployment to restore (e.g. 2026-10-06T11:38:01.784Z)
+        type: string
+        required: true
+      reason:
+        description: Why (stored in the deployment record)
+        type: string
+        default: manual restore
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    name: restore ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 20
+    # same group as the deploys: never restore while a deploy to this environment runs
+    concurrency:
+      group: api-gateway-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: aws-api-gateway
+    env:
+      API_ENV: ${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      DEPLOYED_AT: ${{ inputs.deployed_at }}
+      REASON: ${{ inputs.reason }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: aws-api-gateway/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Restore deployment
+        run: npm run -s deployment:restore -- --env "$API_ENV" --to "$DEPLOYED_AT" --reason "$REASON"
+
+      - name: Integration tests
+        run: npm run test:integration
+
+      - name: Mark restored deployment verified
+        run: npm run -s deployment:verify -- --env "$API_ENV"
+
+      - name: Deployment history
+        if: always()
+        run: |
+          {
+            echo "### api-user-$API_ENV deployments"
+            echo '```'
+            npm run -s deployment:list -- --env "$API_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
