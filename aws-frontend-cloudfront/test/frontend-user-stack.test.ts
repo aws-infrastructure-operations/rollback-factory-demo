@@ -125,6 +125,14 @@ test('exports the outputs later scripts read', () => {
   const outputs = synth('dev').findOutputs('*');
   for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName']) {
     assert.ok(outputs[name], `missing output ${name}`);
-    assert.deepEqual(outputs[name].Export, { Name: `rollback-factory-demo-${name}-dev` });
+    assert.deepEqual(outputs[name].Export, { Name: `rollback-factory-demo-frontend-${name}-dev` });
+  }
+});
+
+test('never exports a name the api-user stack in the same region could use', () => {
+  // the API exports rollback-factory-demo-<Output>-<env>; export names are unique per region
+  for (const [name, output] of Object.entries(synth('dev').findOutputs('*'))) {
+    const exportName = (output as any).Export?.Name;
+    if (exportName) assert.match(exportName, /^rollback-factory-demo-frontend-/, name);
   }
 });

@@ -97,8 +97,10 @@ export class FrontendUserStack extends cdk.Stack {
     });
 
     // --- Outputs --------------------------------------------------------------
+    // Export names are unique per account and region, and the api-user stack in the same
+    // region exports rollback-factory-demo-<Output>-<env> (e.g. DeploymentsTableName): prefix ours.
     const out = (outputName: string, value: string) =>
-      new cdk.CfnOutput(this, outputName, { value, exportName: name(outputName) });
+      new cdk.CfnOutput(this, outputName, { value, exportName: name(`frontend-${outputName}`) });
     out('DistributionId', this.distribution.distributionId);
     out('DistributionDomainName', this.distribution.distributionDomainName);
     out('SiteUrl', `https://${this.distribution.distributionDomainName}`);
