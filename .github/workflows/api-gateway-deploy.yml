@@ -11,8 +11,8 @@ on:
         type: string
         required: true
       bake_minutes:
-        type: number
-        default: 10
+        type: string
+        default: "10"
       chaos_failure_rate:
         type: string
         default: "0"

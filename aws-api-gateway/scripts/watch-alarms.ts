@@ -17,6 +17,9 @@ run(async () => {
   const { config, values } = parseCli(['minutes', 'interval'] as const);
   const minutes = Number(values.minutes ?? 10);
   const intervalMs = Number(values.interval ?? 30) * 1000;
+  if (!(minutes >= 0) || !(intervalMs > 0)) {
+    throw new Error(`--minutes and --interval must be numbers, got "${values.minutes}" / "${values.interval}"`);
+  }
   const outputs = await requireStackOutputs(config);
   const target = deploymentTarget(config, outputs);
   const alarmNames = [outputs.Alarm4xxName, outputs.Alarm5xxName];
