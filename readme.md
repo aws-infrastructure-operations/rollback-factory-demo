@@ -15,3 +15,8 @@ The projects deploy independently. The frontend doesn't call the API for now (si
 **Demos** (manual workflows, dev only): `break-api-demo` and `break-frontend-demo` each deploy
 something broken and send traffic until the alarm → SNS → rollback Lambda path restores the last
 verified version.
+
+**Cleanup** (manual workflow [`cleanup`](.github/workflows/cleanup.yml)): destroys the stacks of one
+environment, for all projects or one of them. Type `destroy <env>` to confirm. It waits for any
+deploy or rollback of that environment to finish. Prod keeps its buckets, tables and user pool after
+the stacks are gone, so delete those by hand before deploying prod again.
