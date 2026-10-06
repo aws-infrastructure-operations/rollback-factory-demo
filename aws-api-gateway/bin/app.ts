@@ -6,7 +6,7 @@ import { ApiUserStack } from '../lib/api-user-stack.js';
 const app = new cdk.App();
 const config = getConfig(app.node.tryGetContext('env') ?? process.env.API_ENV ?? 'dev');
 
-new ApiUserStack(app, `ApiUserStack-${config.envName}`, {
+new ApiUserStack(app, config.stackName, {
   config,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,

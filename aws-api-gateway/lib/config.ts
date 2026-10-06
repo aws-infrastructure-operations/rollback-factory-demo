@@ -3,6 +3,7 @@ export type EnvName = 'dev' | 'prod';
 export interface EnvConfig {
   envName: EnvName;
   apiName: string;
+  stackName: string;
   stageName: string;
   /** Whether stateful resources (user pool) survive stack deletion. */
   retainData: boolean;
@@ -17,6 +18,7 @@ export function getConfig(envName: string | undefined): EnvConfig {
   return {
     envName,
     apiName: `api-user-${envName}`,
+    stackName: `ApiUserStack-${envName}`,
     stageName: STAGE_NAME,
     retainData: envName === 'prod',
   };
