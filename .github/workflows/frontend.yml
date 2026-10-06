@@ -25,8 +25,10 @@ on:
         type: boolean
         default: true
 
+# One run of this workflow at a time; a new run waits for the running one. Pull request checks
+# have their own group, so they never wait for (or replace) a waiting deploy from main.
 concurrency:
-  group: frontend-${{ github.ref }}
+  group: frontend-${{ github.event_name == 'pull_request' && 'checks' || 'deploy' }}
   cancel-in-progress: false
 
 permissions:
