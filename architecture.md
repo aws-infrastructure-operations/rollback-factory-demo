@@ -116,8 +116,9 @@ No diagram yet. In short:
   user pool and calls the API.
 - **Releases:** each build is uploaded once to `releases/<yyyymmddThhmmssZ>/`, and its build manifest
   goes to S3. The distribution's **origin path** selects the live release.
-- **Pipeline:** CI makes a release live, runs smoke and end-to-end tests, and switches back to the
-  previous release if they fail.
+- **Pipeline:** CI makes a release live on the integration distribution `frontend-user-<env>-integration`
+  first and runs smoke and end-to-end tests there. Only if they pass does it switch `frontend-user-<env>`
+  to the same release, like the API's `integration` stage.
 - **Rollback:** the CloudFront 4xx/5xx-rate alarms live in `us-east-1`. Through SNS they invoke a
   rollback Lambda there, which points the origin path back at the previous verified release,
   invalidates the cache, and records the rollback in the deployments table in `eu-central-1`.

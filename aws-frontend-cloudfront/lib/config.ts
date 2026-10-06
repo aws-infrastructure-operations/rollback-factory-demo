@@ -24,6 +24,11 @@ export interface EnvConfig {
   envName: EnvName;
   /** The distribution keeps the story's name: frontend-user-<env>. */
   frontendName: string;
+  /**
+   * Comment of the second distribution, frontend-user-<env>-integration: CI makes each release
+   * live there first and runs the integration tests, and only then on frontendName.
+   */
+  integrationName: string;
   /** Every other resource: rollback-factory-demo-<resource>-<env>. */
   resourceName: (resource: string) => string;
   /** Site bucket, distribution, deployments bucket and table, in the main region. */
@@ -38,6 +43,8 @@ export interface EnvConfig {
    * `cdk deploy` keeps the origin path on it, so a deploy never undoes a rollback.
    */
   liveReleaseId?: string;
+  /** Same for the integration distribution (from scripts/live-context.ts). */
+  integrationReleaseId?: string;
   /** Whether stateful resources (buckets, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
@@ -55,6 +62,7 @@ export interface ConfigOverrides {
   alarmEmail?: string;
   rollbackWindowMinutes?: string | number;
   liveReleaseId?: string;
+  integrationReleaseId?: string;
 }
 
 export const PROJECT_NAME = 'rollback-factory-demo';
@@ -66,10 +74,15 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
   if (!ENV_NAMES.includes(envName as EnvName)) {
     throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}>`);
   }
-  const liveReleaseId = overrides.liveReleaseId || undefined;
-  if (liveReleaseId && !RELEASE_ID_PATTERN.test(liveReleaseId)) {
-    throw new Error(`liveReleaseId must look like 20261006T123005Z, got "${liveReleaseId}"`);
-  }
+  const releaseOverride = (name: 'liveReleaseId' | 'integrationReleaseId') => {
+    const value = overrides[name] || undefined;
+    if (value && !RELEASE_ID_PATTERN.test(value)) {
+      throw new Error(`${name} must look like 20261006T123005Z, got "${value}"`);
+    }
+    return value;
+  };
+  const liveReleaseId = releaseOverride('liveReleaseId');
+  const integrationReleaseId = releaseOverride('integrationReleaseId');
   const rollbackWindowMinutes = Number(overrides.rollbackWindowMinutes ?? 30);
   if (!(rollbackWindowMinutes > 0)) {
     throw new Error(`rollbackWindowMinutes must be a positive number, got ${overrides.rollbackWindowMinutes}`);
@@ -80,12 +93,14 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
   return {
     envName: envName as EnvName,
     frontendName: `frontend-user-${envName}`,
+    integrationName: `frontend-user-${envName}-integration`,
     resourceName,
     stackName: resourceName('frontend'),
     alarmsStackName: resourceName('frontend-alarms'),
     alarmsRegion: ALARMS_REGION,
     apiStackName: `${PROJECT_NAME}-${envName}`,
     liveReleaseId,
+    integrationReleaseId,
     retainData: envName === 'prod',
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',

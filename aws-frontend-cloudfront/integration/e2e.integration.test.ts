@@ -12,7 +12,7 @@ import { after, before, describe, test } from 'node:test';
 import { Browser, chromium, Page } from 'playwright';
 import { createUser, deleteUser, randomPassword } from '../scripts/lib/cognito.js';
 import { requireApiOutputs } from '../scripts/lib/stack.js';
-import { config, LiveSite, liveSite } from './lib/site.js';
+import { config, LiveSite, liveSite, target } from './lib/site.js';
 
 const TIMEOUT_MS = 20_000;
 
@@ -53,7 +53,7 @@ after(async () => {
 /** Problems collected since the last check, so each test reports its own. */
 const takeProblems = () => problems.splice(0);
 
-describe(`${config.frontendName} end to end`, () => {
+describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''} end to end`, () => {
   test('redirects to the login page without a session', async () => {
     await page.goto(`${site.siteUrl}/app.html`);
     await page.waitForURL(/\/index\.html$/);

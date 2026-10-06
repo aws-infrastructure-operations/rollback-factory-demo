@@ -13,10 +13,14 @@ export interface FrontendUserStackProps extends cdk.StackProps {
   config: EnvConfig;
 }
 
-/** Main region: site bucket + CloudFront distribution, deployments bucket and table. */
+/**
+ * Main region: site bucket, the distribution clients use and the integration distribution CI
+ * tests on (both read the same releases), deployments bucket and table.
+ */
 export class FrontendUserStack extends cdk.Stack {
   readonly siteBucket: s3.Bucket;
   readonly distribution: cloudfront.Distribution;
+  readonly integrationDistribution: cloudfront.Distribution;
   readonly deploymentsBucket: s3.Bucket;
   readonly deploymentsTable: dynamodb.TableV2;
 
@@ -38,30 +42,41 @@ export class FrontendUserStack extends cdk.Stack {
       autoDeleteObjects: !config.retainData,
     });
 
-    // --- Distribution -------------------------------------------------------------
-    // The origin path selects the live release. `cdk deploy` keeps it on -c liveReleaseId
-    // (scripts/live-context.ts), so a deploy never undoes an activation or a rollback.
-    const liveReleaseId = config.liveReleaseId ?? INITIAL_RELEASE_ID;
-    this.distribution = new cloudfront.Distribution(this, 'Distribution', {
-      comment: config.frontendName,
-      defaultRootObject: 'index.html',
-      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
-      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
-      defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket, {
-          originPath: originPathFor(liveReleaseId),
-        }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
-        // Hashed assets are cached for a year; HTML is uploaded with Cache-Control: no-cache.
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
-        compress: true,
-      },
-      // No SPA fallback (403/404 -> index.html): the app has two real HTML pages, and a
-      // missing file has to stay a 4xx so the 4xx alarm can see a broken release.
-    });
-    cdk.Tags.of(this.distribution).add('Name', config.frontendName);
+    // --- Distributions ------------------------------------------------------------
+    // The origin path selects the release a distribution serves. `cdk deploy` keeps both on
+    // -c liveReleaseId / -c integrationReleaseId (scripts/live-context.ts), so a deploy never
+    // undoes an activation or a rollback.
+    const siteDistribution = (id: string, comment: string, releaseId = INITIAL_RELEASE_ID) => {
+      const distribution = new cloudfront.Distribution(this, id, {
+        comment,
+        defaultRootObject: 'index.html',
+        httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+        priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+        defaultBehavior: {
+          origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket, {
+            originPath: originPathFor(releaseId),
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          // Hashed assets are cached for a year; HTML is uploaded with Cache-Control: no-cache.
+          cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+          responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,
+          compress: true,
+        },
+        // No SPA fallback (403/404 -> index.html): the app has two real HTML pages, and a
+        // missing file has to stay a 4xx so the 4xx alarm can see a broken release.
+      });
+      cdk.Tags.of(distribution).add('Name', comment);
+      return distribution;
+    };
+    // What clients use. Only this one has alarms and is rolled back (alarms stack).
+    // Its construct id stays 'Distribution' so existing stacks update it in place.
+    this.distribution = siteDistribution('Distribution', config.frontendName, config.liveReleaseId);
+    // Where CI makes each release live first and runs the integration tests, like the API's
+    // integration stage. No alarms: test traffic never counts toward a rollback.
+    this.integrationDistribution = siteDistribution(
+      'IntegrationDistribution', config.integrationName, config.integrationReleaseId,
+    );
 
     // A fresh stack serves a placeholder until the first release is activated.
     new s3deploy.BucketDeployment(this, 'InitialRelease', {
@@ -104,6 +119,8 @@ export class FrontendUserStack extends cdk.Stack {
     out('DistributionId', this.distribution.distributionId);
     out('DistributionDomainName', this.distribution.distributionDomainName);
     out('SiteUrl', `https://${this.distribution.distributionDomainName}`);
+    out('IntegrationDistributionId', this.integrationDistribution.distributionId);
+    out('IntegrationSiteUrl', `https://${this.integrationDistribution.distributionDomainName}`);
     out('SiteBucketName', this.siteBucket.bucketName);
     out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
     out('DeploymentsTableName', this.deploymentsTable.tableName);

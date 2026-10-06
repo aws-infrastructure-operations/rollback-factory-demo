@@ -17,6 +17,7 @@ Each ticket is one branch cut from `origin/main` and one PR.
 | [FE-08](FE-08-rollback-lambda.md) | Rollback Lambda (origin path + invalidation) | 11 | FE-05, FE-07 | `feature/frontend-rollback` |
 | [FE-09](FE-09-github-workflow.md) | GitHub workflow: deploy, test, promote to prod | 12 | FE-05, FE-06 | `feature/frontend-workflow` |
 | [FE-10](FE-10-demo-and-docs.md) | Break-frontend demo, README, story status | – | FE-08, FE-09 | `feature/frontend-demo` |
+| [FE-11](FE-11-integration-distribution.md) | Integration distribution: test each release before clients get it | 9, 12 | FE-09 | `feature/frontend-integration-distribution` |
 
 FE-02 and FE-03 can run in parallel; so can FE-05/FE-06/FE-07 once FE-04 is in.
 

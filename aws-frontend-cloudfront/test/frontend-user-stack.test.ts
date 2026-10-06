@@ -2,26 +2,45 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
-import { getConfig } from '../lib/config.js';
+import { ConfigOverrides, getConfig } from '../lib/config.js';
 import { FrontendUserStack } from '../lib/frontend-user-stack.js';
 
-const synth = (env: string, liveReleaseId?: string) => {
+const synth = (env: string, overrides: ConfigOverrides = {}) => {
   const app = new cdk.App();
-  const stack = new FrontendUserStack(app, `Test-${env}`, { config: getConfig(env, { liveReleaseId }) });
+  const stack = new FrontendUserStack(app, `Test-${env}`, { config: getConfig(env, overrides) });
   return Template.fromStack(stack);
 };
 
-const distributionConfig = (t: Template) => {
-  const [distribution] = Object.values(t.findResources('AWS::CloudFront::Distribution')) as any[];
+/** DistributionConfig of the distribution with this construct id ('Distribution' or 'IntegrationDistribution'). */
+const distributionConfig = (t: Template, id = 'Distribution') => {
+  const [distribution] = Object.entries(t.findResources('AWS::CloudFront::Distribution'))
+    .filter(([logicalId]) => logicalId.startsWith(id) && !logicalId.startsWith(`${id}Integration`))
+    .map(([, resource]) => resource as any);
   return distribution.Properties.DistributionConfig;
 };
 
-test('names the distribution frontend-user-<env>', () => {
+test('names the distributions frontend-user-<env> and frontend-user-<env>-integration', () => {
   for (const env of ['dev', 'prod']) {
     const t = synth(env);
-    t.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    t.resourceCountIs('AWS::CloudFront::Distribution', 2);
     assert.equal(distributionConfig(t).Comment, `frontend-user-${env}`);
+    assert.equal(distributionConfig(t, 'IntegrationDistribution').Comment, `frontend-user-${env}-integration`);
   }
+});
+
+test('keeps the construct id of the existing distribution, so it is updated in place', () => {
+  const ids = Object.keys(synth('dev').findResources('AWS::CloudFront::Distribution'));
+  assert.ok(ids.some((id) => /^Distribution[0-9A-F]{8}$/.test(id)), ids.join(', '));
+});
+
+test('serves both distributions the same way', () => {
+  const t = synth('dev');
+  // everything but the comment and the generated origin id
+  const comparable = (config: any) => ({ ...config, Comment: undefined, Origins: undefined, DefaultCacheBehavior: { ...config.DefaultCacheBehavior, TargetOriginId: undefined } });
+  const { Origins: liveOrigins, ...live } = distributionConfig(t);
+  const { Origins: integrationOrigins, ...integration } = distributionConfig(t, 'IntegrationDistribution');
+  assert.deepEqual(comparable(integration), comparable(live));
+  assert.deepEqual(integrationOrigins[0].DomainName, liveOrigins[0].DomainName, 'same site bucket');
 });
 
 test('keeps the site bucket private and HTTPS only', () => {
@@ -45,36 +64,43 @@ test('keeps the site bucket private and HTTPS only', () => {
   assert.equal(config.DefaultRootObject, 'index.html');
 });
 
-test('reads the bucket through Origin Access Control, for this distribution only', () => {
+test('reads the bucket through Origin Access Control, for these two distributions only', () => {
   const t = synth('dev');
-  t.resourceCountIs('AWS::CloudFront::OriginAccessControl', 1);
+  // one per distribution, so the existing distribution's resources stay untouched
+  t.resourceCountIs('AWS::CloudFront::OriginAccessControl', 2);
   t.hasResourceProperties('AWS::CloudFront::OriginAccessControl', {
     OriginAccessControlConfig: { OriginAccessControlOriginType: 's3', SigningBehavior: 'always' },
   });
-  const [origin] = distributionConfig(t).Origins;
-  assert.ok(origin.OriginAccessControlId, 'origin uses OAC');
-  assert.deepEqual(origin.S3OriginConfig, { OriginAccessIdentity: '' }, 'no legacy OAI');
-  t.hasResourceProperties('AWS::S3::BucketPolicy', {
-    PolicyDocument: {
-      Statement: Match.arrayWith([
-        Match.objectLike({
-          Effect: 'Allow',
-          Principal: { Service: 'cloudfront.amazonaws.com' },
-          Action: 's3:GetObject',
-          Condition: { StringEquals: { 'AWS:SourceArn': Match.anyValue() } },
-        }),
-      ]),
-    },
-  });
+  for (const id of ['Distribution', 'IntegrationDistribution']) {
+    const [origin] = distributionConfig(t, id).Origins;
+    assert.ok(origin.OriginAccessControlId, `${id} uses OAC`);
+    assert.deepEqual(origin.S3OriginConfig, { OriginAccessIdentity: '' }, 'no legacy OAI');
+  }
+  // the bucket policy lets exactly these two distributions read
+  const statements = Object.values(t.findResources('AWS::S3::BucketPolicy'))
+    .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement)
+    .filter((statement: any) => statement.Principal?.Service === 'cloudfront.amazonaws.com');
+  const readers = JSON.stringify(statements.map((statement: any) => statement.Condition.StringEquals['AWS:SourceArn']));
+  const distributionIds = Object.keys(t.findResources('AWS::CloudFront::Distribution'));
+  assert.equal(distributionIds.length, 2);
+  for (const id of distributionIds) assert.match(readers, new RegExp(`"Ref":"${id}"`), `${id} may read the bucket`);
+  for (const statement of statements) assert.equal(statement.Action, 's3:GetObject');
 });
 
-test('points the origin path at the live release, or the placeholder', () => {
-  assert.equal(distributionConfig(synth('dev')).Origins[0].OriginPath, '/releases/initial');
-  assert.equal(distributionConfig(synth('dev', '20261006T123005Z')).Origins[0].OriginPath, '/releases/20261006T123005Z');
+test('points each origin path at the release it serves, or the placeholder', () => {
+  const originPath = (t: Template, id?: string) => distributionConfig(t, id).Origins[0].OriginPath;
+  const fresh = synth('dev');
+  assert.equal(originPath(fresh), '/releases/initial');
+  assert.equal(originPath(fresh, 'IntegrationDistribution'), '/releases/initial');
+  const kept = synth('dev', { liveReleaseId: '20261006T120000Z', integrationReleaseId: '20261006T123005Z' });
+  assert.equal(originPath(kept), '/releases/20261006T120000Z');
+  assert.equal(originPath(kept, 'IntegrationDistribution'), '/releases/20261006T123005Z');
 });
 
 test('has no SPA fallback, so a missing file stays a 4xx', () => {
-  assert.equal(distributionConfig(synth('dev')).CustomErrorResponses, undefined);
+  const t = synth('dev');
+  assert.equal(distributionConfig(t).CustomErrorResponses, undefined);
+  assert.equal(distributionConfig(t, 'IntegrationDistribution').CustomErrorResponses, undefined);
 });
 
 test('deploys the placeholder into releases/initial/ without pruning other releases', () => {
@@ -123,7 +149,7 @@ test('records deployments in a DynamoDB table keyed by frontendName + deployedAt
 
 test('exports the outputs later scripts read', () => {
   const outputs = synth('dev').findOutputs('*');
-  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName']) {
+  for (const name of ['DistributionId', 'DistributionDomainName', 'SiteUrl', 'IntegrationDistributionId', 'IntegrationSiteUrl', 'SiteBucketName', 'DeploymentsBucketName', 'DeploymentsTableName']) {
     assert.ok(outputs[name], `missing output ${name}`);
     assert.deepEqual(outputs[name].Export, { Name: `rollback-factory-demo-frontend-${name}-dev` });
   }
