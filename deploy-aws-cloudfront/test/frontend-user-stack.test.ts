@@ -228,3 +228,17 @@ test('gives the dashboard API read access to the APIs, their stages and deployme
   assert.equal(statements[0].Resource.length, expected.length);
   assert.doesNotMatch(resources, /\*/,'no wildcard that crosses into deeper paths');
 });
+
+test('lets the dashboard API only list and read: API Gateway, Lambda aliases and versions, metrics', () => {
+  const t = synth('dev');
+  const [roleId] = Object.keys(t.findResources('AWS::IAM::Role')).filter((id) => id.startsWith('DashboardApi'));
+  const statements = Object.values(t.findResources('AWS::IAM::Policy'))
+    .filter((policy: any) => JSON.stringify(policy.Properties.Roles).includes(`"${roleId}"`))
+    .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement);
+  const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
+  assert.deepEqual(actions, [
+    'apigateway:GET', 'cloudwatch:GetMetricData', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
+  ]);
+  const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
+  assert.match(JSON.stringify(scoped.Resource), /:function:\*"/, 'aliases and versions of this account and region only');
+});

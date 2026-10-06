@@ -1,8 +1,8 @@
 /**
  * End-to-end test in a headless Chromium against the deployed site of FRONTEND_ENV (on the
  * FRONTEND_TARGET distribution): the page loads with its scripts and styles and shows the
- * environment and the release the distribution serves, and the API Gateways panel loads from the
- * dashboard API (/api/*). Fails on any browser console error or failed request.
+ * environment and the release the distribution serves, and the API Gateways and Lambda Functions
+ * panels load from the dashboard API (/api/*). Fails on any browser console error or failed request.
  *
  * Needs AWS credentials that can read the stack and the distribution, and Chromium for
  * Playwright (npx playwright install chromium). FRONTEND_RELEASE as in smoke.
@@ -83,6 +83,24 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     await page.locator('#api-gateway-details:not([data-state="loading"])').waitFor();
     assert.equal(await page.locator('#api-gateway-details').getAttribute('data-state'), 'ready');
     assert.match((await page.locator('#api-gateway-details h2').textContent()) ?? '', new RegExp(first.name));
+    assert.deepEqual(problems.splice(0), []);
+  });
+
+  test('lists the Lambda functions and shows the selected one, without environment variables', async (t) => {
+    await page.locator('#lambda-functions:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#lambda-functions').getAttribute('data-state'), 'ready');
+    const response = await page.request.get(`${site.siteUrl}/api/lambda-functions`);
+    assert.equal(response.status(), 200);
+    const { functions } = await response.json();
+    assert.equal(await page.locator('#lambda-functions tbody tr:not(:has(td.state))').count(), functions.length);
+    if (!functions.length) return t.skip('no Lambda function in the region');
+
+    const details = await page.request.get(`${site.siteUrl}/api/lambda-functions/${functions[0].name}`);
+    assert.equal(details.status(), 200);
+    const body = await details.text();
+    assert.doesNotMatch(body, /"Environment"|"Variables"/, 'environment variables are never sent');
+    await page.locator('#lambda-function-details:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#lambda-function-details').getAttribute('data-state'), 'ready');
     assert.deepEqual(problems.splice(0), []);
   });
 });
