@@ -68,7 +68,10 @@ test('describes a build directory with sizes and sha256 hashes', async () => {
   }
 });
 
-/** A CloudFront client that serves one distribution config and records the commands. */
+/**
+ * A CloudFront client that serves one distribution config and records the commands. The config has
+ * the dashboard API's origin first, so the tests also check the switch leaves it alone.
+ */
 const fakeCloudFront = (originPath: string) => {
   const sent: any[] = [];
   const client = {
@@ -77,7 +80,13 @@ const fakeCloudFront = (originPath: string) => {
       if (command instanceof GetDistributionConfigCommand) {
         return {
           ETag: 'etag-1',
-          DistributionConfig: { Comment: 'frontend-user-dev', Origins: { Quantity: 1, Items: [{ Id: 'site', OriginPath: originPath }] } },
+          DistributionConfig: {
+            Comment: 'frontend-user-dev',
+            Origins: { Quantity: 2, Items: [
+              { Id: 'api', DomainName: 'abc123.lambda-url.eu-central-1.on.aws', OriginPath: '' },
+              { Id: 'site', DomainName: 'site.s3.eu-central-1.amazonaws.com', OriginPath: originPath },
+            ] },
+          },
         };
       }
       if (command instanceof UpdateDistributionCommand) return {};
@@ -99,7 +108,8 @@ test('switches the origin path with the ETag and invalidates everything', async 
   const update: any = sent.find((c) => c instanceof UpdateDistributionCommand);
   assert.equal(update.input.Id, 'DIST');
   assert.equal(update.input.IfMatch, 'etag-1');
-  assert.equal(update.input.DistributionConfig.Origins.Items[0].OriginPath, '/releases/20261006T123005Z');
+  assert.equal(update.input.DistributionConfig.Origins.Items[1].OriginPath, '/releases/20261006T123005Z');
+  assert.equal(update.input.DistributionConfig.Origins.Items[0].OriginPath, '', 'the API origin keeps its path');
   assert.equal(update.input.DistributionConfig.Comment, 'frontend-user-dev', 'the rest of the config is sent back unchanged');
   const invalidation: any = sent.find((c) => c instanceof CreateInvalidationCommand);
   assert.deepEqual(invalidation.input, {

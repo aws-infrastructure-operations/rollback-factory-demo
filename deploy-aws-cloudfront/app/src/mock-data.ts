@@ -1,25 +1,10 @@
-// Sample data for the dashboard layout. Nothing here comes from AWS yet: the panels only show
-// what the UI will look like once it is wired to the real APIs.
+// Sample data for the Lambda and CloudFront panels. Nothing here comes from AWS: the panels only
+// show what the UI will look like once they are wired to real data (API Gateways already are).
 
 export type Env = 'prod' | 'staging' | 'dev';
 
-export interface ApiRow { name: string; id: string; type: 'REST' | 'HTTP'; stages: Env[]; lastDeployed: string }
 export interface LambdaRow { name: string; arn: string; runtime: string; aliases: Env[]; lastModified: string }
 export interface DistributionRow { name: string; id: string; domain: string; status: string; lastDeployed: string }
-
-export const apis: ApiRow[] = [
-  { name: 'farm-management-api', id: 'a1b2c3d4e5', type: 'REST', stages: ['prod', 'staging', 'dev'], lastDeployed: 'Oct 6, 2026 14:32' },
-  { name: 'auth-api', id: 'f6g7h8i9j0', type: 'HTTP', stages: ['prod', 'staging'], lastDeployed: 'Oct 5, 2026 11:18' },
-  { name: 'detection-system-api', id: 'k1l2m3n4o5', type: 'REST', stages: ['prod', 'staging', 'dev'], lastDeployed: 'Oct 4, 2026 09:12' },
-  { name: 'heal-system-api', id: 'p6q7r8s9t0', type: 'HTTP', stages: ['prod', 'staging'], lastDeployed: 'Oct 3, 2026 16:45' },
-  { name: 'admin-api', id: 'u1v2w3x4y5', type: 'REST', stages: ['prod', 'staging'], lastDeployed: 'Oct 1, 2026 10:21' },
-];
-
-export const apiStages = [
-  { stage: 'prod', deploymentId: 'd-0a1b2c3d4e', deployedAt: 'Oct 6, 2026 14:32', healthy: true },
-  { stage: 'staging', deploymentId: 'd-5f6g7h8i9j', deployedAt: 'Oct 5, 2026 11:18', healthy: true },
-  { stage: 'dev', deploymentId: 'd-1k2l3m4n5o', deployedAt: 'Oct 4, 2026 09:12', healthy: false },
-];
 
 const arn = (name: string) => `arn:aws:lambda:...function:${name}`;
 export const lambdas: LambdaRow[] = [

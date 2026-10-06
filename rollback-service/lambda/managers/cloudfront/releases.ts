@@ -28,13 +28,20 @@ export interface SwitchResult {
   invalidationId: string;
 }
 
+/**
+ * The origins that serve releases: the site bucket. The dashboard API's Lambda function URL
+ * (/api/*) is an origin too, and its path must never change.
+ */
+export const releaseOrigins = <T extends { DomainName?: string }>(origins: T[]) =>
+  origins.filter((origin) => !origin.DomainName?.includes('.lambda-url.'));
+
 export async function getLiveReleaseId(cloudfront: CloudFrontClient, distributionId: string) {
   const { DistributionConfig } = await cloudfront.send(new GetDistributionConfigCommand({ Id: distributionId }));
-  return releaseIdFromOriginPath(DistributionConfig?.Origins?.Items?.[0]?.OriginPath);
+  return releaseIdFromOriginPath(releaseOrigins(DistributionConfig?.Origins?.Items ?? [])[0]?.OriginPath);
 }
 
 /**
- * Points every origin of the distribution at the release (conditional on the ETag) and invalidates
+ * Points the site origin of the distribution at the release (conditional on the ETag) and invalidates
  * the whole cache. The distribution then takes a few minutes to deploy.
  */
 export async function switchRelease(
@@ -45,8 +52,8 @@ export async function switchRelease(
 ): Promise<SwitchResult> {
   assertReleaseId(releaseId);
   const { DistributionConfig: config, ETag } = await cloudfront.send(new GetDistributionConfigCommand({ Id: distributionId }));
-  const origins = config?.Origins?.Items ?? [];
-  if (!config || !origins.length) throw new Error(`Distribution ${distributionId} has no origins`);
+  const origins = releaseOrigins(config?.Origins?.Items ?? []);
+  if (!config || !origins.length) throw new Error(`Distribution ${distributionId} has no site origin`);
 
   const previousReleaseId = releaseIdFromOriginPath(origins[0].OriginPath);
   const originPath = originPathFor(releaseId);

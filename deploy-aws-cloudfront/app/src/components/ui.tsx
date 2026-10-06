@@ -10,11 +10,15 @@ export interface Column<T> {
   className?: string;
 }
 
-export function DataTable<T>({ columns, rows, rowKey, selectedKey }: {
+/** A row across the whole table instead of the data: loading, nothing found, or an error. */
+export interface TableMessage { text: ReactNode; error?: boolean }
+
+export function DataTable<T>({ columns, rows, rowKey, selectedKey, message }: {
   columns: Column<T>[];
   rows: T[];
   rowKey: (row: T) => string;
   selectedKey?: string;
+  message?: TableMessage;
 }) {
   return (
     <div className="table-wrap">
@@ -23,7 +27,14 @@ export function DataTable<T>({ columns, rows, rowKey, selectedKey }: {
           <tr>{columns.map((c, i) => <th key={i} scope="col">{c.header}</th>)}</tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {message && (
+            <tr>
+              <td colSpan={columns.length} className={`state${message.error ? ' error' : ''}`} role={message.error ? 'alert' : 'status'}>
+                {message.text}
+              </td>
+            </tr>
+          )}
+          {!message && rows.map((row) => (
             <tr key={rowKey(row)} className={rowKey(row) === selectedKey ? 'selected' : undefined}>
               {columns.map((c, i) => <td key={i} className={c.className}>{c.cell(row)}</td>)}
             </tr>
@@ -36,6 +47,14 @@ export function DataTable<T>({ columns, rows, rowKey, selectedKey }: {
 
 export const EnvTags = ({ envs }: { envs: Env[] }) => (
   <span className="tags">{envs.map((e) => <span key={e} className={`tag tag-${e}`}>{e}</span>)}</span>
+);
+
+/** Stage names are free text: the usual ones get the env colors, any other is neutral. */
+const stageTag = (stage: string) =>
+  ({ prod: 'tag-prod', live: 'tag-prod', staging: 'tag-staging', integration: 'tag-staging' })[stage] ?? 'tag-dev';
+
+export const StageTags = ({ stages }: { stages: string[] }) => (
+  <span className="tags">{stages.map((s) => <span key={s} className={`tag ${stageTag(s)}`}>{s}</span>)}</span>
 );
 
 export const NameLink = ({ name, healthy = true }: { name: string; healthy?: boolean }) => (
