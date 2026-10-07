@@ -7,7 +7,7 @@ import {
 } from '../api.js';
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
-import { outcomeMessage, useOperationDialog } from './Operation.js';
+import { ConfirmFacts, ConfirmNote, outcomeMessage, useOperationDialog } from './Operation.js';
 import { DataTable, RollbackButton, Tag, type TableMessage } from './ui.js';
 
 const formatAt = (iso: string) => new Date(iso).toLocaleString();
@@ -97,10 +97,29 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
 
   async function restore(r: Release) {
     const what = `${d.name} to release ${r.releaseId}, recorded ${formatAt(r.deployedAt)}`;
-    if (!window.confirm(`Restore ${what}?\n\nThe rollback service points the distribution at that release and invalidates its cache. The distribution takes a few minutes to deploy.`)) return;
     setRestoring({ id: d.id, deployedAt: r.deployedAt });
     setOutcome(undefined);
-    const ended = await operation.start(`Restore ${what}`, () => restoreDistributionRelease(d.id, r.deployedAt));
+    const ended = await operation.start(`Restore ${what}`, () => restoreDistributionRelease(d.id, r.deployedAt), {
+      confirmLabel: 'Restore',
+      danger: true,
+      body: (
+        <>
+          <ConfirmFacts rows={[
+            ['Distribution', <>{d.name} <span className="muted-text">· {d.domain}</span></>],
+            ['Live now', live ?? '—'],
+            ['Restores', <>{r.releaseId} <span className="muted-text">· recorded {formatAt(r.deployedAt)} · {r.source}{r.commit ? ` · ${r.commit.slice(0, 7)}` : ''}{r.verified ? ' · verified' : ''}{r.rolledBack ? ' · rolled back' : ''}</span></>],
+          ]} />
+          <ConfirmNote>
+            The rollback service points the site origin at that release and invalidates the cache. CloudFront
+            takes a few minutes to serve it everywhere; it counts as verified once the integration tests pass again.
+          </ConfirmNote>
+        </>
+      ),
+    });
+    if (ended.status === 'cancelled') {
+      setRestoring(undefined);
+      return;
+    }
     setOutcome({
       id: d.id,
       ...outcomeMessage(ended, `Restored ${what}. CloudFront takes a few minutes to deploy it; it counts as verified once the integration tests pass again.`, 'Restore failed'),
@@ -108,7 +127,8 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
     setRestoring(undefined);
     setRestores((n) => n + 1);
   }
-  const busy = restoring?.id === d.id;
+  // only once confirmed: the buttons stay as they are while the confirmation is open
+  const busy = restoring?.id === d.id && operation.busy;
 
   return (
     <>
