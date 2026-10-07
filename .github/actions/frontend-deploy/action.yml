@@ -106,8 +106,10 @@ runs:
         path: ~/.cache/ms-playwright
         key: playwright-${{ runner.os }}-${{ hashFiles('deploy-aws-cloudfront/package-lock.json') }}
 
+    # no --with-deps: the runner image (it ships Google Chrome) already has Chromium's system
+    # libraries, and the apt-get it runs can hang for the whole job timeout when a mirror stalls
     - name: Install Chromium for the end-to-end test
-      run: npx playwright install --with-deps chromium
+      run: npx playwright install chromium
       shell: bash
       working-directory: deploy-aws-cloudfront
 
