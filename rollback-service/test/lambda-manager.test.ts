@@ -361,3 +361,17 @@ test('refuses unregistered functions, the version already pointed to, and versio
   assert.equal(fn.live.version, 3);
   assert.equal(fn.calls.some((c) => c instanceof UpdateAliasCommand), false);
 });
+
+test('pointing live logs the steps the dashboard\'s progress bar follows', async () => {
+  const handle = await deployHistory();
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+  try {
+    await handle(point('live', 1));
+  } finally {
+    console.log = original;
+  }
+  const steps = lines.filter((l) => l.startsWith('{"msg":"step"')).map((l) => JSON.parse(l).step);
+  assert.deepEqual(steps, ['archive-synced', 'alias-moved', 'latest-restored', 'recorded']);
+});

@@ -128,11 +128,13 @@ async function redeploy(target: ApiRollbackTarget, to: DeploymentRecord, descrip
     failOnWarnings: false,
     body: new TextEncoder().encode(JSON.stringify(spec)),
   }));
+  log('spec imported', { step: 'spec-imported', restApiId: target.restApiId });
   const deployment = await apigw.send(new CreateDeploymentCommand({
     restApiId: target.restApiId,
     stageName: target.stageName,
     description: description.slice(0, 1024),
   }));
+  log('stage redeployed', { step: 'stage-redeployed', stage: target.stageName, deploymentId: deployment.id });
   return deployment.id;
 }
 

@@ -61,5 +61,12 @@ const route = createRouter(ENV_NAME, {
 
 export const handler = async (event: ServiceEvent) => {
   targets.clear();
-  return route(event);
+  try {
+    const result = await route(event);
+    console.log(JSON.stringify({ msg: 'result', result }));
+    return result;
+  } catch (err) {
+    console.error(JSON.stringify({ msg: 'failed', error: (err as Error).message }));
+    throw err;
+  }
 };

@@ -114,3 +114,12 @@ test('prefixes export names, so they never clash with the project stacks', () =>
     }
   }
 });
+
+test('logs to rollback-factory-demo-rollback-service-logs-<env>, where the dashboard follows its restores', () => {
+  const { main } = synth('dev');
+  main.hasResourceProperties('AWS::Logs::LogGroup', { LogGroupName: 'rollback-factory-demo-rollback-service-logs-dev' });
+  main.hasResourceProperties('AWS::Lambda::Function', {
+    FunctionName: 'rollback-factory-demo-rollback-service-dev',
+    LoggingConfig: { LogGroup: Match.anyValue() },
+  });
+});

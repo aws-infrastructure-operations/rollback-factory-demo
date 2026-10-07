@@ -53,29 +53,24 @@ const fakeLambda = (answer: { FunctionError?: string; Payload?: string }) => {
   return { client: client as unknown as LambdaClient, sent };
 };
 
-test('asks the environment\'s rollback service to point the alias', async () => {
-  const lambda = fakeLambda({ Payload: '{"pointed":true,"from":3,"to":1,"kind":"rollback"}' });
+test('asks the environment\'s rollback service to point the alias, without waiting', async () => {
+  const lambda = fakeLambda({});
   const outcome = await pointAlias(lambda.client, REGISTERED, PROJECT, 'service-lambda-dev', { aliasName: 'live', version: 1 });
-  assert.deepEqual(outcome, { ok: true, result: { pointed: true, from: 3, to: 1, kind: 'rollback' } });
+  assert.ok(outcome.ok);
+  assert.match(outcome.operationId, /^dev\.lambda-point-alias\.\d{13}\.[0-9a-f]{8}$/);
   assert.equal(lambda.sent[0].input.FunctionName, 'rollback-factory-demo-rollback-service-dev');
+  assert.equal(lambda.sent[0].input.InvocationType, 'Event');
   assert.deepEqual(JSON.parse(new TextDecoder().decode(lambda.sent[0].input.Payload)), {
     type: 'point-alias', functionName: 'service-lambda-dev', aliasName: 'live', version: 1, actor: 'dashboard',
+    operationId: outcome.operationId,
   });
 });
 
-test('refuses unregistered functions without invoking anything, and reports what the service refused', async () => {
-  const lambda = fakeLambda({ Payload: '{}' });
+test('refuses unregistered functions without invoking anything', async () => {
+  const lambda = fakeLambda({});
   const refused = await pointAlias(lambda.client, REGISTERED, PROJECT, 'rollback-factory-demo-handler-dev', { aliasName: 'live', version: 1 });
   assert.equal((refused as { status: number }).status, 400);
   assert.equal(lambda.sent.length, 0);
-
-  const skipped = await pointAlias(fakeLambda({ Payload: '{"rolledBack":false,"reason":"service-lambda-dev:live already points to version 1"}' }).client,
-    REGISTERED, PROJECT, 'service-lambda-dev', { aliasName: 'live', version: 1 });
-  assert.deepEqual(skipped, { ok: false, status: 409, message: 'service-lambda-dev:live already points to version 1' });
-
-  const failed = await pointAlias(fakeLambda({ FunctionError: 'Unhandled', Payload: '{"errorMessage":"secret details"}' }).client,
-    REGISTERED, PROJECT, 'service-lambda-dev', { aliasName: 'live', version: 1 });
-  assert.deepEqual(failed, { ok: false, status: 502, message: 'The rollback service could not point service-lambda-dev:live to version 1' });
 });
 
 test('validates alias names and versions', () => {

@@ -9,6 +9,7 @@ import {
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { MenuButton, type MenuItem } from './Menu.js';
+import { outcomeMessage, useOperationDialog } from './Operation.js';
 import { DataTable, StageTags } from './ui.js';
 
 /** Only functions registered for rollback can be changed, through the rollback service. */
@@ -106,19 +107,20 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
   const managed = data?.managedAlias;
   const disabledReason = !managed ? NOT_REGISTERED : busy ? 'A change is running.' : undefined;
 
+  // the popup that follows the change while the rollback service makes it
+  const operation = useOperationDialog();
+
   async function point(alias: Alias, target: number) {
     if (!window.confirm(pointEffect(fn.name, alias, target, managed))) return;
     setPointing({ fn: fn.name, alias: alias.name });
     setOutcome(undefined);
-    try {
-      await pointLambdaAlias(fn.name, alias.name, target);
-      setOutcome({ fn: fn.name, text: `${alias.name} now points to version ${target}.` });
-    } catch (err) {
-      setOutcome({ fn: fn.name, text: `Could not point ${alias.name} to version ${target}: ${(err as Error).message}`, error: true });
-    } finally {
-      setPointing(undefined);
-      setChanges((n) => n + 1);
-    }
+    const ended = await operation.start(`Point ${fn.name}:${alias.name} to version ${target}`, () => pointLambdaAlias(fn.name, alias.name, target));
+    setOutcome({
+      fn: fn.name,
+      ...outcomeMessage(ended, `${alias.name} now points to version ${target}.`, `Could not point ${alias.name} to version ${target}`),
+    });
+    setPointing(undefined);
+    setChanges((n) => n + 1);
   }
 
   /** Versions menu: one item per alias, to point it at `version`. */
@@ -144,6 +146,8 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
   );
 
   return (
+    <>
+    {operation.dialog}
     <DetailPanel
       id="lambda-function-details" icon="lambda" tint="tint-lambda" name={fn.name}
       badge={fn.aliases.length ? 'Active' : undefined}
@@ -208,6 +212,7 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
         );
       }}
     </DetailPanel>
+    </>
   );
 }
 

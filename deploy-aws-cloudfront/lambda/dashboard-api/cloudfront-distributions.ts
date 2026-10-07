@@ -9,11 +9,12 @@ import {
   CloudFrontClient, GetDistributionCommand, GetInvalidationCommand, ListDistributionsCommand, ListInvalidationsCommand,
   type DistributionSummary, type Origin,
 } from '@aws-sdk/client-cloudfront';
-import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import type { LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { DeploymentRecord } from '../shared/deployments.js';
 import { releaseIdFromOriginPath, releaseOrigins } from '../shared/releases.js';
 import { mapLimit } from './util.js';
+import { startOperation } from './operations.js';
 
 /** What GET /api/cloudfront-distributions returns per distribution (app/src/api.ts has the same shape). */
 export interface DistributionSummaryView {
@@ -258,8 +259,8 @@ export async function getDistributionMetrics(client: CloudWatchClient, distribut
 // --- Restore (the Restore button) ---------------------------------------------------------------
 
 export type ReleaseRestoreResult =
-  | { ok: true; result: unknown }
-  | { ok: false; status: 400 | 404 | 409 | 502; message: string };
+  | { ok: true; operationId: string }
+  | { ok: false; status: 400 | 404 | 409; message: string };
 
 /** The rollback service of a frontend-user-<env> distribution's environment; none for any other. */
 export function rollbackServiceForDistribution(comment: string | undefined, project: string): string | undefined {
@@ -301,19 +302,7 @@ export async function restoreRelease(
   const live = summarize({ ...distribution, ...distribution!.DistributionConfig }).releaseId;
   if (record.releaseId === live) return { ok: false, status: 409, message: `${comment} already serves release ${record.releaseId}` };
 
-  const res = await lambda.send(new InvokeCommand({
-    FunctionName: service,
-    Payload: new TextEncoder().encode(JSON.stringify({
-      type: 'restore', manager: 'cloudfront', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason,
-    })),
-  }));
-  const payload = res.Payload ? new TextDecoder().decode(res.Payload) : '';
-  if (res.FunctionError) {
-    console.error(`Restore of ${comment} to ${record.releaseId} failed`, payload);
-    return { ok: false, status: 502, message: `The rollback service could not restore ${comment}` };
-  }
-  const result = payload ? JSON.parse(payload) : undefined;
-  // e.g. a release went live between the check above and the rollback service's own
-  if (result?.action === 'skip') return { ok: false, status: 409, message: result.reason };
-  return { ok: true, result };
+  // the page follows the run in a popup (GET /api/operations/<id>)
+  const operationId = await startOperation(lambda, service, 'cloudfront-restore', { type: 'restore', manager: 'cloudfront', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason });
+  return { ok: true, operationId };
 }
