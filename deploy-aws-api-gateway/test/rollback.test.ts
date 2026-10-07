@@ -59,6 +59,16 @@ describe('stack', () => {
       .allResourcesProperties('AWS::CloudWatch::Alarm', { ActionsEnabled: false });
   });
 
+  test('does not export RollbackTarget: export values may be 1024 characters at most', () => {
+    const outputs = t.findOutputs('*');
+    // the rollback service reads it with DescribeStacks; nothing imports it
+    assert.equal(outputs.RollbackTarget.Export, undefined);
+    // the exported outputs are single values, never a JSON document that grows with the stack
+    for (const [name, output] of Object.entries(outputs)) {
+      if (output.Export) assert.doesNotMatch(JSON.stringify(output.Value), /Fn::Join.*\{\\\\"/, name);
+    }
+  });
+
   test('publishes the RollbackTarget the rollback service reads', () => {
     const output = JSON.stringify(t.findOutputs('RollbackTarget').RollbackTarget.Value);
     for (const expected of [
