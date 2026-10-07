@@ -2,9 +2,11 @@ name: dns
 
 # PRs: typecheck, unit tests, synth.
 # main / manual: deploy deploy-aws-dns, the hosted zone rollback.ionuteliantudor.com that every
-# environment's CloudFront sites use. One stack for all environments, deployed with the prod
-# environment's credentials (same account). The run summary lists the name servers to delegate to.
-# Not part of cleanup.yml: destroying an environment must never take the shared zone.
+# environment's CloudFront sites use, and deploy-aws-dns-api-domains, the API Gateway custom domains
+# api.<env>.rollback… that every API of an environment is mapped on. Both stacks serve all
+# environments and are deployed with the prod environment's credentials (same account) in its
+# vars.AWS_REGION, the APIs' region. The run summary lists the name servers to delegate to.
+# Not part of cleanup.yml: destroying an environment must never take the shared zone or domains.
 
 on:
   push:
@@ -80,8 +82,8 @@ jobs:
       - name: CDK bootstrap (no-op when up to date)
         run: npx cdk bootstrap
 
-      - name: Deploy the hosted zone
-        run: npx cdk deploy --require-approval never --outputs-file outputs.json
+      - name: Deploy the hosted zone and the API domains
+        run: npx cdk deploy --all --require-approval never --outputs-file outputs.json
 
       - name: Name servers and zone id -> job summary
         run: |
@@ -96,4 +98,6 @@ jobs:
             tr ',' '\n' <<<"$name_servers"
             echo '```'
             echo "Check it with: \`dig NS rollback.ionuteliantudor.com +short\`"
+            echo
+            echo "API domains (deploy-aws-dns-api-domains): $(jq -r '."deploy-aws-dns-api-domains" | [.DevApiDomainName, .ProdApiDomainName] | join(", ")' outputs.json)"
           } >> "$GITHUB_STEP_SUMMARY"
