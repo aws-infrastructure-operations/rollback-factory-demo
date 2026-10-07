@@ -352,8 +352,10 @@ export class ApiUserStack extends cdk.Stack {
     out('LambdaAlarm5xxName', lambdaAlarms[1].alarmName);
     out('AccessLogGroupName', this.accessLogGroup.logGroupName);
     // What the rollback service's API Gateway manager needs, as one JSON output it reads at runtime
-    // (rollback-service/lambda/managers/apigateway/manager.ts: ApiRollbackTarget).
-    out('RollbackTarget', cdk.Stack.of(this).toJsonString({
+    // (rollback-service/lambda/managers/apigateway/manager.ts: ApiRollbackTarget). Not exported: the
+    // service reads it with DescribeStacks, and an export value may only be 1024 characters long,
+    // which the backends' ARNs exceed.
+    new cdk.CfnOutput(this, 'RollbackTarget', { value: cdk.Stack.of(this).toJsonString({
       apiName: config.apiName,
       restApiId: this.api.restApiId,
       stageName: config.stageName,
@@ -372,7 +374,7 @@ export class ApiUserStack extends cdk.Stack {
       metricsNamespace: config.metricsNamespace,
       rollbackWindowMinutes: config.rollbackWindowMinutes,
       evaluationMinutes: config.alarms.evaluationPeriods,
-    }));
+    }) });
   }
 
   /** The Lambda serving /<backend>, with its integration alias and its live alias (pinned by config.live). */
