@@ -1,0 +1,99 @@
+name: dns
+
+# PRs: typecheck, unit tests, synth.
+# main / manual: deploy deploy-aws-dns, the hosted zone rollback.ionuteliantudor.com that every
+# environment's CloudFront sites use. One stack for all environments, deployed with the prod
+# environment's credentials (same account). The run summary lists the name servers to delegate to.
+# Not part of cleanup.yml: destroying an environment must never take the shared zone.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - deploy-aws-dns/**
+      - .github/workflows/dns.yml
+      - "!**/*.md"
+  pull_request:
+    paths:
+      - deploy-aws-dns/**
+      - .github/workflows/dns.yml
+      - "!**/*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: dns-${{ github.event_name == 'pull_request' && 'checks' || 'deploy' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy-aws-dns
+    env:
+      # no credentials here: synth only needs a region
+      AWS_REGION: eu-central-1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-dns/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+      - name: Synth
+        run: npx cdk synth -q
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: deploy-aws-dns
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-dns/package-lock.json
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK bootstrap (no-op when up to date)
+        run: npx cdk bootstrap
+
+      - name: Deploy the hosted zone
+        run: npx cdk deploy --require-approval never --outputs-file outputs.json
+
+      - name: Name servers and zone id -> job summary
+        run: |
+          zone_id=$(jq -r '."deploy-aws-dns".HostedZoneId' outputs.json)
+          name_servers=$(jq -r '."deploy-aws-dns".NameServers' outputs.json)
+          {
+            echo "### rollback.ionuteliantudor.com"
+            echo "Hosted zone id: \`$zone_id\` (deploy-aws-cloudfront/lib/config.ts: HOSTED_ZONE_ID)"
+            echo
+            echo "Delegate the zone once: at ionuteliantudor.com's DNS host, add an **NS** record for **rollback** with:"
+            echo '```'
+            tr ',' '\n' <<<"$name_servers"
+            echo '```'
+            echo "Check it with: \`dig NS rollback.ionuteliantudor.com +short\`"
+          } >> "$GITHUB_STEP_SUMMARY"
