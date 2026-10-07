@@ -269,3 +269,39 @@ td.date-wrap { white-space: normal; min-width: 90px; }
 .log-line.error .log-level, .log-line.error { color: #ff8a80; }
 .log-line.runtime { color: #8a96a8; }
 .modal-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+
+/* --- Confirmation (the popup's first step) ------------------------------------------------------- */
+.modal.confirm { width: min(560px, 100%); }
+.confirm-body { display: grid; gap: 12px; overflow-y: auto; }
+.confirm-body p { margin: 0; }
+.confirm-facts { display: grid; margin: 0; border: 1px solid var(--border); border-radius: 6px; }
+.confirm-facts > div { display: grid; grid-template-columns: 120px 1fr; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.confirm-facts > div:last-child { border-bottom: 0; }
+.confirm-facts dt { color: var(--muted); }
+.confirm-facts dd { margin: 0; overflow-wrap: anywhere; }
+.confirm-note {
+  padding: 10px 12px; border-radius: 6px; border-left: 3px solid var(--staging);
+  background: var(--staging-bg); color: var(--text); font-size: 13px;
+}
+.route-changes { display: grid; gap: 8px; }
+.route-changes-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.route-changes ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.route-changes li { padding: 2px 8px; border-radius: 4px; font: 12px ui-monospace, monospace; }
+.route-changes li.removed { background: #fdecea; color: #b42318; }
+.route-changes li.removed::before { content: '− '; }
+.route-changes li.added { background: var(--ok-bg); color: var(--ok); }
+.route-changes li.added::before { content: '+ '; }
+.btn {
+  padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+  color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
+}
+.btn:hover { background: #f4f6f9; }
+.btn:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.btn-primary { border-color: var(--link); background: var(--link); color: #fff; }
+.btn-primary:hover { background: #0a52b0; }
+.btn-danger { border-color: #d92d20; background: #d92d20; color: #fff; }
+.btn-danger:hover { background: #b42318; }
+@media (max-width: 480px) {
+  .confirm-facts > div { grid-template-columns: 1fr; gap: 2px; }
+  .modal-actions { flex-wrap: wrap; }
+}

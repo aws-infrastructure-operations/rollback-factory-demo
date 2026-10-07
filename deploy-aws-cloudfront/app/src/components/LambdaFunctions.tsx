@@ -9,7 +9,7 @@ import {
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { MenuButton, type MenuItem } from './Menu.js';
-import { outcomeMessage, useOperationDialog } from './Operation.js';
+import { ConfirmFacts, ConfirmNote, outcomeMessage, useOperationDialog } from './Operation.js';
 import { DataTable, StageTags } from './ui.js';
 
 /** Only functions registered for rollback can be changed, through the rollback service. */
@@ -84,14 +84,13 @@ function aliasTarget({ version, additionalVersions }: LambdaFunctionDetails['ali
 
 type Alias = LambdaFunctionDetails['aliases'][number];
 
-/** What pointing `alias` at `target` does, for the confirm dialog. */
-function pointEffect(fnName: string, alias: Alias, target: number, managedAlias: string | undefined) {
+/** What pointing `alias` at `target` does: its kind and what the rollback service does for it. */
+function pointEffect(alias: Alias, target: number, managedAlias: string | undefined) {
   const from = Number(alias.version);
-  const head = `Point ${fnName}:${alias.name} to version ${target}? It points to version ${from} now.`;
-  if (alias.name !== managedAlias) return `${head}\n\nOnly the alias moves.`;
+  if (alias.name !== managedAlias) return { kind: 'Alias move', note: 'Only the alias moves: nothing else changes.' };
   return target < from
-    ? `${head}\n\nGoing back is a manual rollback: $LATEST is restored from version ${target}'s archived package, and version ${from} is marked as rolled back from.`
-    : `${head}\n\n$LATEST is restored from version ${target}'s archived package, and version ${target} counts as live.`;
+    ? { kind: 'Manual rollback', note: `$LATEST is restored from version ${target}'s archived package, and version ${from} is marked as rolled back from. It starts the rollback cooldown.` }
+    : { kind: 'Promotion', note: `$LATEST is restored from version ${target}'s archived package, and version ${target} counts as live.` };
 }
 
 function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: number }) {
@@ -103,18 +102,36 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
   // the alias being pointed, and the last change's outcome, for the function they belong to
   const [pointing, setPointing] = useState<{ fn: string; alias: string }>();
   const [outcome, setOutcome] = useState<{ fn: string; text: string; error?: boolean }>();
-  const busy = pointing?.fn === fn.name;
+  // the popup that confirms the change, then follows it while the rollback service makes it
+  const operation = useOperationDialog();
+  // only once confirmed: the buttons stay as they are while the confirmation is open
+  const busy = pointing?.fn === fn.name && operation.busy;
   const managed = data?.managedAlias;
   const disabledReason = !managed ? NOT_REGISTERED : busy ? 'A change is running.' : undefined;
 
-  // the popup that follows the change while the rollback service makes it
-  const operation = useOperationDialog();
-
   async function point(alias: Alias, target: number) {
-    if (!window.confirm(pointEffect(fn.name, alias, target, managed))) return;
     setPointing({ fn: fn.name, alias: alias.name });
     setOutcome(undefined);
-    const ended = await operation.start(`Point ${fn.name}:${alias.name} to version ${target}`, () => pointLambdaAlias(fn.name, alias.name, target));
+    const effect = pointEffect(alias, target, managed);
+    const description = (version: number) => data?.versions.find((v) => Number(v.version) === version)?.description;
+    const ended = await operation.start(`Point ${fn.name}:${alias.name} to version ${target}`, () => pointLambdaAlias(fn.name, alias.name, target), {
+      confirmLabel: `Point ${alias.name} to v${target}`,
+      // moving the alias clients call changes what they run
+      danger: alias.name === managed,
+      body: (
+        <>
+          <ConfirmFacts rows={[
+            ['Function', fn.name],
+            ['Alias', alias.name],
+            ['Now on', <>version {alias.version}{description(Number(alias.version)) && <span className="muted-text"> · {description(Number(alias.version))}</span>}</>],
+            ['Moves to', <>version {target}{description(target) && <span className="muted-text"> · {description(target)}</span>}</>],
+            ['Change', effect.kind],
+          ]} />
+          <ConfirmNote>{effect.note}</ConfirmNote>
+        </>
+      ),
+    });
+    if (ended.status === 'cancelled') return;
     setOutcome({
       fn: fn.name,
       ...outcomeMessage(ended, `${alias.name} now points to version ${target}.`, `Could not point ${alias.name} to version ${target}`),

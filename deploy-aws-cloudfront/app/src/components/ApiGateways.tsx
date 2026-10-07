@@ -1,14 +1,14 @@
 // API Gateways: the region's APIs from the dashboard API, with search and refresh, and the
 // selected API's deployments (restorable for the APIs this project deploys), stages and
 // configuration next to them.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   fetchApiGatewayDetails, fetchApiGateways, fetchApiSpec, restoreApiDeployment,
   type ApiGateway, type ApiGatewayDetails, type ApiGatewayList, type RecordedApiDeployment,
 } from '../api.js';
 import { DateCell, loadState, useLoad } from './loading.js';
 import { MenuButton, type MenuItem } from './Menu.js';
-import { outcomeMessage, useOperationDialog } from './Operation.js';
+import { ConfirmFacts, ConfirmNote, outcomeMessage, useOperationDialog } from './Operation.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, RollbackButton, StageTags, Tag, type TableMessage } from './ui.js';
 
@@ -21,22 +21,40 @@ const formatAt = (iso: string) => new Date(iso).toLocaleString();
 
 /**
  * What restoring `target` changes in the routes the stage serves now (`live`), from both
- * deployments' OpenAPI exports in S3. A line for the confirm dialog.
+ * deployments' OpenAPI exports in S3: shown in the confirmation while it loads.
  */
-async function routeChanges(apiId: string, target: RecordedApiDeployment, live: RecordedApiDeployment | undefined) {
-  if (!live) return 'Routes: no live deployment recorded to compare with.';
-  try {
-    const [to, from] = await Promise.all([fetchApiSpec(apiId, target.deployedAt), fetchApiSpec(apiId, live.deployedAt)]);
-    const removed = from.routes.filter((r) => !to.routes.includes(r));
-    const added = to.routes.filter((r) => !from.routes.includes(r));
-    if (!removed.length && !added.length) return `Routes: the same ${to.routes.length} as live.`;
-    return [
-      removed.length && `Routes it removes: ${removed.join(', ')}`,
-      added.length && `Routes it brings back: ${added.join(', ')}`,
-    ].filter(Boolean).join('\n');
-  } catch (err) {
-    return `Routes: could not compare (${(err as Error).message}).`;
-  }
+function RouteChanges({ apiId, target, live }: { apiId: string; target: RecordedApiDeployment; live?: RecordedApiDeployment }) {
+  const [changes, setChanges] = useState<{ removed: string[]; added: string[]; total: number } | { error: string }>();
+  useEffect(() => {
+    if (!live) return;
+    const controller = new AbortController();
+    Promise.all([fetchApiSpec(apiId, target.deployedAt, controller.signal), fetchApiSpec(apiId, live.deployedAt, controller.signal)]).then(
+      ([to, from]) => setChanges({
+        removed: from.routes.filter((r) => !to.routes.includes(r)),
+        added: to.routes.filter((r) => !from.routes.includes(r)),
+        total: to.routes.length,
+      }),
+      (err) => { if (!controller.signal.aborted) setChanges({ error: (err as Error).message }); },
+    );
+    return () => controller.abort();
+  }, [apiId, target.deployedAt, live?.deployedAt]);
+
+  if (!live) return <p className="muted-text">Routes: no live deployment recorded to compare with.</p>;
+  if (!changes) return <p className="muted-text">Comparing its routes with the live deployment's…</p>;
+  if ('error' in changes) return <p className="muted-text">Routes: could not compare ({changes.error}).</p>;
+  if (!changes.removed.length && !changes.added.length) return <p className="muted-text">Routes: the same {changes.total} as live.</p>;
+  return (
+    <div className="route-changes">
+      {changes.removed.length > 0 && (
+        <div><span className="route-changes-label">Routes it removes</span>
+          <ul>{changes.removed.map((r) => <li key={r} className="removed">{r}</li>)}</ul></div>
+      )}
+      {changes.added.length > 0 && (
+        <div><span className="route-changes-label">Routes it brings back</span>
+          <ul>{changes.added.map((r) => <li key={r} className="added">{r}</li>)}</ul></div>
+      )}
+    </div>
+  );
 }
 
 /** "users v3 · messages v5" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
@@ -133,12 +151,28 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     setRestoring({ apiId: api.id, deployedAt: d.deployedAt });
     setOutcome(undefined);
     const live = data?.recorded?.find((r) => r.current && r.stageName === d.stageName);
-    const changes = await routeChanges(api.id, d, live);
-    if (!window.confirm(`${verb} ${what}?\n\n${changes}\n\nThe rollback service re-imports that deployment's OpenAPI export and redeploys the stage. The Lambda alias stays on live: the code isn't rolled back.`)) {
+    const ended = await operation.start(`${verb} ${what}`, () => restoreApiDeployment(api.id, d.deployedAt), {
+      confirmLabel: verb,
+      danger: true,
+      body: (
+        <>
+          <ConfirmFacts rows={[
+            ['API', <>{api.name} <span className="muted-text">· stage {d.stageName}</span></>],
+            ['Live now', live ? <>{live.deploymentId} <span className="muted-text">· {formatAt(live.deployedAt)}</span></> : '—'],
+            [verb === 'Restore' ? 'Restores' : 'Rolls back to', <>{d.deploymentId} <span className="muted-text">· {formatAt(d.deployedAt)} · {recordHint(d)}</span></>],
+          ]} />
+          <RouteChanges apiId={api.id} target={d} live={live} />
+          <ConfirmNote>
+            The rollback service re-imports that deployment's OpenAPI export and redeploys stage {d.stageName}.
+            The Lambda aliases stay on live: the code isn't rolled back.
+          </ConfirmNote>
+        </>
+      ),
+    });
+    if (ended.status === 'cancelled') {
       setRestoring(undefined);
       return;
     }
-    const ended = await operation.start(`${verb} ${what}`, () => restoreApiDeployment(api.id, d.deployedAt));
     setOutcome({
       apiId: api.id,
       ...outcomeMessage(ended, `Restored ${what}. It counts as verified once the integration tests pass again.`, `${verb} failed`),
@@ -146,7 +180,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     setRestoring(undefined);
     setRestores((n) => n + 1);
   }
-  const busy = restoring?.apiId === api.id;
+  // only once confirmed: the buttons stay as they are while the confirmation is open
+  const busy = restoring?.apiId === api.id && operation.busy;
 
   const outcomeLine = outcome?.apiId === api.id && (
     <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
