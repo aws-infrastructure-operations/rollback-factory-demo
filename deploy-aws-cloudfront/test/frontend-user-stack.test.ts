@@ -229,7 +229,7 @@ test('gives the dashboard API read access to the APIs, their stages and deployme
   assert.doesNotMatch(resources, /\*/,'no wildcard that crosses into deeper paths');
 });
 
-test('lets the dashboard API only list and read: API Gateway, Lambda aliases and versions, metrics', () => {
+test('lets the dashboard API only list and read: API Gateway, Lambda, CloudFront, release history, metrics', () => {
   const t = synth('dev');
   const [roleId] = Object.keys(t.findResources('AWS::IAM::Role')).filter((id) => id.startsWith('DashboardApi'));
   const statements = Object.values(t.findResources('AWS::IAM::Policy'))
@@ -237,8 +237,12 @@ test('lets the dashboard API only list and read: API Gateway, Lambda aliases and
     .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement);
   const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, [
-    'apigateway:GET', 'cloudwatch:GetMetricData', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
+    'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
+    'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query',
+    'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
   ]);
+  const query = statements.find((s: any) => s.Action === 'dynamodb:Query');
+  assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-frontend-deployments-\*"/, 'the frontend deployments tables only');
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
   assert.match(JSON.stringify(scoped.Resource), /:function:\*"/, 'aliases and versions of this account and region only');
 });

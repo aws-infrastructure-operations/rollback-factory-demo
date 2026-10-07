@@ -1,5 +1,6 @@
 // Loading data from the dashboard API, and showing its dates.
 import { useEffect, useState } from 'react';
+import type { TableMessage } from './ui.js';
 
 export interface Loaded<T> {
   /** the last data that loaded; kept on screen while refreshing */
@@ -36,3 +37,8 @@ export const DateCell = ({ iso }: { iso?: string }) => (iso ? <time dateTime={is
 
 /** data-state of a panel, for tests. */
 export const loadState = ({ loading, failed }: Loaded<unknown>) => (loading ? 'loading' : failed ? 'error' : 'ready');
+
+/** The message row of a table while its data is missing, else undefined. */
+export const pendingMessage = (loaded: Loaded<unknown>, what: string): TableMessage | undefined =>
+  loaded.failed && !loaded.data ? { text: `Could not load ${what}. Try refreshing.`, error: true }
+    : !loaded.data ? { text: 'Loading…' } : undefined;

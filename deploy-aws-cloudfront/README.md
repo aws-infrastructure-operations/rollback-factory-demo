@@ -47,8 +47,12 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   path, so no stage exports). It also lists the region's Lambda functions
   with their aliases and versions (`lambda:ListFunctions`, `ListAliases`, `ListVersionsByFunction`) and reads
   their last 24 hours of metrics (`cloudwatch:GetMetricData`). Function configurations come with environment
-  variables: the reader copies named fields only, so they never reach the page. It has no sign-in: anyone
-  with the site URL can see the API and function names, stages, versions and settings.
+  variables: the reader copies named fields only, so they never reach the page. It lists the account's CloudFront
+  distributions and reads one with its invalidations (`cloudfront:ListDistributions`, `GetDistribution`,
+  `ListInvalidations`, `GetInvalidation`; origin custom headers are never sent on), the release history of
+  every environment's `frontend-user-<env>` (`dynamodb:Query` on `rollback-factory-demo-frontend-deployments-*`),
+  and CloudFront metrics in us-east-1. It has no sign-in: anyone with the site URL can see the API, function
+  and distribution names, stages, versions, releases and settings.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -71,8 +75,12 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   serving each), its **aliases** (with weights), its **configuration**, and **monitoring**: invocations,
   errors, throttles, durations and concurrency over 24 hours, fetched only when that tab opens. Rollback
   is disabled there too.
-- **CloudFront Distributions** is still **sample data**
-  ([`app/src/mock-data.ts`](app/src/mock-data.ts)); its tabs and rollback buttons are visual only.
+- **CloudFront Distributions** is live as well: every distribution with its status and, for this project's
+  sites, the release it serves, from `GET /api/cloudfront-distributions`. Next to it, the selected one's
+  **deployments** (the activations, restores and rollbacks recorded for `frontend-user-<env>`, marked live,
+  verified or rolled back), its **configuration**, its latest **invalidations** and **monitoring** (requests,
+  data transferred, 4xx and 5xx rates over 24 hours); the last two load only when their tab opens.
+  Rollback is disabled here too.
 
 The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"

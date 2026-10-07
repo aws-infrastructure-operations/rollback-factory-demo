@@ -5,20 +5,15 @@ import {
   fetchLambdaFunctionDetails, fetchLambdaFunctionMetrics, fetchLambdaFunctions,
   type LambdaFunction, type LambdaFunctionDetails, type LambdaFunctionList, type LambdaFunctionMetrics,
 } from '../api.js';
-import { DateCell, loadState, useLoad, type Loaded } from './loading.js';
+import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
-import { DataTable, RollbackButton, StageTags, type TableMessage } from './ui.js';
+import { DataTable, RollbackButton, StageTags } from './ui.js';
 
 /** Until the dashboard has sign-in, nobody should be able to roll back a function from a public page. */
 const ROLLBACK_DISABLED = 'Rolling back from the dashboard comes with sign-in. Use the lambda rollback-by-version workflow for now.';
 
 const matches = (fn: LambdaFunction, query: string) =>
   [fn.name, fn.runtime, fn.description ?? '', ...fn.aliases].some((value) => value.toLowerCase().includes(query));
-
-/** The message row of a table while its data is missing, else undefined. */
-const pendingMessage = (loaded: Loaded<unknown>, what: string): TableMessage | undefined =>
-  loaded.failed && !loaded.data ? { text: `Could not load ${what}. Try refreshing.`, error: true }
-    : !loaded.data ? { text: 'Loading…' } : undefined;
 
 export function LambdaSection() {
   const [reloads, setReloads] = useState(0);

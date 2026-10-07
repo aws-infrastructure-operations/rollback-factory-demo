@@ -10,7 +10,7 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import { EnvConfig } from './config.js';
+import { EnvConfig, PROJECT_NAME } from './config.js';
 import { INITIAL_RELEASE_ID, originPathFor, releasePrefix } from '../lambda/shared/releases.js';
 
 export interface FrontendUserStackProps extends cdk.StackProps {
@@ -52,7 +52,7 @@ export class FrontendUserStack extends cdk.Stack {
     // /api/*. The function URL takes IAM auth: only CloudFront, signing through OAC, can call it.
     this.dashboardApi = new NodejsFunction(this, 'DashboardApi', {
       functionName: name('frontend-dashboard-api'),
-      description: `Read-only data for the ${config.frontendName} dashboard: the region's API Gateways`,
+      description: `Read-only data for the ${config.frontendName} dashboard: API Gateways, Lambda functions, CloudFront distributions`,
       entry: path.join(__dirname, '..', 'lambda', 'dashboard-api', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
@@ -63,6 +63,8 @@ export class FrontendUserStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
       bundling: { minify: true, sourceMap: true },
+      // finds the deployments table of each frontend-user-<env> distribution (cloudfront-distributions.ts)
+      environment: { PROJECT_NAME },
     });
     // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
     // API ids are 10 characters: '??????????' matches one id, where '*' would also match
@@ -87,7 +89,23 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['lambda:ListAliases', 'lambda:ListVersionsByFunction'],
       resources: [`arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`],
     }));
-    // CloudWatch: the Monitoring tab's metrics (GetMetricData has no resource-level permission)
+    // CloudFront: list the distributions (no resource-level permission), then read one, and its
+    // invalidations. Origin custom headers come with GetDistribution and are never sent on.
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudfront:ListDistributions'],
+      resources: ['*'],
+    }));
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudfront:GetDistribution', 'cloudfront:ListInvalidations', 'cloudfront:GetInvalidation'],
+      resources: [`arn:${cdk.Aws.PARTITION}:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`],
+    }));
+    // The release history of every environment's frontend-user distribution: Query only, so the
+    // dashboard of any environment shows it (tables of environments not deployed just don't exist)
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['dynamodb:Query'],
+      resources: [`arn:${cdk.Aws.PARTITION}:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${PROJECT_NAME}-frontend-deployments-*`],
+    }));
+    // CloudWatch: the Monitoring tabs' metrics (CloudFront's are read in us-east-1) (GetMetricData has no resource-level permission)
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:GetMetricData'],
       resources: ['*'],

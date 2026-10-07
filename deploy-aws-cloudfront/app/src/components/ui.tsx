@@ -55,20 +55,8 @@ export const StageTags = ({ stages }: { stages: string[] }) => (
   <span className="tags">{stages.map((s) => <span key={s} className={`tag ${stageTag(s)}`}>{s}</span>)}</span>
 );
 
-export const NameLink = ({ name, healthy = true }: { name: string; healthy?: boolean }) => (
-  <><span className={`dot ${healthy ? 'ok' : 'muted'}`} /><a href="#">{name}</a></>
-);
-
 export const RollbackButton = ({ disabledReason }: { disabledReason?: string }) => (
   <button type="button" className="rollback" disabled={!!disabledReason} title={disabledReason}>
     <Icon name="rollback" size={14} />Rollback
   </button>
 );
-
-export const MoreButton = () => (
-  <button type="button" className="icon-button ghost" aria-label="More actions"><Icon name="more" size={16} /></button>
-);
-
-export const RowChevron = () => <span className="row-chevron"><Icon name="chevronRight" size={16} /></span>;
-
-export const Status = ({ children }: { children: ReactNode }) => <span className="status">{children}</span>;
