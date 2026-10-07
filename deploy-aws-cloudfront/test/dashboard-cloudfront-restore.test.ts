@@ -71,15 +71,20 @@ test('only frontend-user-<env> distributions have a rollback service', () => {
   }
 });
 
-test('asks the environment\'s rollback service to restore the recorded release', async () => {
+test('asks the environment\'s rollback service to restore the recorded release, without waiting', async () => {
   const lambda = fakeLambda();
   const outcome = await restoreRelease(fakeCloudFront(), fakeDynamo(), lambda.client, PROJECT, 'E1LIVE0000000', {
     deployedAt: '2026-10-06T19:05:00.000Z', reason: 'bad banner',
   });
-  assert.deepEqual(outcome, { ok: true, result: { action: 'restored', to: GOOD } });
+  assert.ok(outcome.ok);
+  assert.match(outcome.operationId, /^dev\.cloudfront-restore\.\d{13}\.[0-9a-f]{8}$/);
+  assert.equal(lambda.sent[0].input.InvocationType, 'Event');
   assert.deepEqual(invoked(lambda.sent), {
     functionName: 'rollback-factory-demo-rollback-service-dev',
-    payload: { type: 'restore', manager: 'cloudfront', deployedAt: '2026-10-06T19:05:00.000Z', actor: 'dashboard', reason: 'bad banner' },
+    payload: {
+      type: 'restore', manager: 'cloudfront', deployedAt: '2026-10-06T19:05:00.000Z', actor: 'dashboard', reason: 'bad banner',
+      operationId: outcome.operationId,
+    },
   });
 });
 
@@ -97,15 +102,6 @@ test('refuses restores the rollback service should not get, without invoking it'
   assert.equal(((await restore('2026-10-06T19:05:00.000Z', { comment: 'frontend-user-dev-integration' })) as { status: number }).status, 400);
   assert.equal(((await restore('2026-10-06T19:05:00.000Z', { id: 'E9MISSING0000' })) as { status: number }).status, 404);
   assert.equal(lambda.sent.length, 0);
-});
-
-test('reports a failed or skipped restore', async () => {
-  const restore = (answer: { FunctionError?: string; Payload?: string }) =>
-    restoreRelease(fakeCloudFront(), fakeDynamo(), fakeLambda(answer).client, PROJECT, 'E1LIVE0000000', { deployedAt: '2026-10-06T19:05:00.000Z' });
-  const failed = await restore({ FunctionError: 'Unhandled', Payload: '{"errorMessage":"AccessDenied: arn:aws:iam::860193728768:role/x"}' });
-  assert.deepEqual(failed, { ok: false, status: 502, message: 'The rollback service could not restore frontend-user-dev' });
-  const skipped = await restore({ Payload: '{"action":"skip","reason":"frontend-user-dev already serves release 20261006T190000Z"}' });
-  assert.deepEqual(skipped, { ok: false, status: 409, message: 'frontend-user-dev already serves release 20261006T190000Z' });
 });
 
 test('restores only with POST and a valid body, checked before calling AWS', async () => {

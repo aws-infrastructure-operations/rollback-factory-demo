@@ -112,6 +112,8 @@ export class RollbackServiceStack extends cdk.Stack {
       memorySize: 512,
       retryAttempts: 0,
       logGroup: new logs.LogGroup(this, 'RollbackServiceLogs', {
+        // fixed, so the dashboard can show a restore's lines while it runs
+        logGroupName: config.logGroupName,
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),

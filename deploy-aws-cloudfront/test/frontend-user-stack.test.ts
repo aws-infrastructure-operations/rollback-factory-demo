@@ -240,7 +240,7 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   assert.deepEqual(actions, [
     'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
     'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query',
-    'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction', 's3:GetObject',
+    'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction', 'logs:FilterLogEvents', 's3:GetObject',
   ]);
   const query = statements.find((s: any) => s.Action === 'dynamodb:Query');
   assert.equal(query.Resource.length, 2);

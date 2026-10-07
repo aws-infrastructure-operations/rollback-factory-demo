@@ -66,6 +66,15 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   - `POST /api/lambda-functions/<name>/point-alias` with `{"aliasName": "...", "version": 3}` (functions
     registered for rollback only): the rollback service points the alias at the version (see the Lambda
     Functions panel below).
+
+  They don't wait: each starts the rollback service asynchronously (it never retries) and answers `202`
+  with an operation id, `<env>.<kind>.<start ms>.<random>`. The page opens a popup and polls
+  `GET /api/operations/<id>`, which finds the run's lines in the rollback service's log group
+  (`rollback-factory-demo-rollback-service-logs-<env>`, `logs:FilterLogEvents` on those only): first the
+  line with the operation id, then every line of that request id. It returns them with a status
+  (`queued`, `running`, `succeeded`, `skipped`, `failed`), the steps done (from the step lines the
+  service logs) and a progress percentage. The popup shows the progress bar, the steps and the live log;
+  closing it doesn't stop the run.
   The CloudFront behavior allows POST for it (OAC needs the body's SHA-256 in `x-amz-content-sha256`), and
   waits up to 60 s. It has no sign-in: anyone with the site URL can see the API, function and distribution
   names, stages, versions, releases and settings, **restore an API deployment or a site release, and point

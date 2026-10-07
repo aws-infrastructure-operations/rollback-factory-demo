@@ -48,6 +48,8 @@ export interface EnvConfig {
    * that table, which prod keeps after the old stack resources are removed.
    */
   versionsTableName: string;
+  /** rollback-factory-demo-rollback-service-logs-<env>: the dashboard follows its restores here */
+  logGroupName: string;
   /** Optional e-mail subscribed to both topics (-c alarmEmail=...). */
   alarmEmail?: string;
   retainData: boolean;
@@ -70,6 +72,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     functionName: resourceName('rollback-service'),
     topicName: resourceName('rollback-notifications'),
     versionsTableName: resourceName('lambda-archive'),
+    logGroupName: resourceName('rollback-service-logs'),
     alarmEmail: overrides.alarmEmail || undefined,
     retainData: envName === 'prod',
   };

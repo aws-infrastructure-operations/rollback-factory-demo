@@ -7,6 +7,7 @@ import {
 } from '../api.js';
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
+import { outcomeMessage, useOperationDialog } from './Operation.js';
 import { DataTable, RollbackButton, Tag, type TableMessage } from './ui.js';
 
 const formatAt = (iso: string) => new Date(iso).toLocaleString();
@@ -91,24 +92,27 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
   const [restoring, setRestoring] = useState<{ id: string; deployedAt: string }>();
   const [outcome, setOutcome] = useState<{ id: string; text: string; error?: boolean }>();
 
+  // the popup that follows a restore while the rollback service runs it
+  const operation = useOperationDialog();
+
   async function restore(r: Release) {
     const what = `${d.name} to release ${r.releaseId}, recorded ${formatAt(r.deployedAt)}`;
     if (!window.confirm(`Restore ${what}?\n\nThe rollback service points the distribution at that release and invalidates its cache. The distribution takes a few minutes to deploy.`)) return;
     setRestoring({ id: d.id, deployedAt: r.deployedAt });
     setOutcome(undefined);
-    try {
-      await restoreDistributionRelease(d.id, r.deployedAt);
-      setOutcome({ id: d.id, text: `Restored ${what}. CloudFront takes a few minutes to deploy it; it counts as verified once the integration tests pass again.` });
-    } catch (err) {
-      setOutcome({ id: d.id, text: `Restore failed: ${(err as Error).message}`, error: true });
-    } finally {
-      setRestoring(undefined);
-      setRestores((n) => n + 1);
-    }
+    const ended = await operation.start(`Restore ${what}`, () => restoreDistributionRelease(d.id, r.deployedAt));
+    setOutcome({
+      id: d.id,
+      ...outcomeMessage(ended, `Restored ${what}. CloudFront takes a few minutes to deploy it; it counts as verified once the integration tests pass again.`, 'Restore failed'),
+    });
+    setRestoring(undefined);
+    setRestores((n) => n + 1);
   }
   const busy = restoring?.id === d.id;
 
   return (
+    <>
+    {operation.dialog}
     <DetailPanel
       id="cloudfront-distribution-details" icon="globe" tint="tint-cloudfront" name={d.name}
       badge={d.enabled && d.status === 'Deployed' ? 'Deployed' : undefined}
@@ -175,6 +179,7 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
         );
       }}
     </DetailPanel>
+    </>
   );
 }
 

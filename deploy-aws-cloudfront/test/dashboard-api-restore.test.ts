@@ -96,10 +96,14 @@ test('restores a recorded deployment through the environment\'s rollback service
   const outcome = await restoreRecordedDeployment(fakeDynamo().client, lambda.client, PROJECT, API, {
     deployedAt: '2026-10-06T09:00:00.000Z', reason: 'bad config',
   });
-  assert.deepEqual(outcome, { ok: true, result: { action: 'restored' } });
+  // started without waiting: the page follows it with the operation id
+  assert.ok(outcome.ok);
+  assert.match(outcome.operationId, /^dev\.apigateway-restore\.\d{13}\.[0-9a-f]{8}$/);
   assert.equal(lambda.sent[0].input.FunctionName, 'rollback-factory-demo-rollback-service-dev');
+  assert.equal(lambda.sent[0].input.InvocationType, 'Event');
   assert.deepEqual(JSON.parse(new TextDecoder().decode(lambda.sent[0].input.Payload)), {
     type: 'restore', manager: 'apigateway', deployedAt: '2026-10-06T09:00:00.000Z', actor: 'dashboard', reason: 'bad config',
+    operationId: outcome.operationId,
   });
 });
 
@@ -114,12 +118,6 @@ test('refuses restores the rollback service should not get', async () => {
   assert.equal(await restore(API, '2026-10-05T00:00:00.000Z'), 404, 'not recorded');
   assert.equal(await restore(API, '2026-10-01T09:00:00.000Z'), 404, 'recorded for another API id');
   assert.equal(await restore(API, '2026-10-07T12:00:00.000Z'), 409, 'already current');
-});
-
-test('reports a failed restore without its details', async () => {
-  const lambda = fakeLambda({ FunctionError: 'Unhandled', Payload: '{"errorMessage":"PutRestApi failed: internal detail"}' });
-  const outcome = await restoreRecordedDeployment(fakeDynamo().client, lambda.client, PROJECT, API, { deployedAt: '2026-10-06T09:00:00.000Z' });
-  assert.deepEqual(outcome, { ok: false, status: 502, message: 'The rollback service could not restore api-user-dev' });
 });
 
 const request = (rawPath: string, method: string, body?: string) => ({ rawPath, body, requestContext: { http: { method } } });

@@ -56,6 +56,7 @@ export async function restore(
 
   log('restoring', { to: to.releaseId, toDeployedAt: to.deployedAt, actor: req.actor });
   const switched = await switchRelease(client, target.distributionId, to.releaseId, `restore-${to.deployedAt}-${now().getTime()}`);
+  log('release switched', { step: 'release-switched', to: to.releaseId, invalidationId: switched.invalidationId });
   const description = `Restore to ${to.releaseId} (recorded ${to.deployedAt})${req.reason ? `: ${req.reason}` : ''}`;
   const record = await store.record({
     frontendName: target.frontendName,

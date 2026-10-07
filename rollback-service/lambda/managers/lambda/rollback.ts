@@ -600,6 +600,9 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
     }
   }
 
+  /** A step of a hand-made change, as one JSON line the dashboard's progress bar follows. */
+  const logStep = (step: string, data: Record<string, unknown>) => console.log(JSON.stringify({ msg: 'step', step, ...data }));
+
   // -------------------------------------------------------------------------------------------
   // Pointing an alias at a version by hand
   // -------------------------------------------------------------------------------------------
@@ -618,6 +621,7 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
     const { lambda, ddb } = clients;
     // archive the newest version and record any deploy first, like a rollback does
     await syncFunction(clients, functionName);
+    logStep('archive-synced', { functionName });
 
     const alias = await lambda.send(new GetAliasCommand({ FunctionName: functionName, Name: aliasName }));
     const current = Number(alias.FunctionVersion);
@@ -628,6 +632,7 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
     if (aliasName !== registration.alias) {
       // RevisionId makes the update fail if someone else moved the alias since we read it.
       await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: aliasName, FunctionVersion: String(target), RevisionId: alias.RevisionId }));
+      logStep('alias-moved', { functionName, aliasName, from: current, to: target });
       console.log(`${functionName}:${aliasName}: ${current} -> ${target} (${reason})`);
       return { pointed: true, functionName, aliasName, from: current, to: target, kind: 'alias' };
     }
@@ -636,7 +641,9 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
     if (!archivedTarget) return skip(`${functionName} version ${target} is not archived, so $LATEST can't be restored from it`);
 
     await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: aliasName, FunctionVersion: String(target), RevisionId: alias.RevisionId }));
+    logStep('alias-moved', { functionName, aliasName, from: current, to: target });
     await restoreLatest(clients, functionName, archivedTarget);
+    logStep('latest-restored', { functionName, version: target });
     const kind = target < current ? 'rollback' : 'promotion';
     if (kind === 'rollback') {
       // manual: starts the cooldown but resets the consecutive-rollback count, like the workflow
@@ -657,6 +664,7 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
     }
     // the target is live now (it may never have been, if chosen by hand)
     await markLive(ddb, TABLE, functionName, target, nowIso());
+    logStep('recorded', { functionName, kind });
     console.log(`${functionName}:${aliasName}: ${current} -> ${target} (${kind}, ${reason}); $LATEST restored`);
     return {
       pointed: true,

@@ -8,6 +8,7 @@ import {
 } from '../api.js';
 import { DateCell, loadState, useLoad } from './loading.js';
 import { MenuButton, type MenuItem } from './Menu.js';
+import { outcomeMessage, useOperationDialog } from './Operation.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, RollbackButton, StageTags, Tag, type TableMessage } from './ui.js';
 
@@ -124,6 +125,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
   // the deployedAt being restored, and the last restore's outcome, for the API they belong to
   const [restoring, setRestoring] = useState<{ apiId: string; deployedAt: string }>();
   const [outcome, setOutcome] = useState<{ apiId: string; text: string; error?: boolean }>();
+  // the popup that follows a restore while the rollback service runs it
+  const operation = useOperationDialog();
 
   async function restore(d: RecordedApiDeployment, verb = 'Restore') {
     const what = `${api.name} stage ${d.stageName} to deployment ${d.deploymentId}, recorded ${formatAt(d.deployedAt)}`;
@@ -135,15 +138,13 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
       setRestoring(undefined);
       return;
     }
-    try {
-      await restoreApiDeployment(api.id, d.deployedAt);
-      setOutcome({ apiId: api.id, text: `Restored ${what}. It counts as verified once the integration tests pass again.` });
-    } catch (err) {
-      setOutcome({ apiId: api.id, text: `Restore failed: ${(err as Error).message}`, error: true });
-    } finally {
-      setRestoring(undefined);
-      setRestores((n) => n + 1);
-    }
+    const ended = await operation.start(`${verb} ${what}`, () => restoreApiDeployment(api.id, d.deployedAt));
+    setOutcome({
+      apiId: api.id,
+      ...outcomeMessage(ended, `Restored ${what}. It counts as verified once the integration tests pass again.`, `${verb} failed`),
+    });
+    setRestoring(undefined);
+    setRestores((n) => n + 1);
   }
   const busy = restoring?.apiId === api.id;
 
@@ -177,6 +178,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     : !data ? { text: 'Loading…' } : undefined;
 
   return (
+    <>
+    {operation.dialog}
     <DetailPanel
       id="api-gateway-details" icon="apiGateway" tint="tint-api" name={api.name}
       badge={api.stages.length ? 'Deployed' : undefined}
@@ -269,5 +272,6 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
         );
       }}
     </DetailPanel>
+    </>
   );
 }

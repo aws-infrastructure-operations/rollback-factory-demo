@@ -1,8 +1,9 @@
 // The recorded deployments of the APIs this project deploys (deploy-aws-api-gateway): every
+import { startOperation } from './operations.js';
 // deployment of api-user-<env> has a record in <project>-deployments-<env> and its OpenAPI
 // export in the deployments bucket. Restoring one goes through the rollback service, which
 // re-imports that export and redeploys the stage (deploy-aws-api-gateway: deployment:restore).
-import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import type { LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 /** The parts of a record (deploy-aws-api-gateway/lambda/shared/deployments.ts) the dashboard reads. */
@@ -130,8 +131,8 @@ export async function getRecordedDeployment(
 }
 
 export type RestoreResult =
-  | { ok: true; result: unknown }
-  | { ok: false; status: 400 | 404 | 409 | 502; message: string };
+  | { ok: true; operationId: string }
+  | { ok: false; status: 400 | 404 | 409; message: string };
 
 /**
  * Restores the API's stage to the deployment recorded at `deployedAt`: the rollback service
@@ -155,16 +156,7 @@ export async function restoreRecordedDeployment(
   }
   if (record.current) return { ok: false, status: 409, message: `${api.name} already serves the deployment recorded at ${req.deployedAt}` };
 
-  const res = await lambda.send(new InvokeCommand({
-    FunctionName: service,
-    Payload: new TextEncoder().encode(JSON.stringify({
-      type: 'restore', manager: 'apigateway', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason,
-    })),
-  }));
-  const payload = res.Payload ? new TextDecoder().decode(res.Payload) : '';
-  if (res.FunctionError) {
-    console.error(`Restore of ${api.name} to ${record.deployedAt} failed`, payload);
-    return { ok: false, status: 502, message: `The rollback service could not restore ${api.name}` };
-  }
-  return { ok: true, result: payload ? JSON.parse(payload) : undefined };
+  // the page follows the run in a popup (GET /api/operations/<id>)
+  const operationId = await startOperation(lambda, service, 'apigateway-restore', { type: 'restore', manager: 'apigateway', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason });
+  return { ok: true, operationId };
 }

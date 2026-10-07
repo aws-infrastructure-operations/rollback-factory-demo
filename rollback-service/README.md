@@ -36,6 +36,11 @@ Lambda project's deploy invokes it to sync. `-c alarmEmail=...` subscribes an e-
 | `{ "type": "restore", "manager": "cloudfront", "deployedAt": "…" }` | the dashboard's CloudFront Restore button | CloudFront manager: switches to that record's release and records a `restore` |
 | `{ "type": "point-alias", "functionName": "<fn>", "aliasName": "live", "version": 3 }` | the dashboard's Lambda alias/version menus | Lambda manager: registered functions only. The registered alias moves like a manual rollback by version (alias, `$LATEST` restored, archive updated; a promotion when going forward); any other alias just moves |
 
+Every run logs to `rollback-factory-demo-rollback-service-logs-<env>` and ends with one
+`{"msg":"result",...}` (or `{"msg":"failed",...}`) line. Restores and alias moves also log their steps
+(`spec-imported`, `stage-redeployed`, `release-switched`, `archive-synced`, `alias-moved`,
+`latest-restored`, `recorded`): the dashboard follows them to show a run's progress and log.
+
 ## Layout
 
 | Path | Contents |

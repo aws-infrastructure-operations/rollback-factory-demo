@@ -8,6 +8,7 @@ import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { LambdaClient } from '@aws-sdk/client-lambda';
 import { S3Client } from '@aws-sdk/client-s3';
+import { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
 import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
@@ -20,6 +21,7 @@ import {
 import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, isFunctionName, listLambdaFunctions,
 } from './lambda-functions.js';
+import { getOperation } from './operations.js';
 import { parseRegistered, registrationFor } from './registered-functions.js';
 
 /** The parts of a function URL event this handler reads. */
@@ -46,6 +48,7 @@ const cloudfront = new CloudFrontClient({});
 const edgeCloudwatch = new CloudWatchClient({ region: 'us-east-1' });
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
+const logs = new CloudWatchLogsClient({});
 // the functions whose aliases the dashboard may point, from rollback-service/rollback-config.json
 const registered = parseRegistered(process.env.REGISTERED_FUNCTIONS);
 
@@ -70,6 +73,8 @@ const RESOURCE_NAMES: Record<string, string> = {
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
  * POST /api/lambda-functions/<name>/point-alias {"aliasName": "...", "version": 3}: points an alias of a
  *   registered function at a version.
+ * The writes answer 202 with an operation id: the rollback service runs them, and
+ * GET /api/operations/<id> follows the run (status, steps, progress, its log lines).
  * GET /api/lambda-functions: the region's functions registered for rollback (rollback-config.json).
  * GET /api/lambda-functions/<name>: one function's versions, aliases and configuration.
  * GET /api/lambda-functions/<name>/metrics: its last 24 hours of metrics.
@@ -80,6 +85,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  */
 export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
   const { method } = event.requestContext.http;
+  if (event.rawPath.startsWith('/api/operations/')) return await operation(event, method);
   const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
@@ -129,6 +135,19 @@ async function apiSpec(id: string, deployedAt: string | null) {
   return outcome.ok ? json(200, outcome.spec) : json(outcome.status, { message: outcome.message });
 }
 
+/** GET /api/operations/<id>: how a restore or alias move the page started is going. */
+async function operation(event: FunctionUrlEvent, method: string) {
+  if (method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
+  const id = event.rawPath.slice('/api/operations/'.length);
+  try {
+    const view = await getOperation(logs, process.env.PROJECT_NAME!, id);
+    return view ? json(200, view) : json(404, { message: `No operation ${id}` });
+  } catch (err) {
+    console.error(`Reading operation ${id} failed`, err);
+    return json(502, { message: 'Could not read the rollback service\'s log' });
+  }
+}
+
 const RESTORE_BODY ='{"deployedAt": "<ISO 8601>", "reason"?: "<up to 200 characters>"}';
 
 /** A restore's body: which record (its deployedAt), and an optional reason. Undefined if malformed. */
@@ -155,14 +174,14 @@ async function restoreApiDeployment(id: string, event: FunctionUrlEvent) {
     throw err;
   }
   const outcome = await restoreRecordedDeployment(dynamo, lambda, process.env.PROJECT_NAME!, { id, name }, body);
-  return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
+  return outcome.ok ? json(202, { operationId: outcome.operationId }) : json(outcome.status, { message: outcome.message });
 }
 
 async function restoreDistributionRelease(id: string, event: FunctionUrlEvent) {
   const body = restoreBody(event);
   if (!isDistributionId(id) || !body) return json(400, { message: `Expected a distribution id and ${RESTORE_BODY}` });
   const outcome = await restoreRelease(cloudfront, dynamo, lambda, process.env.PROJECT_NAME!, id, body);
-  return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
+  return outcome.ok ? json(202, { operationId: outcome.operationId }) : json(outcome.status, { message: outcome.message });
 }
 
 // Only the functions registered for rollback (rollback-config.json): listed, read and changed.
@@ -191,7 +210,7 @@ async function pointLambdaAlias(name: string, event: FunctionUrlEvent) {
   const outcome = await pointAlias(lambda, registered, process.env.PROJECT_NAME!, name, {
     aliasName: body!.aliasName as string, version: body!.version as number,
   });
-  return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
+  return outcome.ok ? json(202, { operationId: outcome.operationId }) : json(outcome.status, { message: outcome.message });
 }
 
 async function distributions(id: string | undefined, sub: string | undefined) {

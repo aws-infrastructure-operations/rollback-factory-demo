@@ -126,6 +126,13 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['s3:GetObject'],
       resources: [`arn:${cdk.Aws.PARTITION}:s3:::${PROJECT_NAME}-${cdk.Aws.ACCOUNT_ID}-deployments-*/api-user-*/openapi.json`],
     }));
+    // Following a restore or an alias move while it runs (operations.ts): the lines of the rollback
+    // service's log group of each environment, rollback-factory-demo-rollback-service-logs-<env>
+    const rollbackLogs = `arn:${cdk.Aws.PARTITION}:logs:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:log-group:${PROJECT_NAME}-rollback-service-logs-*`;
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['logs:FilterLogEvents'],
+      resources: [rollbackLogs, `${rollbackLogs}:*`],
+    }));
     // Restoring a recorded API deployment: the rollback service re-imports its spec and redeploys
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
