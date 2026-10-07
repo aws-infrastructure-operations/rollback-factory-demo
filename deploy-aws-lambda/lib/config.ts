@@ -1,6 +1,13 @@
 /** In promotion order. Only prod keeps its data when its stack is deleted. */
 export const ENV_NAMES = ['dev', 'testing', 'staging', 'prod'] as const;
-export type EnvName = (typeof ENV_NAMES)[number];
+/**
+ * A pull request's own environment, pr-<number>: a short-lived copy of the stack that CI deploys and
+ * tests for each push to the PR, and deletes when the PR is closed (.github/workflows/lambda.yml).
+ */
+export type PrEnvName = `pr-${number}`;
+export type EnvName = (typeof ENV_NAMES)[number] | PrEnvName;
+export const PR_ENV_PATTERN = /^pr-[1-9]\d*$/;
+export const isPrEnv = (envName: string): envName is PrEnvName => PR_ENV_PATTERN.test(envName);
 
 export const PROJECT_NAME = 'rollback-factory-demo';
 /** This project's folder and stack name prefix: the stack is deploy-aws-lambda-<env>. */
@@ -14,6 +21,11 @@ export const INTEGRATION_ALIAS = 'integration';
 
 export interface EnvConfig {
   envName: EnvName;
+  /**
+   * A pull request's environment (pr-<number>): its errors alarm notifies nobody (there is no rollback
+   * service for it, and the function is not registered in rollback-config.json).
+   */
+  pr: boolean;
   /** service-lambda-<env> */
   functionName: string;
   /** deploy-aws-lambda-<env> */
@@ -45,8 +57,8 @@ export interface ConfigOverrides {
 }
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
-  if (!ENV_NAMES.includes(envName as EnvName)) {
-    throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}>`);
+  if (!ENV_NAMES.includes(envName as (typeof ENV_NAMES)[number]) && !isPrEnv(envName ?? '')) {
+    throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}|pr-<number>>`);
   }
   const liveLambdaVersion = overrides.liveLambdaVersion || undefined;
   if (liveLambdaVersion && !/^\d+$/.test(liveLambdaVersion)) {
@@ -56,6 +68,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
 
   return {
     envName: envName as EnvName,
+    pr: isPrEnv(envName as string),
     functionName: `${SERVICE_NAME}-${envName}`,
     stackName: `${STACK_PREFIX}-${envName}`,
     resourceName,
