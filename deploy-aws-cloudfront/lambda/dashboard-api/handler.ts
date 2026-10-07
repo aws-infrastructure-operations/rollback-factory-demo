@@ -66,7 +66,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
  * POST /api/lambda-functions/<name>/point-alias {"aliasName": "...", "version": 3}: points an alias of a
  *   registered function at a version.
- * GET /api/lambda-functions: the region's functions.
+ * GET /api/lambda-functions: the region's functions registered for rollback (rollback-config.json).
  * GET /api/lambda-functions/<name>: one function's versions, aliases and configuration.
  * GET /api/lambda-functions/<name>/metrics: its last 24 hours of metrics.
  * GET /api/cloudfront-distributions: the account's distributions.
@@ -146,15 +146,19 @@ async function restoreDistributionRelease(id: string, event: FunctionUrlEvent) {
   return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
 }
 
+// Only the functions registered for rollback (rollback-config.json): listed, read and changed.
 async function lambdaFunctions(name: string | undefined, sub: string | undefined) {
-  if (!name) return json(200, { region: process.env.AWS_REGION!, functions: await listLambdaFunctions(lambda) });
+  const project = process.env.PROJECT_NAME!;
+  const isRegistered = (fn: string) => registrationFor(fn, registered, project) !== undefined;
+  if (!name) return json(200, { region: process.env.AWS_REGION!, functions: await listLambdaFunctions(lambda, isRegistered) });
   if (!isFunctionName(name)) return json(400, { message: 'Expected a function name' });
   if (sub && sub !== 'metrics') return json(404, { message: 'Not found' });
+  const registration = registrationFor(name, registered, project);
+  if (!registration) return json(404, { message: `${name} isn't registered for rollback (rollback-config.json)` });
   if (sub === 'metrics') return json(200, await getLambdaFunctionMetrics(cloudwatch, name));
   const details = await getLambdaFunctionDetails(lambda, name);
   if (!details) return json(404, { message: `No function ${name}` });
-  const registration = registrationFor(name, registered, process.env.PROJECT_NAME!);
-  return json(200, registration ? { ...details, managedAlias: registration.alias } : details);
+  return json(200, { ...details, managedAlias: registration.alias });
 }
 
 async function pointLambdaAlias(name: string, event: FunctionUrlEvent) {

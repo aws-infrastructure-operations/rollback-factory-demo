@@ -44,8 +44,9 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   [`lambda/dashboard-api`](lambda/dashboard-api)) behind a function URL with IAM auth, which only these two
   distributions can call (Origin Access Control). Never cached. It reads the stack region's
   API Gateways: the API list, each API, and its stages and deployments (`apigateway:GET`, one API id per
-  path, so no stage exports). It also lists the region's Lambda functions
-  with their aliases and versions (`lambda:ListFunctions`, `ListAliases`, `ListVersionsByFunction`) and reads
+  path, so no stage exports). It also lists the region's Lambda functions registered for rollback
+  with their aliases and versions (`lambda:ListFunctions`; `ListAliases` and `ListVersionsByFunction` on the
+  registered functions only, e.g. `service-lambda-*`) and reads
   their last 24 hours of metrics (`cloudwatch:GetMetricData`). Function configurations come with environment
   variables: the reader copies named fields only, so they never reach the page. It lists the account's CloudFront
   distributions and reads one with its invalidations (`cloudfront:ListDistributions`, `GetDistribution`,
@@ -86,17 +87,17 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   `api-user-<env>` the deployments are the ones recorded in DynamoDB (marked live, verified or rolled back),
   each with a **Restore** button (after a confirm; the live one can't be restored); for other APIs they are
   API Gateway's own, with nothing to restore.
-- **Lambda Functions** is live too: the functions with their runtime, aliases and last change, from
-  `GET /api/lambda-functions`. Next to it, the selected function's published **versions** (and the aliases
-  serving each), its **aliases** (with weights), its **configuration**, and **monitoring**: invocations,
-  errors, throttles, durations and concurrency over 24 hours, fetched only when that tab opens.
-  For functions registered for rollback (`rollback-service/rollback-config.json`, passed to the dashboard
-  API as `REGISTERED_FUNCTIONS` at deploy time), each alias has a **Point to version** menu and each version
-  a **Point alias** menu, after a confirm: `POST /api/lambda-functions/<name>/point-alias` with
+- **Lambda Functions** is live too, for the functions registered for rollback only
+  (`rollback-service/rollback-config.json`, passed to the dashboard API as `REGISTERED_FUNCTIONS` at deploy
+  time): their runtime, aliases and last change, from `GET /api/lambda-functions`. Next to it, the selected
+  function's published **versions** (and the aliases serving each), its **aliases** (with weights), its
+  **configuration**, and **monitoring**: invocations, errors, throttles, durations and concurrency over 24
+  hours, fetched only when that tab opens. Each alias has a **Point to version** menu and each version a
+  **Point alias** menu, after a confirm: `POST /api/lambda-functions/<name>/point-alias` with
   `{"aliasName": "...", "version": 3}`, carried out by that environment's rollback service. Moving the
-  watched alias (`live`) restores `$LATEST` from the version's archived package too; going back is a
-  manual rollback (cooldown, the version left is marked rolled back from), going forward a promotion. Any
-  other alias (`integration`) just moves. Every other function's menus are disabled.
+  watched alias (`live`) restores `$LATEST` from the version's archived package too; going back is a manual
+  rollback (cooldown, the version left is marked rolled back from), going forward a promotion. Any other
+  alias (`integration`) just moves. Other functions are neither listed nor read (404).
 - **CloudFront Distributions** is live as well: every distribution with its status and, for this project's
   sites, the release it serves, from `GET /api/cloudfront-distributions`. Next to it, the selected one's
   **deployments** (the activations, restores and rollbacks recorded for `frontend-user-<env>`, marked live,
