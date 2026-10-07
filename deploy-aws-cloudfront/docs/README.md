@@ -22,6 +22,10 @@ Each ticket is one branch cut from `origin/main` and one PR.
 
 FE-02 and FE-03 can run in parallel; so can FE-05/FE-06/FE-07 once FE-04 is in.
 
+## Guides
+
+- [Sign-in with Microsoft Entra ID](entra-id-sign-in.md): planned; only the people assigned to an Entra ID app may use the dashboard.
+
 ## Decisions already made
 
 These apply to every ticket.
