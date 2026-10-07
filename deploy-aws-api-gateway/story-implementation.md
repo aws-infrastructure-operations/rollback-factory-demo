@@ -130,7 +130,7 @@ It then:
 
 #### 11. GitHub workflow
 
-Files: [`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.yml), which calls [`api-gateway-deploy.yml`](../.github/workflows/api-gateway-deploy.yml) once per environment.
+Files: [`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.yml), whose job per environment runs the [`api-gateway-deploy`](../.github/actions/api-gateway-deploy/action.yml) composite action.
 
 - **Triggers:** pull requests and pushes to `main` that change `deploy-aws-api-gateway/**` or the workflows. Changes to `.md` files alone don't trigger a run.
 - **Pull requests:** typecheck, unit tests, synth dev and prod, and a check that the Bruno collection is up to date.

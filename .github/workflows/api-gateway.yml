@@ -11,11 +11,13 @@ on:
     paths:
       - deploy-aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
+      - .github/actions/api-gateway-deploy/**
       - "!**/*.md"
   pull_request:
     paths:
       - deploy-aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
+      - .github/actions/api-gateway-deploy/**
       - "!**/*.md"
   workflow_dispatch:
     inputs:
@@ -70,19 +72,43 @@ jobs:
           fi
 
   deploy-dev:
+    name: deploy dev
     if: github.event_name != 'pull_request'
     needs: test
-    uses: ./.github/workflows/api-gateway-deploy.yml
-    with:
-      environment: dev
-      chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 60
+    # Shared with break-api-demo.yml: never two deploys to the same environment at once.
+    concurrency:
+      group: api-gateway-deploy-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/api-gateway-deploy
+        with:
+          environment: dev
+          chaos_failure_rate: ${{ inputs.dev_chaos_failure_rate || '0' }}
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
 
   deploy-prod:
+    name: deploy prod
     if: github.event_name == 'push' || inputs.promote_to_prod
     needs: deploy-dev
-    uses: ./.github/workflows/api-gateway-deploy.yml
-    with:
-      environment: prod
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 60
+    # Shared with break-api-demo.yml: never two deploys to the same environment at once.
+    concurrency:
+      group: api-gateway-deploy-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/api-gateway-deploy
+        with:
+          environment: prod
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}

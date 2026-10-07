@@ -24,7 +24,7 @@ switching back if the tests fail.
 - **Activation:** `release:activate --target integration` switches the integration distribution.
   `live`, the default, switches `frontend-user-<env>`.
 - **Tests:** `FRONTEND_TARGET=integration` runs the integration tests against the integration distribution.
-- **`frontend-deploy.yml`:**
+- **`.github/actions/frontend-deploy`:**
   1. cdk deploy, build and upload, as before
   2. activate the release on the integration distribution and run the tests there
   3. only then, activate it on `frontend-user-<env>`, record and verify

@@ -17,7 +17,7 @@ on:
         type: string
         default: "12"
 
-# Shared with frontend-deploy.yml / frontend-restore.yml for dev
+# Shared with the deploy jobs of frontend.yml and frontend-restore.yml for dev
 concurrency:
   group: frontend-deploy-dev
   cancel-in-progress: false

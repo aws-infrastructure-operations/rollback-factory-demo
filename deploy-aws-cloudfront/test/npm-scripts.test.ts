@@ -7,13 +7,14 @@ import { test } from 'node:test';
 // Check every script the frontend workflows run exists, and points at a file that exists.
 
 const root = path.resolve(__dirname, '..');
-const workflows = path.resolve(root, '..', '.github', 'workflows');
+// the workflows and the deploy action they run (.github/actions/frontend-deploy)
+const github = path.resolve(root, '..', '.github');
 const { scripts } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 
 test('every npm script the frontend workflows run is defined', () => {
-  const files = ['frontend.yml', 'frontend-deploy.yml', 'frontend-restore.yml', 'break-frontend-demo.yml'];
+  const files = ['workflows/frontend.yml', 'actions/frontend-deploy/action.yml', 'workflows/frontend-restore.yml', 'workflows/break-frontend-demo.yml'];
   const used = new Set(files.flatMap((file) => [
-    ...readFileSync(path.join(workflows, file), 'utf8').matchAll(/npm run (?:-s )?([\w:-]+)/g),
+    ...readFileSync(path.join(github, file), 'utf8').matchAll(/npm run (?:-s )?([\w:-]+)/g),
   ].map((m) => m[1])));
   assert.ok(used.size > 10, `found only ${[...used].join(', ')}`);
   const missing = [...used].filter((name) => !scripts[name]);

@@ -1,0 +1,196 @@
+name: frontend-deploy
+description: Deploy one environment of the frontend-user site (used by .github/workflows/frontend.yml)
+
+# Composite action: deploys one environment of frontend-user, testing each release on the integration
+# distribution before clients get it (like the API's integration stage):
+#   cdk deploy (both stacks; both distributions keep the release they serve) -> build a release
+#   -> upload it + its manifest -> make it live on
+#   frontend-user-<env>-integration -> integration tests there -> make the same release live on
+#   frontend-user-<env> -> record -> mark verified.
+# If the tests fail, the job stops with the test output in the summary and frontend-user-<env>
+# was never touched.
+#
+# The calling job checks out the repository, sets runs-on, the GitHub environment,
+# timeout and concurrency, and passes the AWS credentials: actions see neither secrets nor vars.
+
+inputs:
+  environment:
+    description: dev or prod
+    required: true
+  aws-region:
+    description: vars.AWS_REGION of the environment
+    required: true
+  aws-access-key-id:
+    description: secrets.AWS_ACCESS_KEY_ID of the environment
+    required: true
+  aws-secret-access-key:
+    description: secrets.AWS_SECRET_ACCESS_KEY of the environment
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # what the workflow job used to set in env:, for every step below
+    - name: Environment
+      shell: bash
+      run: |
+        {
+          echo "FRONTEND_ENV=${{ inputs.environment }}"
+          echo "AWS_REGION=${{ inputs.aws-region }}"
+        } >> "$GITHUB_ENV"
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: deploy-aws-cloudfront/package-lock.json
+    - run: npm ci
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: CDK bootstrap, main region and us-east-1 (no-op when up to date)
+      run: |
+        account="$(aws sts get-caller-identity --query Account --output text)"
+        npx cdk bootstrap -c env="$FRONTEND_ENV" "aws://$account/$AWS_REGION" "aws://$account/us-east-1"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Read the releases both distributions serve
+      id: live
+      run: |
+        context="$(npm run -s live:context -- --env "$FRONTEND_ENV")"
+        echo "context=$context" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Deploy both stacks (both distributions keep their release)
+      env:
+        LIVE_CONTEXT: ${{ steps.live.outputs.context }}
+      # LIVE_CONTEXT is unquoted on purpose: it holds up to two -c arguments
+      run: npx cdk deploy --all -c env="$FRONTEND_ENV" $LIVE_CONTEXT --require-approval never
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Build the release
+      id: build
+      run: |
+        release="$(npm run -s release:build -- --env "$FRONTEND_ENV")"
+        echo "release=$release" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Upload the release and its manifest
+      run: npm run -s release:upload -- --env "$FRONTEND_ENV"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Make it live on the integration distribution (waits for the switch)
+      id: integration_activate
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+      run: |
+        npm run -s release:activate -- --env "$FRONTEND_ENV" --release "$RELEASE" --target integration --wait > integration-activation.json
+        cat integration-activation.json
+        echo "site=$(jq -r '.siteUrl' integration-activation.json)" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Playwright browser cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ hashFiles('deploy-aws-cloudfront/package-lock.json') }}
+
+    - name: Install Chromium for the end-to-end test
+      run: npx playwright install --with-deps chromium
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Integration tests on the integration distribution (smoke + end to end)
+      id: integration
+      env:
+        FRONTEND_TARGET: integration
+        FRONTEND_RELEASE: ${{ steps.build.outputs.release }}
+      run: |
+        set -o pipefail
+        npm run test:integration 2>&1 | tee integration-tests.log
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Make the tested release live on frontend-user-${{ inputs.environment }} (waits for the switch)
+      id: activate
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+      run: |
+        npm run -s release:activate -- --env "$FRONTEND_ENV" --release "$RELEASE" --wait > activation.json
+        cat activation.json
+        {
+          echo "previous=$(jq -r '.previousReleaseId // ""' activation.json)"
+          echo "invalidation=$(jq -r '.invalidationId' activation.json)"
+          echo "site=$(jq -r '.siteUrl' activation.json)"
+          echo "deployed_after=$(jq -r '.deployedAfter | floor' activation.json)"
+          echo "completed_after=$(jq -r '.completedAfter | floor' activation.json)"
+        } >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Record the deployment
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+        INVALIDATION: ${{ steps.activate.outputs.invalidation }}
+        PREVIOUS: ${{ steps.activate.outputs.previous }}
+      run: >-
+        npm run -s deployment:record -- --env "$FRONTEND_ENV" --release "$RELEASE"
+        --invalidation "$INVALIDATION" ${PREVIOUS:+--previous "$PREVIOUS"}
+        --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Mark the deployment verified (it passed the tests on the integration distribution)
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+      run: npm run -s deployment:verify -- --env "$FRONTEND_ENV" --release "$RELEASE"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Integration test failures -> job summary
+      if: failure() && steps.integration.outcome == 'failure'
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+        SITE: ${{ steps.integration_activate.outputs.site }}
+      run: |
+        {
+          echo "### :x: frontend-user-$FRONTEND_ENV: integration tests failed for release \`$RELEASE\`"
+          echo "Tested on frontend-user-$FRONTEND_ENV-integration ($SITE). frontend-user-$FRONTEND_ENV was not changed."
+          echo '<details open><summary>Test output (last 100 lines)</summary>'
+          echo
+          echo '```'
+          tail -n 100 integration-tests.log
+          echo '```'
+          echo '</details>'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
+
+    - name: Activation timing and deployment history
+      if: always() && steps.activate.outcome == 'success'
+      env:
+        RELEASE: ${{ steps.build.outputs.release }}
+        SITE: ${{ steps.activate.outputs.site }}
+        DEPLOYED_AFTER: ${{ steps.activate.outputs.deployed_after }}
+        COMPLETED_AFTER: ${{ steps.activate.outputs.completed_after }}
+      run: |
+        {
+          echo "### frontend-user-$FRONTEND_ENV"
+          echo "Release \`$RELEASE\` passed on the integration distribution and is live on $SITE: distribution deployed after ${DEPLOYED_AFTER}s, invalidation completed after ${COMPLETED_AFTER}s."
+          echo '```'
+          npm run -s deployment:list -- --env "$FRONTEND_ENV" --limit 5
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      working-directory: deploy-aws-cloudfront
