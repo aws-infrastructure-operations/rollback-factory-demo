@@ -242,6 +242,10 @@ export interface OperationView {
   lines: Array<{ time: string; level: string; text: string }>;
   result?: unknown;
   reason?: string;
+  /** when the dashboard started it */
+  startedAt: string;
+  /** how long a run of this kind usually takes: the median of the recent ones, or a default */
+  estimate: { ms: number; from: 'history' | 'default'; runs: number };
 }
 
 export const fetchOperation = (id: string, signal?: AbortSignal) =>

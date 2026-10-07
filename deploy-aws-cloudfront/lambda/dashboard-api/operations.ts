@@ -80,7 +80,63 @@ export interface OperationView {
   result?: unknown;
   /** why it was skipped or failed */
   reason?: string;
+  /** when the dashboard started it (ISO 8601, from the operation id) */
+  startedAt: string;
+  /** how long a run of this kind usually takes, for the page's ETA */
+  estimate: Estimate;
 }
+
+/** The usual duration of a kind of run: the median of its recent runs, or a default without any. */
+export interface Estimate {
+  ms: number;
+  from: 'history' | 'default';
+  /** how many recent runs the median is of */
+  runs: number;
+}
+
+/** Without history: what a run of each kind takes, roughly (the async start and log delivery included). */
+export const DEFAULT_ESTIMATE_MS: Record<OperationKind, number> = {
+  'apigateway-restore': 10_000,
+  'cloudfront-restore': 8_000,
+  // syncs the archive and restores $LATEST from S3
+  'lambda-point-alias': 25_000,
+};
+/** Starting the run asynchronously and delivering its lines takes a little on top of its own duration. */
+const OVERHEAD_MS = 2_500;
+const HISTORY_DAYS = 7;
+const HISTORY_RUNS = 20;
+const ESTIMATE_TTL_MS = 5 * 60_000;
+const estimates = new Map<string, { at: number; estimate: Estimate }>();
+
+/**
+ * The median duration of the last successful runs of `kind`: the rollback service's result lines
+ * carry the operation id (with the kind) and durationMs. Cached for a few minutes per log group.
+ */
+export async function estimateFor(logs: CloudWatchLogsClient, logGroupName: string, kind: OperationKind, now = Date.now()): Promise<Estimate> {
+  const key = `${logGroupName}|${kind}`;
+  const cached = estimates.get(key);
+  if (cached && now - cached.at < ESTIMATE_TTL_MS) return cached.estimate;
+
+  const events = await filter(logs, logGroupName, `"durationMs" ".${kind}."`, now - HISTORY_DAYS * 24 * 3600_000);
+  const durations = events.map((e) => {
+    try {
+      const parsed = JSON.parse(lineOf(e).text);
+      const skipped = parsed.result?.action === 'skip' || parsed.result?.rolledBack === false;
+      return parsed.msg === 'result' && !skipped && typeof parsed.durationMs === 'number' ? parsed.durationMs as number : undefined;
+    } catch {
+      return undefined;
+    }
+  }).filter((d): d is number => d !== undefined).slice(-HISTORY_RUNS).sort((a, b) => a - b);
+
+  const estimate: Estimate = durations.length
+    ? { ms: durations[Math.floor(durations.length / 2)] + OVERHEAD_MS, from: 'history', runs: durations.length }
+    : { ms: DEFAULT_ESTIMATE_MS[kind], from: 'default', runs: 0 };
+  estimates.set(key, { at: now, estimate });
+  return estimate;
+}
+
+/** For the tests. */
+export const clearEstimates = () => estimates.clear();
 
 const REQUEST_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 /** A run is never longer than the service's timeout (2 min): stop looking after that. */
@@ -135,13 +191,17 @@ export async function getOperation(
   const stepsOf = (texts: string[]) => STEPS[parsed.kind].map((s) => ({ label: s.label, done: texts.some((t) => t.includes(s.marker)) }));
 
   // the run's first line has the operation id (the service logs the event it got)
+  const timing = {
+    startedAt: new Date(parsed.startedAt).toISOString(),
+    estimate: await estimateFor(logs, logGroupName, parsed.kind, now),
+  };
   const [first] = await filter(logs, logGroupName, `"${id}"`, startTime);
   const requestId = first && REQUEST_ID.exec(first.message ?? '')?.[0];
   if (!requestId) {
     const lost = now - parsed.startedAt > GIVE_UP_AFTER_MS;
     return {
       id, kind: parsed.kind, status: lost ? 'failed' : 'queued', progress: lost ? 100 : 2,
-      steps: stepsOf([]), lines: [],
+      steps: stepsOf([]), lines: [], ...timing,
       ...(lost && { reason: 'The rollback service never logged this run. Check its log group.' }),
     };
   }
@@ -177,6 +237,7 @@ export async function getOperation(
     // an alias other than live skips two steps: they count as done once it succeeded
     steps: status === 'succeeded' ? steps.map((s) => ({ ...s, done: true })) : steps,
     lines,
+    ...timing,
     ...(outcome?.result !== undefined && { result: outcome.result }),
     ...(reason && { reason }),
   };

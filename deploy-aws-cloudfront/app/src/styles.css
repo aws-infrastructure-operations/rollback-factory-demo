@@ -305,3 +305,4 @@ td.date-wrap { white-space: normal; min-width: 90px; }
   .confirm-facts > div { grid-template-columns: 1fr; gap: 2px; }
   .modal-actions { flex-wrap: wrap; }
 }
+.operation-eta { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }

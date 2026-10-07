@@ -75,6 +75,11 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   (`queued`, `running`, `succeeded`, `skipped`, `failed`), the steps done (from the step lines the
   service logs) and a progress percentage. The popup shows the progress bar, the steps and the live log;
   closing it doesn't stop the run.
+  It also returns how long a run of that kind usually takes: the median duration of the last 20
+  successful ones in the past 7 days (the result lines carry the operation id and `durationMs`), cached a
+  few minutes, or a default per kind without history. The popup shows an ETA from it ("Elapsed 0:05 · about
+  0:07 left", "taking longer than usual", then "Took 0:12"), and between steps the progress bar moves with
+  the time against it, up to 95% until the run ends.
   The CloudFront behavior allows POST for it (OAC needs the body's SHA-256 in `x-amz-content-sha256`), and
   waits up to 60 s. It has no sign-in: anyone with the site URL can see the API, function and distribution
   names, stages, versions, releases and settings, **restore an API deployment or a site release, and point
