@@ -87,7 +87,7 @@ after(async () => {
 });
 
 describe(`${config.apiName} (stage ${stage})`, () => {
-  for (const resource of ['users', 'messages']) {
+  for (const resource of ['users', 'messages', 'orders']) {
     test(`GET /${resource} returns 200`, async () => {
       const res = await call('GET', `/${resource}`, { token });
       assert.equal(res.status, 200, JSON.stringify(res.body));

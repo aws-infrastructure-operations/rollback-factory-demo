@@ -45,6 +45,7 @@ describe('stack', () => {
       'rollback-factory-demo-apigateway-api-user-handler-4xx-rate-dev',
       'rollback-factory-demo-apigateway-api-user-handler-5xx-rate-dev',
       'rollback-factory-demo-lambda-api-messages-errors-dev',
+      'rollback-factory-demo-lambda-api-orders-errors-dev',
       'rollback-factory-demo-lambda-api-users-errors-dev',
     ]);
     for (const [name, alarm] of Object.entries(alarms)) assert.ok(publishesToRollbackService(alarm), name);
@@ -80,9 +81,10 @@ describe('stack', () => {
       '\\"stageName\\":\\"v1\\"',
       'backendFunctionArns',
     ]) assert.ok(output.includes(expected), `RollbackTarget lacks ${expected}`);
-    // both backends, so an API rollback keeps both on their stage alias
+    // every backend, so an API rollback keeps each on its stage alias
     assert.match(output, /UsersHandler[0-9A-F]{8}/);
     assert.match(output, /MessagesHandler[0-9A-F]{8}/);
+    assert.match(output, /OrdersHandler[0-9A-F]{8}/);
     assert.match(output, /ApiUserApi|Api[A-F0-9]{8}/, 'restApiId is a reference to the API');
     assert.ok(JSON.stringify(synth('dev', { rollbackWindowMinutes: '10' }).findOutputs('RollbackTarget')).includes('\\"rollbackWindowMinutes\\":10'));
   });
@@ -98,13 +100,15 @@ describe('stack', () => {
 
   test('each resource has its own Lambda, and each stage invokes its alias of it (stage variable lambdaAlias)', () => {
     const functions = Object.entries(t.findResources('AWS::Lambda::Function'))
-      .filter(([, f]: [string, any]) => /api-(users|messages)-dev$/.test(f.Properties.FunctionName))
+      .filter(([, f]: [string, any]) => /api-(users|messages|orders)-dev$/.test(f.Properties.FunctionName))
       .map(([id, f]: [string, any]) => [f.Properties.FunctionName, id]);
-    assert.deepEqual(functions.map(([name]) => name).sort(), ['rollback-factory-demo-api-messages-dev', 'rollback-factory-demo-api-users-dev']);
+    assert.deepEqual(functions.map(([name]) => name).sort(), [
+      'rollback-factory-demo-api-messages-dev', 'rollback-factory-demo-api-orders-dev', 'rollback-factory-demo-api-users-dev',
+    ]);
 
     const methods = Object.values(t.findResources('AWS::ApiGateway::Method'))
       .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS'); // CORS preflights are mock integrations
-    assert.equal(methods.length, 4);
+    assert.equal(methods.length, 6);
     const resources = t.findResources('AWS::ApiGateway::Resource');
     for (const m of methods as any[]) {
       const path = resources[m.Properties.ResourceId.Ref].Properties.PathPart;
@@ -115,7 +119,8 @@ describe('stack', () => {
     }
 
     assert.deepEqual(Object.keys(aliases(t)).sort(), [
-      'MessagesHandler:integration', 'MessagesHandler:live', 'UsersHandler:integration', 'UsersHandler:live',
+      'MessagesHandler:integration', 'MessagesHandler:live', 'OrdersHandler:integration', 'OrdersHandler:live',
+      'UsersHandler:integration', 'UsersHandler:live',
     ]);
     assert.deepEqual(stage(t, 'v1').Variables, { lambdaAlias: 'live' });
     assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration' });
@@ -130,8 +135,8 @@ describe('stack', () => {
     t.hasResource('AWS::Lambda::Version', { DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' });
   });
 
-  test('without live context, a deploy updates v1 and both aliases directly', () => {
-    for (const fn of ['UsersHandler', 'MessagesHandler']) {
+  test('without live context, a deploy updates v1 and every alias directly', () => {
+    for (const fn of ['UsersHandler', 'MessagesHandler', 'OrdersHandler']) {
       assert.deepEqual(aliases(t)[`${fn}:live`].FunctionVersion, aliases(t)[`${fn}:integration`].FunctionVersion, fn);
     }
     assert.deepEqual(stage(t, 'v1').DeploymentId, stage(t, 'integration').DeploymentId);
@@ -173,9 +178,9 @@ describe('stack', () => {
     }
   });
 
-  test('chaosFailureRate reaches both backends', () => {
+  test('chaosFailureRate reaches every backend', () => {
     const chaos = synth('dev', { chaosFailureRate: '1' });
-    for (const backend of ['users', 'messages']) {
+    for (const backend of ['users', 'messages', 'orders']) {
       chaos.hasResourceProperties('AWS::Lambda::Function', {
         FunctionName: `rollback-factory-demo-api-${backend}-dev`,
         Environment: { Variables: Match.objectLike({ CHAOS_FAILURE_RATE: '1' }) },
@@ -192,21 +197,21 @@ describe('backend permissions and versions', () => {
     const permissions = Object.values(t.findResources('AWS::Lambda::Permission'))
       .map((p: any) => p.Properties)
       .filter((p: any) => p.Principal === 'apigateway.amazonaws.com');
-    assert.equal(permissions.length, 4, 'live and integration of both backends');
+    assert.equal(permissions.length, 6, 'live and integration of each backend');
     for (const p of permissions) {
-      const backend = JSON.stringify(p.FunctionName).includes('Users') ? 'users' : 'messages';
+      const backend = ['users', 'messages', 'orders'].find((b) => JSON.stringify(p.FunctionName).includes(`"${b[0].toUpperCase()}${b.slice(1)}`))!;
       // <api>/<stage>/<method>/<path>: a call to /users is <api>/integration/GET/users
       const arn = JSON.stringify(p.SourceArn);
       assert.ok(arn.endsWith(`"/*/*/${backend}"]]}`), arn);
     }
   });
 
-  test('every deploy (deployId) publishes a new version of both backends', () => {
+  test('every deploy (deployId) publishes a new version of every backend', () => {
     const versionIds = (template: Template) => Object.keys(template.findResources('AWS::Lambda::Version')).sort();
     const first = synth('dev', { deployId: '100.1' });
     const second = synth('dev', { deployId: '101.1' });
-    assert.equal(versionIds(first).length, 2);
-    // same code, another deploy: new version resources for both
+    assert.equal(versionIds(first).length, 3);
+    // same code, another deploy: new version resources for all
     assert.equal(versionIds(first).filter((id) => versionIds(second).includes(id)).length, 0);
     first.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'rollback-factory-demo-api-users-dev',

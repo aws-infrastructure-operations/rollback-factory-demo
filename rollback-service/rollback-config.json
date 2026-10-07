@@ -25,6 +25,14 @@
       "alarms": [
         "rollback-factory-demo-lambda-api-messages-errors-<env>"
       ]
+    },
+    {
+      "name": "rollback-factory-demo-api-orders-<env>",
+      "enabled": true,
+      "alias": "live",
+      "alarms": [
+        "rollback-factory-demo-lambda-api-orders-errors-<env>"
+      ]
     }
   ]
 }

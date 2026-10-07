@@ -251,10 +251,10 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
   // the functions registered for rollback only (<env> -> *), of this account and region
   const scopedTo = JSON.stringify(scoped.Resource);
-  for (const fn of ['service-lambda-*', 'rollback-factory-demo-api-users-*', 'rollback-factory-demo-api-messages-*']) {
+  for (const fn of ['service-lambda-*', 'rollback-factory-demo-api-users-*', 'rollback-factory-demo-api-messages-*', 'rollback-factory-demo-api-orders-*']) {
     assert.ok(scopedTo.includes(`:function:${fn}"`), fn);
   }
-  assert.equal(scoped.Resource.length, 3, 'aliases and versions of the registered functions only');
+  assert.equal(scoped.Resource.length, 4, 'aliases and versions of the registered functions only');
   // the api-user OpenAPI exports in the API deployments buckets, nothing else of them
   const specs = statements.find((s: any) => s.Action === 's3:GetObject');
   assert.match(JSON.stringify(specs.Resource), /-deployments-\*\/api-user-\*\/openapi\.json"\]\]}$/);
