@@ -1,67 +1,118 @@
 # Architecture diagram prompt (api-user)
 
 A prompt for an image model (e.g. ChatGPT) that draws the `api-user` architecture: the request
-path, the alarm-driven rollback and the CI pipeline. It follows
-[`lib/api-user-stack.ts`](../lib/api-user-stack.ts) and the `api-gateway*.yml` workflows; update it
-when those change.
+path, the integration-first CI pipeline, the alarm-driven rollback through the shared rollback
+service, and the manual restores. It follows
+[`deploy-aws-api-gateway/lib/api-user-stack.ts`](../../deploy-aws-api-gateway/lib/api-user-stack.ts),
+the rollback service's API Gateway manager in
+[`rollback-service/lambda/managers/apigateway/`](../../rollback-service/lambda/managers/apigateway),
+the dashboard's restore in
+[`deploy-aws-cloudfront/lambda/dashboard-api/`](../../deploy-aws-cloudfront/lambda/dashboard-api) and
+the `api-gateway*.yml` workflows. Update it when those change.
 
 Image models tend to garble long labels, so the prompt keeps labels short and puts details in a
 legend. If the picture comes out cluttered, ask for two images: one with the request and CI flows,
-and one with only the rollback flow (arrows A–F).
+and one with the rollback and restore flows (A–G, R1–R3).
 
 ## Prompt
 
 ```text
-Create a clean, professional AWS architecture diagram (landscape, 16:9, white background) using official AWS Architecture Icons and AWS group styles. Use short, exactly spelled labels — no invented text, no lorem ipsum. Number the arrows of the request flow (1–5) and the rollback flow (A–F) and add a small legend explaining them.
+Create a clean, professional AWS architecture diagram (landscape, 16:9, white background) using official AWS Architecture Icons and AWS group styles. Use short, exactly spelled labels — no invented text, no lorem ipsum. Number the arrows of the request flow (1–5), the CI flow (D1–D5), the rollback flow (A–G) and the restore flow (R1–R3), and add a small legend explaining them.
 
-TITLE: "api-user — alarm-driven rollback (rollback-factory-demo)"
+TITLE: "api-user — integration-first deploys and alarm-driven rollback (rollback-factory-demo)"
 
 LAYOUT (left to right):
 
 1) LEFT — "Clients"
-   - "User / Bruno / Frontend" (user icon)
+   - "User / Bruno" (user icon)
    - "GitHub Actions" (GitHub logo) with a small vertical pipeline next to it:
-     "dev → testing → staging → prod". Inside one environment show the steps:
+     "dev → prod". Inside one environment show the steps:
      "cdk deploy → tests on stage 'integration' → promote to v1 → record → verify"
+   - A small manual workflow box under it: "api-gateway restore"
+   - "Dashboard" (browser icon), label "AWS Control Center", with a small "Restore" button chip
 
-2) CENTER — an "AWS Cloud" group containing a "Region eu-central-1" group, containing:
-   a) "Amazon Cognito" — label "User pool: rollback-factory-demo-users-<env>"
-   b) "Amazon API Gateway" — label "REST API: api-user-<env>"
-      Inside it, two stage boxes stacked:
-        - "Stage v1  (lambdaAlias = live)"
-        - "Stage integration  (lambdaAlias = integration)"
-      Small text under the API: "GET/POST /users, /messages · Cognito authorizer · request validator"
-   c) "AWS Lambda" — label "rollback-factory-demo-handler-<env>" with two alias chips:
-        "alias: live" and "alias: integration"
-   d) "Amazon CloudWatch Logs" — label "Access logs"
-   e) "Amazon CloudWatch" — a box with 5 alarm chips:
-        "api-user-4xx-rate", "api-user-5xx-rate" (red, these trigger rollback),
-        "lambda-4xx-rate", "lambda-5xx-rate" (amber, block rollback),
-        "lambda-errors" (grey, notify only)
-   f) "Amazon SNS" — label "notifications topic" with an optional "e-mail" subscriber
-   g) "AWS Lambda" — label "rollback-factory-demo-rollback-<env>"
-   h) "Amazon DynamoDB" — label "deployments table"
-   i) "Amazon S3" — label "OpenAPI specs (one per deployment)"
+2) CENTER — an "AWS Cloud" group containing a "Region eu-central-1" group, containing two groups:
+
+   a) Group "deploy-aws-api-gateway":
+      - "Amazon Cognito" — label "users"
+      - "Amazon API Gateway" — label "REST API: api-user-<env>"
+        Inside it, two stage boxes stacked:
+          - "Stage v1  (lambdaAlias = live)"
+          - "Stage integration  (lambdaAlias = integration)"
+        Small text under the API: "GET/POST /users, /messages · Cognito authorizer · request validator"
+      - "AWS Lambda" — label "handler" with two alias chips: "alias: live" and "alias: integration"
+      - "Amazon CloudWatch Logs" — label "access logs"
+      - "Amazon CloudWatch" — a box with 5 alarm chips:
+          "api-user-4xx-rate", "api-user-5xx-rate" (red, these trigger rollback),
+          "handler-4xx-rate", "handler-5xx-rate" (amber, block rollback),
+          "handler-errors" (grey, notify only)
+      - "Amazon DynamoDB" — label "deployments", caption "current, verified, rolledBackAt"
+      - "Amazon S3" — label "OpenAPI specs", caption "one export per deployment"
+
+   b) Group "rollback-service" (shared by API Gateway, Lambda and CloudFront rollbacks):
+      - "Amazon SNS" — label "rollback-notifications topic" with an optional "e-mail" subscriber
+      - "AWS Lambda" — label "rollback-service", with a small router chip "alarm name → apigateway manager"
 
 REQUEST FLOW (solid blue arrows, numbered):
  1  User → Cognito: "sign in → ID token"
  2  User → API Gateway stage v1: "request + ID token"
  3  API Gateway → Cognito: "authorizer validates token"
  4  Stage v1 → Lambda alias "live"; Stage integration → alias "integration" (dashed)
- 5  API Gateway → CloudWatch Logs "access logs" → CloudWatch "metric filters → Lambda error metrics"
+ 5  API Gateway → CloudWatch Logs "access logs" → CloudWatch "metric filters → handler error rates"
+
+CI FLOW (grey dashed arrows, D-numbered):
+ D1  GitHub Actions → API Gateway / Lambda: "cdk deploy: new deployment on stage integration, alias integration"
+ D2  GitHub Actions → stage integration: "integration tests"
+ D3  GitHub Actions → stage v1 and alias live: "promote (only if tests pass)"
+ D4  GitHub Actions → S3: "store OpenAPI export"
+ D5  GitHub Actions → DynamoDB: "record + mark verified"
 
 ROLLBACK FLOW (solid red arrows, lettered):
- A  CloudWatch alarm "api-user-4xx-rate"/"api-user-5xx-rate" → SNS topic
- B  SNS → rollback Lambda (filter: only the two api-user rate alarms)
- C  rollback Lambda → DynamoDB: "latest deployment < X min? find previous verified"
- D  rollback Lambda → CloudWatch: "is the Lambda at fault? (paired lambda alarms)" — if yes: "skip"
- E  rollback Lambda → S3: "get previous OpenAPI spec"
- F  rollback Lambda → API Gateway stage v1: "re-import spec + redeploy v1 (keeps alias live)"
+ A  CloudWatch alarm "api-user-4xx-rate" / "api-user-5xx-rate" → SNS topic
+ B  SNS → rollback-service: "routed by alarm name: apigateway"
+ C  rollback-service → DynamoDB: "latest deployment < 30 min old? not already rolled back?"
+ D  rollback-service → CloudWatch: "is the handler at fault? (paired handler alarms)" — if yes: "skip"
+ E  rollback-service → DynamoDB: "target: previous verified deployment; claim (one rollback for both alarms)"
+ F  rollback-service → S3: "get its OpenAPI export"
+ G  rollback-service → API Gateway stage v1: "re-import spec + redeploy v1 (keeps alias live); record rollback"
 
-CI FLOW (grey dashed arrows):
- - GitHub Actions → API Gateway / Lambda: "deploy + promote"
- - GitHub Actions → S3: "store spec"
- - GitHub Actions → DynamoDB: "record + verify deployment"
+RESTORE FLOW (solid purple arrows, R-numbered):
+ R1  "api-gateway restore" workflow → rollback-service: "restore a chosen deployment, then integration tests + verify"
+ R2  Dashboard "Restore" → rollback-service: "restore a chosen deployment"
+ R3  rollback-service → S3 and API Gateway stage v1: "re-import that export + redeploy v1; record"
 
 STYLE: flat AWS icon style, thin lines, rounded group borders, consistent spacing, readable sans-serif font, no 3D, no gradients, no shadows. Keep every label exactly as written above.
 ```
+
+## Reference
+
+What the diagram should show, in case the model misses or invents something:
+
+- **Environments:** the workflows deploy `dev`, then `prod`.
+- **Names per environment:**
+  - stack `deploy-aws-api-gateway-<env>` with:
+    - the REST API `api-user-<env>` and its stages `v1` and `integration`
+    - the user pool `rollback-factory-demo-users-<env>`
+    - the handler `rollback-factory-demo-handler-<env>` with aliases `live` and `integration`
+    - the access log group `rollback-factory-demo-api-access-logs-<env>`
+    - the table `rollback-factory-demo-deployments-<env>` and the bucket `rollback-factory-demo-<account>-deployments-<env>`
+  - alarms, all `rollback-factory-demo-apigateway-api-user-…-<env>`:
+    - `4xx-rate` and `5xx-rate`: trigger the rollback
+    - `handler-4xx-rate` and `handler-5xx-rate`: block it while they are in ALARM
+    - `handler-errors`: notification only
+  - stack `rollback-service-<env>` (deployed first, shared with the Lambda and the frontend) with the
+    rollback function `rollback-factory-demo-rollback-service-<env>` and the topic
+    `rollback-factory-demo-rollback-notifications-<env>`
+- **Stages and aliases:** each stage invokes the alias named by its `lambdaAlias` stage variable, so
+  the `integration` stage tests the new code while `v1` keeps serving `live`.
+- **What a rollback restores:** the API configuration only. It re-imports the previous verified
+  deployment's OpenAPI export into the API and redeploys `v1`; the restored spec still invokes the
+  `live` alias, so the code is never rolled back. If the paired handler alarms show the handler is at
+  fault, it skips the rollback.
+- **Rollback window:** only within 30 minutes of the latest deployment.
+- **Manual restores:** the `api-gateway restore` workflow restores a recorded deployment, runs the
+  integration tests and marks it verified. The dashboard's API panel lists the recorded deployments
+  and its Restore button asks the rollback service to restore one. Both go through the same
+  rollback service as the alarms.
+- **Not in the diagram:** the frontend's distributions and the Lambda service; only the dashboard's
+  Restore button appears.
