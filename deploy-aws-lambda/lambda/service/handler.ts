@@ -19,6 +19,16 @@ export const handler = async (event: unknown, context: Context) => {
   }));
   coldStart = false;
 
+  // DEMO BRANCH (demo/break-lambda) - DO NOT MERGE.
+  // A bad release that only shows in production: calls through the live alias need a pricing table
+  // that only exists there, and it was never configured, so they throw. CI tests the integration
+  // alias, so this version passes and gets promoted to live; then any call to live is a function
+  // error, the errors alarm fires and the rollback service moves live back to the previous version.
+  if (context.invokedFunctionArn.endsWith(':live')) {
+    const pricingTable = process.env.PRICING_TABLE;
+    if (!pricingTable) throw new Error('PRICING_TABLE is not configured');
+  }
+
   const result = { version: context.functionVersion };
   console.log(JSON.stringify({ msg: 'done', version: context.functionVersion, durationMs: Date.now() - started }));
   return result;
