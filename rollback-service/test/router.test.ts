@@ -39,6 +39,7 @@ const recordingManagers = () => {
     apigateway: async (alarm: AlarmNotification) => { calls.push(['apigateway', alarm.alarmName]); return 'api'; },
     apigatewayRestore: async (req) => { calls.push(['apigatewayRestore', req.deployedAt]); return 'restored'; },
     cloudfront: async (alarm: AlarmNotification) => { calls.push(['cloudfront', alarm.alarmName]); return 'cf'; },
+    cloudfrontRestore: async (req) => { calls.push(['cloudfrontRestore', req.deployedAt]); return 'cf-restored'; },
     lambda: async (event) => { calls.push(['lambda', event]); return ['fn']; },
   };
   return { calls, managers };
@@ -83,16 +84,18 @@ test('skips OK and INSUFFICIENT_DATA notifications without asking a manager', as
   assert.equal(result.reason, 'state is OK, not ALARM');
 });
 
-test('sends scheduled checks and syncs to the Lambda manager, restores to the API Gateway manager', async () => {
+test('sends scheduled checks and syncs to the Lambda manager, restores to the API Gateway and CloudFront managers', async () => {
   const { calls, managers } = recordingManagers();
   const route = createRouter('dev', managers);
   await route({ type: 'scheduled-check' });
   await route({ type: 'sync', functionName: 'service-lambda-dev' });
   assert.equal(await route({ type: 'restore', manager: 'apigateway', deployedAt: '2026-10-06T11:00:00.000Z' }), 'restored');
+  assert.equal(await route({ type: 'restore', manager: 'cloudfront', deployedAt: '2026-10-06T12:00:00.000Z' }), 'cf-restored');
   assert.deepEqual(calls, [
     ['lambda', { type: 'scheduled-check' }],
     ['lambda', { type: 'sync', functionName: 'service-lambda-dev' }],
     ['apigatewayRestore', '2026-10-06T11:00:00.000Z'],
+    ['cloudfrontRestore', '2026-10-06T12:00:00.000Z'],
   ]);
   await assert.rejects(route({ type: 'nope' } as any), /Unknown event/);
 });

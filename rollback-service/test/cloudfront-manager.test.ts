@@ -4,9 +4,9 @@ import { beforeEach, test } from 'node:test';
 import {
   CloudFrontClient, CreateInvalidationCommand, GetDistributionConfigCommand, UpdateDistributionCommand,
 } from '@aws-sdk/client-cloudfront';
-import { DynamoDBDocumentClient, QueryCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { DeploymentRecord } from '../lambda/managers/cloudfront/deployments.js';
-import { handleAlarm, type CloudFrontRollbackTarget } from '../lambda/managers/cloudfront/manager.js';
+import { handleAlarm, restore, type CloudFrontRollbackTarget } from '../lambda/managers/cloudfront/manager.js';
 
 const ALARM = 'rollback-factory-demo-cloudfront-frontend-user-5xx-rate-dev';
 const TARGET: CloudFrontRollbackTarget = {
@@ -70,6 +70,7 @@ const cloudfront = {
 DynamoDBDocumentClient.prototype.send = (async (command: any) => {
   calls.push(command);
   if (command instanceof QueryCommand) return { Items: history.slice(0, command.input.Limit) };
+  if (command instanceof GetCommand) return { Item: history.find((r) => r.deployedAt === command.input.Key!.deployedAt) };
   if (command instanceof UpdateCommand && command.input.UpdateExpression?.includes('rolledBackAt')) {
     if (claimTaken) throw Object.assign(new Error('conditional'), { name: 'ConditionalCheckFailedException' });
     claimTaken = true;
@@ -115,4 +116,38 @@ test('skips when the live release is not the latest record', async () => {
   live = GOOD;
   assert.equal((await handleAlarm(TARGET, alarm(), { client: cloudfront })).action, 'skip');
   assert.equal(calls.some((c) => c instanceof UpdateCommand), false, 'nothing claimed');
+});
+
+// --- Restore (the dashboard's Restore button) -----------------------------------------------------
+
+test('restores a chosen release: switches the site origin, invalidates and records an unverified restore', async () => {
+  const chosen = history[1];
+  const result = await restore(TARGET, { deployedAt: chosen.deployedAt, reason: 'bad banner', actor: 'dashboard' }, { client: cloudfront });
+  assert.deepEqual({ ...result, deployedAt: undefined }, {
+    action: 'restored', from: BAD, to: GOOD, invalidationId: 'INV', deployedAt: undefined,
+  });
+  assert.equal(live, GOOD);
+  const tx: any = calls.find((x) => x instanceof TransactWriteCommand);
+  const item = tx.input.TransactItems[0].Put.Item;
+  assert.equal(item.source, 'restore');
+  assert.equal(item.actor, 'dashboard');
+  assert.equal(item.releaseId, GOOD);
+  assert.equal(item.commit, 'abc1234');
+  assert.equal(item.verifiedAt, undefined, 'verified only once the integration tests pass again');
+  assert.match(item.description, /^Restore to 20261006T110000Z .*: bad banner$/);
+  assert.equal(calls.some((x) => x instanceof UpdateCommand && x.input.UpdateExpression?.includes('rolledBackAt')), false, 'no claim');
+});
+
+test('a restore of the live release changes nothing', async () => {
+  const result = await restore(TARGET, { deployedAt: history[0].deployedAt }, { client: cloudfront });
+  assert.equal(result.action, 'skip');
+  assert.equal(live, BAD);
+  assert.equal(calls.some((x) => x instanceof UpdateDistributionCommand || x instanceof TransactWriteCommand), false);
+});
+
+test('refuses a record that does not exist or belongs to another distribution', async () => {
+  await assert.rejects(restore(TARGET, { deployedAt: '2020-01-01T00:00:00.000Z' }, { client: cloudfront }), /No release of frontend-user-dev/);
+  history[1].distributionId = 'OLD-DIST';
+  await assert.rejects(restore(TARGET, { deployedAt: history[1].deployedAt }, { client: cloudfront }), /No release/);
+  assert.equal(live, BAD);
 });

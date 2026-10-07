@@ -1,6 +1,6 @@
 // The account's CloudFront distributions for the dashboard: the list, one distribution's release
 // history (for the ones this project deploys), configuration and invalidations, and its last 24
-// hours of metrics. Read-only.
+// hours of metrics; and restoring a recorded release, which the rollback service carries out.
 //
 // GetDistribution returns the whole config, origin custom headers included (often a shared
 // secret with the origin): only the fields named here are copied into a response.
@@ -9,6 +9,7 @@ import {
   CloudFrontClient, GetDistributionCommand, GetInvalidationCommand, ListDistributionsCommand, ListInvalidationsCommand,
   type DistributionSummary, type Origin,
 } from '@aws-sdk/client-cloudfront';
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { DeploymentRecord } from '../shared/deployments.js';
 import { releaseIdFromOriginPath, releaseOrigins } from '../shared/releases.js';
@@ -252,4 +253,67 @@ export async function getDistributionMetrics(client: CloudWatchClient, distribut
     ...(rate4xx !== undefined && { error4xxRate: rate4xx }),
     ...(rate5xx !== undefined && { error5xxRate: rate5xx }),
   };
+}
+
+// --- Restore (the Restore button) ---------------------------------------------------------------
+
+export type ReleaseRestoreResult =
+  | { ok: true; result: unknown }
+  | { ok: false; status: 400 | 404 | 409 | 502; message: string };
+
+/** The rollback service of a frontend-user-<env> distribution's environment; none for any other. */
+export function rollbackServiceForDistribution(comment: string | undefined, project: string): string | undefined {
+  const env = /^frontend-user-([a-z0-9]+)$/.exec(comment ?? '')?.[1];
+  return env && `${project}-rollback-service-${env}`;
+}
+
+/**
+ * Makes the distribution serve the release recorded at `deployedAt` again: the environment's
+ * rollback service switches the site origin, invalidates /* and records a "restore" (not verified
+ * until the integration tests pass again). Synchronous, so the page can show the outcome; the
+ * distribution itself takes a few minutes to deploy.
+ */
+export async function restoreRelease(
+  cloudfront: CloudFrontClient,
+  dynamo: DynamoDBDocumentClient,
+  lambda: LambdaClient,
+  project: string,
+  distributionId: string,
+  req: { deployedAt: string; reason?: string },
+): Promise<ReleaseRestoreResult> {
+  let distribution;
+  try {
+    ({ Distribution: distribution } = await cloudfront.send(new GetDistributionCommand({ Id: distributionId })));
+  } catch (err) {
+    if ((err as Error).name === 'NoSuchDistribution') return { ok: false, status: 404, message: `No distribution ${distributionId}` };
+    throw err;
+  }
+  const comment = distribution?.DistributionConfig?.Comment;
+  const table = deploymentsTableFor(comment, project);
+  const service = rollbackServiceForDistribution(comment, project);
+  if (!table || !service) {
+    return { ok: false, status: 400, message: `${comment || distributionId} has no release history: nothing to restore` };
+  }
+
+  const records = (await readDeployments(dynamo, table, comment!, distributionId)) ?? [];
+  const record = records.find((r) => r.deployedAt === req.deployedAt);
+  if (!record) return { ok: false, status: 404, message: `No release of ${comment} recorded at ${req.deployedAt}` };
+  const live = summarize({ ...distribution, ...distribution!.DistributionConfig }).releaseId;
+  if (record.releaseId === live) return { ok: false, status: 409, message: `${comment} already serves release ${record.releaseId}` };
+
+  const res = await lambda.send(new InvokeCommand({
+    FunctionName: service,
+    Payload: new TextEncoder().encode(JSON.stringify({
+      type: 'restore', manager: 'cloudfront', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason,
+    })),
+  }));
+  const payload = res.Payload ? new TextDecoder().decode(res.Payload) : '';
+  if (res.FunctionError) {
+    console.error(`Restore of ${comment} to ${record.releaseId} failed`, payload);
+    return { ok: false, status: 502, message: `The rollback service could not restore ${comment}` };
+  }
+  const result = payload ? JSON.parse(payload) : undefined;
+  // e.g. a release went live between the check above and the rollback service's own
+  if (result?.action === 'skip') return { ok: false, status: 409, message: result.reason };
+  return { ok: true, result };
 }

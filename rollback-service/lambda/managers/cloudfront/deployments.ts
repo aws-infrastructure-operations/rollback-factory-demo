@@ -8,7 +8,7 @@
  */
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
-  DynamoDBDocumentClient, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand,
+  DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 
 /** rollback = automatic (alarm), restore = a release chosen by hand */
@@ -122,6 +122,12 @@ export function createDeploymentStore({ table, frontendName, region, client }: D
 
     async latest(): Promise<DeploymentRecord | undefined> {
       return (await list(1))[0];
+    },
+
+    /** The record at `deployedAt`, if there is one. */
+    async get(deployedAt: string): Promise<DeploymentRecord | undefined> {
+      const { Item } = await ddb.send(new GetCommand({ TableName: table, Key: key({ deployedAt }) }));
+      return Item as DeploymentRecord | undefined;
     },
 
     /**

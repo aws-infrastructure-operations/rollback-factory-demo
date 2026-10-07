@@ -54,6 +54,8 @@ const route = createRouter(ENV_NAME, {
     apigateway.restore(await targets.get(ALARM_TYPES.apigateway.stack(envName)), req),
   cloudfront: async (alarm, envName) =>
     cloudfront.handleAlarm(await targets.get(ALARM_TYPES.cloudfront.stack(envName)), alarm),
+  cloudfrontRestore: async (req, envName) =>
+    cloudfront.restore(await targets.get(ALARM_TYPES.cloudfront.stack(envName)), req),
   lambda: async (event) => (await lambdaManager(event)) as unknown[],
 });
 

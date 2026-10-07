@@ -7,7 +7,8 @@
 // Direct invocations:
 //   { type: 'scheduled-check' }                     EventBridge: Lambda manager's sync / stable / re-check
 //   { type: 'sync', functionName? }                 deploy-aws-lambda after promotion, manual rollbacks
-//   { type: 'restore', manager: 'apigateway', ... } deploy-aws-api-gateway: deployment:restore
+//   { type: 'restore', manager: 'apigateway', ... } deploy-aws-api-gateway: deployment:restore, the dashboard
+//   { type: 'restore', manager: 'cloudfront', ... } the dashboard's Restore button (deploy-aws-cloudfront)
 import type { EnvName } from '../lib/config.js';
 import { parseAlarmName } from '../lib/config.js';
 
@@ -22,13 +23,14 @@ type SnsRecord = { Sns: { Message: string } };
 export type ServiceEvent =
   | { type: 'scheduled-check' }
   | { type: 'sync'; functionName?: string }
-  | { type: 'restore'; manager: 'apigateway'; deployedAt: string; reason?: string; actor?: string }
+  | { type: 'restore'; manager: 'apigateway' | 'cloudfront'; deployedAt: string; reason?: string; actor?: string }
   | { Records: SnsRecord[] };
 
 export interface Managers {
   apigateway: (alarm: AlarmNotification, env: EnvName) => Promise<unknown>;
   apigatewayRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
   cloudfront: (alarm: AlarmNotification, env: EnvName) => Promise<unknown>;
+  cloudfrontRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
   /** The Lambda manager takes the raw event: SNS records, sync and scheduled checks. */
   lambda: (event: { type: 'scheduled-check' } | { type: 'sync'; functionName?: string } | { Records: SnsRecord[] }) => Promise<unknown[]>;
 }
@@ -81,8 +83,9 @@ export function createRouter(envName: EnvName, managers: Managers) {
       case 'sync':
         return managers.lambda(event);
       case 'restore':
-        if (event.manager !== 'apigateway') throw new Error(`Restore is only supported for apigateway, got ${event.manager}`);
-        return managers.apigatewayRestore(event, envName);
+        if (event.manager === 'apigateway') return managers.apigatewayRestore(event, envName);
+        if (event.manager === 'cloudfront') return managers.cloudfrontRestore(event, envName);
+        throw new Error(`Restore is only supported for apigateway and cloudfront, got ${(event as { manager: string }).manager}`);
       default:
         throw new Error(`Unknown event: ${JSON.stringify(event)}`);
     }

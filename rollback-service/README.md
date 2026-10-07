@@ -32,7 +32,8 @@ Lambda project's deploy invokes it to sync. `-c alarmEmail=...` subscribes an e-
 | SNS alarm notification | the projects' alarms | the manager named by the alarm type |
 | `{ "type": "scheduled-check" }` | EventBridge | Lambda manager: sync, mark stable, re-check alarms still in `ALARM` |
 | `{ "type": "sync", "functionName": "<fn>" }` | `deploy-aws-lambda` after promotion, manual Lambda rollbacks | Lambda manager |
-| `{ "type": "restore", "manager": "apigateway", "deployedAt": "…" }` | `deploy-aws-api-gateway`: `deployment:restore` | API Gateway manager |
+| `{ "type": "restore", "manager": "apigateway", "deployedAt": "…" }` | `deploy-aws-api-gateway`: `deployment:restore`, the dashboard | API Gateway manager |
+| `{ "type": "restore", "manager": "cloudfront", "deployedAt": "…" }` | the dashboard's CloudFront Restore button | CloudFront manager: switches to that record's release and records a `restore` |
 
 ## Layout
 
