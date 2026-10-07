@@ -23,6 +23,7 @@ import {
 } from './lambda-functions.js';
 import { getOperation } from './operations.js';
 import { listArchivedVersions } from './lambda-archive.js';
+import { listRollbacks } from './rollbacks.js';
 import { parseRegistered, registrationFor } from './registered-functions.js';
 
 /** The parts of a function URL event this handler reads. */
@@ -83,10 +84,12 @@ const RESOURCE_NAMES: Record<string, string> = {
  * GET /api/cloudfront-distributions/<id>: one distribution's release history and configuration.
  * GET /api/cloudfront-distributions/<id>/invalidations: its latest invalidations.
  * GET /api/cloudfront-distributions/<id>/metrics: its last 24 hours of metrics.
+ * GET /api/rollbacks: every rollback of the APIs, Lambda functions and sites, dev and prod, newest first.
  */
 export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
   const { method } = event.requestContext.http;
   if (event.rawPath.startsWith('/api/operations/')) return await operation(event, method);
+  if (event.rawPath === '/api/rollbacks') return await rollbacks(method);
   const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
@@ -106,6 +109,17 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResul
     console.error(`${write ? 'Changing' : 'Reading'} ${event.rawPath} failed`, err);
     if (point) return json(502, { message: 'Could not point the alias' });
     return json(502, { message: restore ? `Could not restore the ${resource === 'api-gateways' ? 'deployment' : 'release'}` : `Could not read the ${RESOURCE_NAMES[resource]}` });
+  }
+}
+
+/** Read-only: the rollbacks recorded in the deployments tables and the Lambda version archives. */
+async function rollbacks(method: string) {
+  if (method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
+  try {
+    return json(200, { rollbacks: await listRollbacks(dynamo, process.env.PROJECT_NAME!, registered) });
+  } catch (err) {
+    console.error('Reading the rollbacks failed', err);
+    return json(502, { message: 'Could not read the rollbacks' });
   }
 }
 

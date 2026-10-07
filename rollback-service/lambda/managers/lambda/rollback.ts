@@ -582,12 +582,14 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
       await ddb.send(new UpdateItemCommand({
         TableName: TABLE,
         Key: { functionName: S(functionName), sk: S(versionSk(from)) },
-        UpdateExpression: 'SET rolledBackAt = :at, rolledBackBy = :by, rollbackReason = :reason, stable = :false, '
+        // rolledBackTo: where live went, for the dashboard's rollback history
+        UpdateExpression: 'SET rolledBackAt = :at, rolledBackBy = :by, rolledBackTo = :to, rollbackReason = :reason, stable = :false, '
           + 'stableForSeconds = :stableForSeconds, stableFor = :stableFor',
         ConditionExpression: 'attribute_exists(sk)',
         ExpressionAttributeValues: {
           ':at': S(now),
           ':by': S(by),
+          ':to': N(to),
           ':reason': S(reason),
           ':false': BOOL(false),
           ':stableForSeconds': N(duration.stableForSeconds),

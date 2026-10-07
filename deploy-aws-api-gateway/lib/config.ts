@@ -63,6 +63,12 @@ export interface EnvConfig {
   /** CI deploys here first and runs the integration tests, then promotes to stageName. */
   integrationStageName: string;
   /**
+   * Where the stages are mapped on the environment's shared API domain (deploy-aws-dns-api-domains):
+   * https://api.dev.rollback…/user/v1/users is stage v1's /users. Undefined for environments
+   * without an API domain (testing, staging).
+   */
+  customDomain?: CustomDomain;
+  /**
    * What stage v1 and each backend's `live` alias serve right now (from scripts/live-context.ts).
    * When set, `cdk deploy` leaves them there and only updates the integration stage.
    */
@@ -79,6 +85,14 @@ export interface EnvConfig {
    * deploy publishes a new version of both, even when their code didn't change.
    */
   deployId?: string;
+}
+
+/** An API's stages on its environment's API domain. */
+export interface CustomDomain {
+  /** api.dev.rollback.ionuteliantudor.com, or api.rollback.ionuteliantudor.com for prod */
+  domainName: string;
+  /** The mapping key of each stage: user/v1 and user/integration. */
+  basePaths: { stage: string; integration: string };
 }
 
 /** Optional overrides, e.g. from `cdk deploy -c chaosFailureRate=1`. */
@@ -99,6 +113,20 @@ export const PROJECT_NAME = 'rollback-factory-demo';
 export const STACK_PREFIX = 'deploy-aws-api-gateway';
 /** The REST API's name without the environment: api-user-<env> is the API, api-user names its alarms. */
 export const API_NAME = 'api-user';
+/** This API's path on the environment's API domain: https://<api domain>/user/<stage>/... */
+export const API_PATH = 'user';
+
+/** The zone of deploy-aws-dns. */
+export const ZONE_NAME = 'rollback.ionuteliantudor.com';
+/** The environments deploy-aws-dns-api-domains creates an API domain for. */
+export const API_DOMAIN_ENVS: readonly EnvName[] = ['dev', 'prod'];
+/**
+ * dev: api.dev.rollback…; prod without a prefix: api.rollback…. The same rule as
+ * deploy-aws-dns/lib/config.ts (a test keeps them equal).
+ */
+export function apiDomain(envName: string): string {
+  return envName === 'prod' ? `api.${ZONE_NAME}` : `api.${envName}.${ZONE_NAME}`;
+}
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
   if (!ENV_NAMES.includes(envName as EnvName)) {
@@ -133,6 +161,12 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     metricsNamespace: `${PROJECT_NAME}/${API_NAME}-${envName}`,
     stageName: STAGE_NAME,
     integrationStageName: INTEGRATION_STAGE_NAME,
+    customDomain: API_DOMAIN_ENVS.includes(envName as EnvName)
+      ? {
+        domainName: apiDomain(envName as string),
+        basePaths: { stage: `${API_PATH}/${STAGE_NAME}`, integration: `${API_PATH}/${INTEGRATION_STAGE_NAME}` },
+      }
+      : undefined,
     live: live(overrides),
     retainData: envName === 'prod',
     alarms: {
