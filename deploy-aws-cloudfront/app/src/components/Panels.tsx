@@ -6,10 +6,7 @@ const ServiceIcon = ({ icon, tint }: ServiceIconProps) => (
   <span className={`service-icon ${tint}`}><Icon name={icon} size={28} /></span>
 );
 
-/**
- * A service's resources, with search and refresh. Without `search` / `onRefresh` the controls
- * are visual only (the sections still on sample data).
- */
+/** Left column: a service's resources, with search and refresh. */
 export function ListPanel({
   id, icon, tint, title, count, description, searchPlaceholder, search, onRefresh, refreshing, state, children,
 }: ServiceIconProps & {
@@ -50,10 +47,7 @@ export function ListPanel({
   );
 }
 
-/**
- * Right column: the selected resource. `children` as a function renders the active tab; as plain
- * content (the sample-data sections) every tab shows it and the tabs only change the highlight.
- */
+/** Right column: the selected resource, with `children` rendering the active tab. */
 export function DetailPanel({ id, icon, tint, name, badge, subtitle, tabs, state, children }: ServiceIconProps & {
   id?: string;
   name: string;
@@ -62,7 +56,7 @@ export function DetailPanel({ id, icon, tint, name, badge, subtitle, tabs, state
   tabs: string[];
   /** data-state, for tests: 'loading', 'ready' or 'error' */
   state?: string;
-  children: ReactNode | ((tab: string) => ReactNode);
+  children: (tab: string) => ReactNode;
 }) {
   const [active, setActive] = useState(tabs[0]);
   return (
@@ -82,7 +76,7 @@ export function DetailPanel({ id, icon, tint, name, badge, subtitle, tabs, state
           </button>
         ))}
       </div>
-      {typeof children === 'function' ? children(active) : children}
+      {children(active)}
     </section>
   );
 }

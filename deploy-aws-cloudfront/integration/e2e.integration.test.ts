@@ -1,8 +1,8 @@
 /**
  * End-to-end test in a headless Chromium against the deployed site of FRONTEND_ENV (on the
  * FRONTEND_TARGET distribution): the page loads with its scripts and styles and shows the
- * environment and the release the distribution serves, and the API Gateways and Lambda Functions
- * panels load from the dashboard API (/api/*). Fails on any browser console error or failed request.
+ * environment and the release the distribution serves, and the API Gateways, Lambda Functions and
+ * CloudFront Distributions panels load from the dashboard API (/api/*). Fails on any browser console error or failed request.
  *
  * Needs AWS credentials that can read the stack and the distribution, and Chromium for
  * Playwright (npx playwright install chromium). FRONTEND_RELEASE as in smoke.
@@ -101,6 +101,27 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     assert.doesNotMatch(body, /"Environment"|"Variables"/, 'environment variables are never sent');
     await page.locator('#lambda-function-details:not([data-state="loading"])').waitFor();
     assert.equal(await page.locator('#lambda-function-details').getAttribute('data-state'), 'ready');
+    assert.deepEqual(problems.splice(0), []);
+  });
+
+  test('lists this distribution with the release it serves, and its history for the live one', async () => {
+    await page.locator('#cloudfront-distributions:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#cloudfront-distributions').getAttribute('data-state'), 'ready');
+    const response = await page.request.get(`${site.siteUrl}/api/cloudfront-distributions`);
+    assert.equal(response.status(), 200);
+    const { distributions } = await response.json();
+    const self = distributions.find((d: { name: string }) => d.name === site.name);
+    assert.ok(self, `${site.name} is listed`);
+    assert.equal(self.releaseId, site.releaseId);
+
+    const details = await page.request.get(`${site.siteUrl}/api/cloudfront-distributions/${self.id}`);
+    assert.equal(details.status(), 200);
+    const body = await details.json();
+    // only the distribution clients use has a release history (the integration one has none)
+    assert.equal(body.tracked, target !== 'integration');
+    assert.doesNotMatch(JSON.stringify(body), /CustomHeaders|HeaderValue/, 'origin headers are never sent');
+    await page.locator('#cloudfront-distribution-details:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#cloudfront-distribution-details').getAttribute('data-state'), 'ready');
     assert.deepEqual(problems.splice(0), []);
   });
 });

@@ -91,3 +91,60 @@ export const fetchLambdaFunctionDetails = (name: string, signal?: AbortSignal) =
 
 export const fetchLambdaFunctionMetrics = (name: string, signal?: AbortSignal) =>
   getJson<LambdaFunctionMetrics>(`/api/lambda-functions/${encodeURIComponent(name)}/metrics`, signal);
+
+// --- CloudFront distributions --------------------------------------------------------------------
+
+/** Same shapes as in lambda/dashboard-api/cloudfront-distributions.ts. */
+export interface Distribution {
+  id: string;
+  name: string;
+  domain: string;
+  aliases: string[];
+  status: string;
+  enabled: boolean;
+  releaseId?: string;
+  lastModified?: string;
+}
+
+export interface DistributionDetails extends Distribution {
+  /** recorded activations, restores and rollbacks, newest first */
+  deployments: Array<{
+    releaseId: string;
+    deployedAt: string;
+    source: string;
+    actor?: string;
+    commit?: string;
+    description?: string;
+    current: boolean;
+    verified: boolean;
+    rolledBack: boolean;
+    stableFor?: string;
+  }>;
+  /** false for distributions this project doesn't deploy (no release history) */
+  tracked: boolean;
+  configuration: Array<{ label: string; value: string }>;
+}
+
+export interface DistributionInvalidation { id: string; status: string; createdAt?: string; paths: string[] }
+
+export interface DistributionMetrics {
+  from: string;
+  to: string;
+  requests: number;
+  bytesDownloaded: number;
+  error4xxRate?: number;
+  error5xxRate?: number;
+}
+
+const distributionUrl = (id: string, sub = '') => `/api/cloudfront-distributions/${encodeURIComponent(id)}${sub}`;
+
+export const fetchDistributions = (signal?: AbortSignal) =>
+  getJson<{ distributions: Distribution[] }>('/api/cloudfront-distributions', signal);
+
+export const fetchDistributionDetails = (id: string, signal?: AbortSignal) => getJson<DistributionDetails>(distributionUrl(id), signal);
+
+export const fetchDistributionInvalidations = (id: string, signal?: AbortSignal) =>
+  getJson<{ invalidations: DistributionInvalidation[] }>(distributionUrl(id, '/invalidations'), signal);
+
+export const fetchDistributionMetrics = (id: string, signal?: AbortSignal) =>
+  getJson<DistributionMetrics>(distributionUrl(id, '/metrics'), signal);
