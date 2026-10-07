@@ -33,6 +33,8 @@ export interface ApiGatewayDetails {
   configuration: Array<{ label: string; value: string }>;
   /** the deployments this project recorded, newest first; absent for APIs it doesn't deploy */
   recorded?: RecordedApiDeployment[];
+  /** with recorded: each backend Lambda's live version now (function name -> version), what a restore runs */
+  liveLambdaVersions?: Record<string, string>;
 }
 
 /** Same shape as RecordedApiDeployment in lambda/dashboard-api/api-gateway-deployments.ts. */
@@ -113,6 +115,8 @@ export interface LambdaFunction {
   runtime: string;
   description?: string;
   aliases: string[];
+  /** the version each alias points to (e.g. live -> "3", or "3 (90%) + 4 (10%)" when weighted) */
+  aliasVersions?: Record<string, string>;
   lastModified?: string;
 }
 
@@ -121,11 +125,25 @@ export interface LambdaFunctionList {
   functions: LambdaFunction[];
 }
 
+/** A version in the rollback service's archive (lambda/dashboard-api/lambda-archive.ts has the same shape). */
+export interface ArchivedVersion {
+  /** s3://<bucket>/<fn>/<fn>-<version>.zip */
+  s3Uri: string;
+  /** live with all its alarms OK long enough; false once rolled back from */
+  stable: boolean;
+  stableAt?: string;
+  liveAt?: string;
+  rolledBackAt?: string;
+}
+
 export interface LambdaFunctionDetails {
   name: string;
   arn: string;
-  /** newest first, the latest 25 published versions */
-  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[] }>;
+  /**
+   * newest first, the latest 25 published versions. archive: registered functions, versions in the
+   * rollback service's S3 archive; only stable ones can go live
+   */
+  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[]; archive?: ArchivedVersion }>;
   /** additionalVersions: version → weight (0..1) of a weighted alias */
   aliases: Array<{ name: string; version: string; description?: string; additionalVersions?: Record<string, number> }>;
   configuration: Array<{ label: string; value: string }>;

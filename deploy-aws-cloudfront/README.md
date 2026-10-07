@@ -121,7 +121,8 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   (and the selected API). Next to it, the selected API's **deployments**, its **stages** (and the deployment
   each serves) and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`. For
   `api-user-<env>` the deployments are the ones recorded in DynamoDB (marked live, verified or rolled back),
-  each with a **Restore** button (after a confirm; the live one can't be restored); for other APIs they are
+  each with its **OpenAPI export** in S3 (the one the stage serves now marked *deployed*) and a **Restore**
+  button (after a confirm; the live one can't be restored); for other APIs they are
   API Gateway's own, with nothing to restore. On the **Stages** tab, the stage these deployments are
   recorded for (`v1`) has a **Rollback** menu listing them newest first, with their source, commit, Lambda
   version and whether they were verified or rolled back; the previous verified one is marked. Before a
@@ -130,7 +131,8 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   same restore. Other stages (`integration`, redeployed by CI) and other APIs can't be rolled back here.
 - **Lambda Functions** is live too, for the functions registered for rollback only
   (`rollback-service/rollback-config.json`, passed to the dashboard API as `REGISTERED_FUNCTIONS` at deploy
-  time): their runtime, aliases and last change, from `GET /api/lambda-functions`. Next to it, the selected
+  time): their runtime, aliases, the version `live` points to (with its split when weighted) and last change,
+  from `GET /api/lambda-functions`. Next to it, the selected
   function's published **versions** (and the aliases serving each), its **aliases** (with weights), its
   **configuration**, and **monitoring**: invocations, errors, throttles, durations and concurrency over 24
   hours, fetched only when that tab opens. Each alias has a **Point to version** menu and each version a

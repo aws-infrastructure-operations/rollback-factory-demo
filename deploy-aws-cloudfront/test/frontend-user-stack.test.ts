@@ -239,11 +239,17 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, [
     'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
-    'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query',
+    'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query', 'dynamodb:Query',
     'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction', 'logs:FilterLogEvents', 's3:GetObject',
   ]);
-  const query = statements.find((s: any) => s.Action === 'dynamodb:Query');
+  const query = statements.find((s: any) => s.Action === 'dynamodb:Query' && !s.Condition);
   assert.equal(query.Resource.length, 2);
+  // the rollback service's version archives, only the registered functions' items
+  const archive = statements.find((s: any) => s.Action === 'dynamodb:Query' && s.Condition);
+  assert.ok(JSON.stringify(archive.Resource).includes(':table/rollback-factory-demo-lambda-archive-*"'), 'the version archives');
+  assert.deepEqual(archive.Condition['ForAllValues:StringLike']['dynamodb:LeadingKeys'], [
+    'service-lambda-*', 'rollback-factory-demo-api-users-*', 'rollback-factory-demo-api-messages-*', 'rollback-factory-demo-api-orders-*',
+  ]);
   assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-frontend-deployments-\*"/, 'the frontend deployments tables');
   assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-deployments-\*"/, 'the API deployments tables');
   const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');

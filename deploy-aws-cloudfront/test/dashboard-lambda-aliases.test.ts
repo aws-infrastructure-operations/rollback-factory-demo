@@ -14,7 +14,7 @@ const REGISTERED = [{ name: 'service-lambda-<env>', alias: 'live' }];
 
 test('resolves a registered function to its environment\'s rollback service and watched alias', () => {
   assert.deepEqual(registrationFor('service-lambda-prod', REGISTERED, PROJECT), {
-    rollbackService: 'rollback-factory-demo-rollback-service-prod', alias: 'live',
+    rollbackService: 'rollback-factory-demo-rollback-service-prod', alias: 'live', archiveTable: 'rollback-factory-demo-lambda-archive-prod',
   });
   for (const name of ['service-lambda', 'service-lambda-dev-copy', 'my-service-lambda-dev', 'rollback-factory-demo-handler-dev']) {
     assert.equal(registrationFor(name, REGISTERED, PROJECT), undefined, name);
@@ -128,7 +128,7 @@ test('reads neither the details nor the metrics of a function that is not regist
 test('the API\'s backends resolve to their environment\'s rollback service', () => {
   for (const backend of ['users', 'messages']) {
     assert.deepEqual(registrationFor(`rollback-factory-demo-api-${backend}-prod`, registeredFunctions(), PROJECT), {
-      rollbackService: 'rollback-factory-demo-rollback-service-prod', alias: 'live',
+      rollbackService: 'rollback-factory-demo-rollback-service-prod', alias: 'live', archiveTable: 'rollback-factory-demo-lambda-archive-prod',
     });
   }
   // the handler from before the split is not registered

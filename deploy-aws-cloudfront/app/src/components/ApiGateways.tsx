@@ -1,7 +1,7 @@
 // API Gateways: the region's APIs from the dashboard API, with search and refresh, and the
 // selected API's deployments (restorable for the APIs this project deploys), stages and
 // configuration next to them.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   fetchApiGatewayDetails, fetchApiGateways, fetchApiSpec, restoreApiDeployment,
   type ApiGateway, type ApiGatewayDetails, type ApiGatewayList, type RecordedApiDeployment,
@@ -57,14 +57,55 @@ function RouteChanges({ apiId, target, live }: { apiId: string; target: Recorded
   );
 }
 
+/** rollback-factory-demo-api-users-dev -> users */
+const backendName = (fn: string) => /-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn;
+
 /** "users v3 · messages v5 · orders v2" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
 function lambdaVersionsHint(d: RecordedApiDeployment) {
   if (d.lambdaVersions) {
     return Object.entries(d.lambdaVersions)
-      .map(([fn, version]) => `${/-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn} v${version}`)
+      .map(([fn, version]) => `${backendName(fn)} v${version}`)
       .join(' · ');
   }
   return d.lambdaVersion && `Lambda v${d.lambdaVersion}`;
+}
+
+/**
+ * What a restored API runs: each backend's live version now ("users live:7"), and when the export
+ * was recorded with another one, which ("recorded with v5").
+ */
+function LiveLambdas({ live, recordedWith }: { live: Record<string, string>; recordedWith?: Record<string, string> }) {
+  return (
+    <div className="stacked">
+      {Object.entries(live).map(([fn, version]) => (
+        <span key={fn}>
+          {backendName(fn)} <span className="live-version">live:{version}</span>
+          {recordedWith?.[fn] && recordedWith[fn] !== version && <span className="muted-text"> · recorded with v{recordedWith[fn]}</span>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** s3://<bucket>/api-user-dev/20261007T120000Z/openapi.json -> 20261007T120000Z (the export's folder) */
+const specFolder = (spec: string) => spec.split('/').slice(-2, -1)[0];
+
+/**
+ * The OpenAPI export a stage serves, from its current recorded deployment. "drift" when the stage was
+ * moved to another deployment outside the tooling (console, CLI), so the record no longer describes it.
+ */
+function StageSpec({ stage, recorded }: { stage: ApiGatewayDetails['stages'][number]; recorded?: RecordedApiDeployment[] }) {
+  if (!recorded) return <span className="muted-text">—</span>;
+  const current = recorded.find((r) => r.current && r.stageName === stage.name);
+  if (!current) return <span className="muted-text">not recorded</span>;
+  return (
+    <div className="stacked" title={current.spec}>
+      <span className="spec-file">{specFolder(current.spec)}/<br />openapi.json</span>
+      {stage.deploymentId && stage.deploymentId !== current.deploymentId && (
+        <span title={`${stage.name} serves ${stage.deploymentId}; the record says ${current.deploymentId}`}><Tag kind="bad">drift</Tag></span>
+      )}
+    </div>
+  );
 }
 
 /** One recorded deployment as a menu hint: where it came from and what happened to it. */
@@ -151,6 +192,7 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     setRestoring({ apiId: api.id, deployedAt: d.deployedAt });
     setOutcome(undefined);
     const live = data?.recorded?.find((r) => r.current && r.stageName === d.stageName);
+    const liveLambdas = data?.liveLambdaVersions && Object.keys(data.liveLambdaVersions).length ? data.liveLambdaVersions : undefined;
     const ended = await operation.start(`${verb} ${what}`, () => restoreApiDeployment(api.id, d.deployedAt), {
       confirmLabel: verb,
       danger: true,
@@ -160,11 +202,14 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
             ['API', <>{api.name} <span className="muted-text">· stage {d.stageName}</span></>],
             ['Live now', live ? <>{live.deploymentId} <span className="muted-text">· {formatAt(live.deployedAt)}</span></> : '—'],
             [verb === 'Restore' ? 'Restores' : 'Rolls back to', <>{d.deploymentId} <span className="muted-text">· {formatAt(d.deployedAt)} · {recordHint(d)}</span></>],
+            ['OpenAPI export', <span className="spec-file" title={d.spec}>{specFolder(d.spec)}/openapi.json</span>],
+            ...(liveLambdas ? [['Lambdas after', <LiveLambdas live={liveLambdas} recordedWith={d.lambdaVersions} />] as [string, ReactNode]] : []),
           ]} />
           <RouteChanges apiId={api.id} target={d} live={live} />
           <ConfirmNote>
             The rollback service re-imports that deployment's OpenAPI export and redeploys stage {d.stageName}.
-            The Lambda aliases stay on live: the code isn't rolled back.
+            Every route is pointed at its backend's live alias, so the API runs the Lambda versions live serves
+            now, not the ones recorded with that export: the code isn't rolled back.
           </ConfirmNote>
         </>
       ),
@@ -194,16 +239,22 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     return undefined;
   }
 
-  /** The stage's recorded deployments, newest first; the previous verified one is the usual rollback. */
+  /**
+   * The stage's recorded OpenAPI exports, newest first. Only verified ones that weren't rolled back can
+   * be picked; the previous one of those is the usual rollback.
+   */
   function stageItems(stage: string): MenuItem[] {
     const records = (data?.recorded ?? []).filter((r) => r.stageName === stage);
     const liveAt = records.find((r) => r.current)?.deployedAt ?? '';
     const previous = records.find((r) => !r.current && r.verified && !r.rolledBack && r.deployedAt < liveAt);
     return records.map((d) => ({
       key: d.deployedAt,
-      label: `${d.deploymentId} · ${formatAt(d.deployedAt)}${d === previous ? ' (previous verified)' : ''}`,
-      hint: recordHint(d),
-      disabledReason: d.current ? 'live now' : undefined,
+      label: `${specFolder(d.spec)}/openapi.json · ${d.deploymentId}${d === previous ? ' (previous verified)' : ''}`,
+      hint: `${formatAt(d.deployedAt)} · ${recordHint(d)}`,
+      disabledReason: d.current ? 'live now'
+        : d.rolledBack ? 'rolled back: it failed once already'
+        : !d.verified ? 'not verified: it never passed the integration tests'
+        : undefined,
       onSelect: () => restore(d, 'Roll back'),
     }));
   }
@@ -233,6 +284,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                 { header: 'Stage Name', cell: (s) => <><span className={`dot ${s.deploymentId ? 'ok' : 'muted'}`} />{s.name}</> },
                 { header: 'Deployment ID', cell: (s) => s.deploymentId ?? '—' },
                 { header: 'Deployed At', cell: (s) => <DateCell iso={s.deployedAt} /> },
+                // the OpenAPI export the stage serves: its current recorded deployment
+                { header: 'OpenAPI spec', cell: (s) => <StageSpec stage={s} recorded={data?.recorded} /> },
                 {
                   header: 'Actions',
                   cell: (s) => (
@@ -256,6 +309,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                     cell: (d) => (
                       <div className="stacked" title={[d.description, d.spec].filter(Boolean).join('\n')}>
                         <span>{d.deploymentId} <span className="small muted-text">{d.stageName}</span></span>
+                        {/* where it came from: the Source column, folded in to make room for the OpenAPI export */}
+                        <span className="small muted-text">{d.source}{d.commit && ` · ${d.commit.slice(0, 7)}`}</span>
                         {(d.current || d.verified || d.rolledBack) && (
                           <span className="tags">
                             {d.current && <Tag kind="prod">live</Tag>}
@@ -266,11 +321,17 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                       </div>
                     ),
                   },
-                  {
-                    header: 'Source',
-                    cell: (d) => <div className="stacked">{d.source}{d.commit && <span className="small muted-text">{d.commit.slice(0, 7)}</span>}</div>,
-                  },
                   { header: 'Deployed At', cell: (d) => <DateCell iso={d.deployedAt} />, className: 'date-wrap' },
+                  // the OpenAPI JSON of each deployment in S3; the one the stage serves now is marked
+                  {
+                    header: 'OpenAPI export',
+                    cell: (d) => (
+                      <div className="stacked" title={d.spec}>
+                        <span className="spec-file">{specFolder(d.spec)}/<br />openapi.json</span>
+                        {d.current && <Tag kind="prod">deployed</Tag>}
+                      </div>
+                    ),
+                  },
                   {
                     header: 'Actions',
                     cell: (d) => (

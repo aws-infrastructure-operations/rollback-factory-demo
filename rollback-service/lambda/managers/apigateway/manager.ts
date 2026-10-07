@@ -7,15 +7,13 @@
  *
  * Everything about the target comes from the API stack's RollbackTarget output (see targets.ts).
  */
-import { createHash } from 'node:crypto';
 import { APIGatewayClient, CreateDeploymentCommand, PutRestApiCommand } from '@aws-sdk/client-api-gateway';
 import { CloudWatchClient, DescribeAlarmsCommand, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
-import { AddPermissionCommand, LambdaClient, ResourceConflictException } from '@aws-sdk/client-lambda';
 import {
-  claimRollback, DeploymentRecord, DeploymentTarget, getDeployment, getSpec, listDeployments, recordDeployment,
+  claimRollback, DeploymentRecord, DeploymentTarget, getDeployment, getSpec, listDeployments, liveVersions, recordDeployment,
 } from './deployments.js';
 import {
-  AlarmNotification, AlarmPair, lambdaArnsFromSpec, lambdaFault, LambdaEvidence, planRollback, pointToAlias,
+  AlarmNotification, AlarmPair, frozenLambdas, lambdaFault, LambdaEvidence, planRollback, pointToAlias,
 } from './plan.js';
 
 /** The API stack's RollbackTarget output. */
@@ -45,7 +43,6 @@ export interface RestoreRequest {
 
 const apigw = new APIGatewayClient({});
 const cloudwatch = new CloudWatchClient({});
-const lambda = new LambdaClient({});
 
 const log = (msg: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ manager: 'apigateway', msg, ...data }));
 
@@ -88,29 +85,6 @@ async function lambdaEvidence(target: ApiRollbackTarget, pair: AlarmPair, now = 
 }
 
 /**
- * The old spec may point at a Lambda version whose API Gateway invoke permission was removed by a
- * later CDK deploy, so re-grant it (idempotent).
- */
-async function ensureInvokePermission(target: ApiRollbackTarget, functionArn: string) {
-  // arn:aws:lambda:<region>:<account>:function:<name>[:<qualifier>]
-  const [, partition, , region, account] = functionArn.split(':');
-  const sourceArn = `arn:${partition}:execute-api:${region}:${account}:${target.restApiId}/*/*/*`;
-  const statementId = `apigw-rollback-${createHash('sha256').update(sourceArn).digest('hex').slice(0, 16)}`;
-  try {
-    await lambda.send(new AddPermissionCommand({
-      FunctionName: functionArn,
-      StatementId: statementId,
-      Action: 'lambda:InvokeFunction',
-      Principal: 'apigateway.amazonaws.com',
-      SourceArn: sourceArn,
-    }));
-    log('granted invoke permission', { functionArn });
-  } catch (err) {
-    if (!(err instanceof ResourceConflictException)) throw err;
-  }
-}
-
-/**
  * Re-imports a recorded deployment's spec (PutRestApi overwrite) and redeploys the stage. Only the
  * API config is restored: the backend integrations are pointed at the stage's alias (v1: live), so
  * the API keeps invoking the latest promoted Lambda code.
@@ -119,8 +93,15 @@ async function redeploy(target: ApiRollbackTarget, to: DeploymentRecord, descrip
   // every backend's integrations go to its stage alias (v1: live), whatever the spec recorded
   let spec = JSON.parse(await getSpec(to.specBucket, to.specKey));
   for (const arn of backendArns(target)) spec = pointToAlias(spec, arn, `${arn}:\${stageVariables.lambdaAlias}`);
-  // the stage aliases' invoke permissions are managed by the stack
-  for (const arn of lambdaArnsFromSpec(spec).filter((a) => !a.includes('${'))) await ensureInvokePermission(target, arn);
+  // Anything still calling a fixed function or version (e.g. a spec from before the per-resource split)
+  // would run that frozen code instead of what live serves now: refuse before touching the API.
+  const frozen = frozenLambdas(spec);
+  if (frozen.length) {
+    throw new Error(`The export recorded at ${to.deployedAt} invokes ${frozen.join(', ')} directly, not through the stage's alias: `
+      + 'restoring it would run that old code instead of the live Lambda versions. Pick a newer export.');
+  }
+  // what the restored API will run: each backend's live version now, not the one recorded with the spec
+  const lambdaAliases = await liveVersions(backendArns(target));
 
   await apigw.send(new PutRestApiCommand({
     restApiId: target.restApiId,
@@ -128,7 +109,7 @@ async function redeploy(target: ApiRollbackTarget, to: DeploymentRecord, descrip
     failOnWarnings: false,
     body: new TextEncoder().encode(JSON.stringify(spec)),
   }));
-  log('spec imported', { step: 'spec-imported', restApiId: target.restApiId });
+  log('spec imported', { step: 'spec-imported', restApiId: target.restApiId, lambdaAliases });
   const deployment = await apigw.send(new CreateDeploymentCommand({
     restApiId: target.restApiId,
     stageName: target.stageName,

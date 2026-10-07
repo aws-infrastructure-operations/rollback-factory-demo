@@ -1,7 +1,7 @@
 // Lambda Functions: the region's functions registered for rollback (rollback-config.json), from the
 // dashboard API, with search and refresh, and the selected function's versions, aliases, configuration
 // and last 24 hours next to them.
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   fetchLambdaFunctionDetails, fetchLambdaFunctionMetrics, fetchLambdaFunctions, pointLambdaAlias,
   type LambdaFunction, type LambdaFunctionDetails, type LambdaFunctionList, type LambdaFunctionMetrics,
@@ -10,7 +10,7 @@ import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { MenuButton, type MenuItem } from './Menu.js';
 import { ConfirmFacts, ConfirmNote, outcomeMessage, useOperationDialog } from './Operation.js';
-import { DataTable, StageTags } from './ui.js';
+import { DataTable, StageTags, Tag } from './ui.js';
 
 /** Only functions registered for rollback can be changed, through the rollback service. */
 const NOT_REGISTERED = 'Only functions registered for rollback (rollback-service/rollback-config.json) can be changed here.';
@@ -62,6 +62,13 @@ export function LambdaSection() {
             },
             { header: 'Runtime', cell: (fn) => fn.runtime },
             { header: 'Aliases', cell: (fn) => (fn.aliases.length ? <StageTags stages={fn.aliases} /> : '—') },
+            // what clients run: the version the live alias points to
+            {
+              header: 'Live',
+              cell: (fn) => (fn.aliasVersions?.live
+                ? <span className="live-version" title={`${fn.name}:live`}>live:{fn.aliasVersions.live}</span>
+                : <span className="muted-text">—</span>),
+            },
             { header: 'Last Modified', cell: (fn) => <DateCell iso={fn.lastModified} /> },
           ]} />
       </ListPanel>
@@ -83,6 +90,23 @@ function aliasTarget({ version, additionalVersions }: LambdaFunctionDetails['ali
 }
 
 type Alias = LambdaFunctionDetails['aliases'][number];
+type Version = LambdaFunctionDetails['versions'][number];
+
+/** Why the watched alias (live) can't go to a version: only stable artifacts from the S3 archive are redeployed. */
+function notStableReason(v: Version | undefined) {
+  if (!v?.archive) return 'not in the S3 archive';
+  if (v.archive.rolledBackAt) return 'rolled back from: not stable';
+  if (!v.archive.stable) return 'not marked stable yet';
+  return undefined;
+}
+
+/** The archive status of a version: stable (redeployable to live), rolled back, or neither yet. */
+function StableCell({ v }: { v: Version }) {
+  if (!v.archive) return <span className="muted-text">—</span>;
+  if (v.archive.rolledBackAt) return <span title={`rolled back from ${v.archive.rolledBackAt}`}><Tag kind="bad">rolled back</Tag></span>;
+  if (v.archive.stable) return <span title={`stable since ${v.archive.stableAt ?? '?'}`}><Tag kind="prod">stable</Tag></span>;
+  return <span className="muted-text">{v.archive.liveAt ? 'not yet' : 'never live'}</span>;
+}
 
 /** What pointing `alias` at `target` does: its kind and what the rollback service does for it. */
 function pointEffect(alias: Alias, target: number, managedAlias: string | undefined) {
@@ -114,6 +138,7 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
     setOutcome(undefined);
     const effect = pointEffect(alias, target, managed);
     const description = (version: number) => data?.versions.find((v) => Number(v.version) === version)?.description;
+    const artifact = alias.name === managed ? data?.versions.find((v) => Number(v.version) === target)?.archive : undefined;
     const ended = await operation.start(`Point ${fn.name}:${alias.name} to version ${target}`, () => pointLambdaAlias(fn.name, alias.name, target), {
       confirmLabel: `Point ${alias.name} to v${target}`,
       // moving the alias clients call changes what they run
@@ -126,6 +151,7 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
             ['Now on', <>version {alias.version}{description(Number(alias.version)) && <span className="muted-text"> · {description(Number(alias.version))}</span>}</>],
             ['Moves to', <>version {target}{description(target) && <span className="muted-text"> · {description(target)}</span>}</>],
             ['Change', effect.kind],
+            ...(artifact ? [['Redeploys', <span className="spec-file">{artifact.s3Uri}</span>] as [string, ReactNode]] : []),
           ]} />
           <ConfirmNote>{effect.note}</ConfirmNote>
         </>
@@ -145,7 +171,8 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
     key: a.name,
     label: a.name,
     hint: a.name === managed ? `on version ${a.version} · restores $LATEST` : `on version ${a.version}`,
-    disabledReason: a.version === version ? `${a.name} already points to this version` : undefined,
+    disabledReason: a.version === version ? `${a.name} already points to this version`
+      : a.name === managed ? notStableReason(data?.versions.find((v) => v.version === version)) : undefined,
     onSelect: () => point(a, Number(version)),
   }));
 
@@ -154,9 +181,22 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
     key: v.version,
     label: `Version ${v.version}`,
     hint: v.description,
-    disabledReason: v.version === alias.version ? `${alias.name} points to this version` : undefined,
+    disabledReason: v.version === alias.version ? `${alias.name} points to this version`
+      : alias.name === managed ? notStableReason(v) : undefined,
     onSelect: () => point(alias, Number(v.version)),
   }));
+
+  /** Redeploy from S3: the stable archived versions only, newest first; live moves there and $LATEST is restored. */
+  const liveAlias = data?.aliases.find((a) => a.name === managed);
+  const redeployItems: MenuItem[] = liveAlias
+    ? (data?.versions ?? []).filter((v) => v.archive?.stable && !v.archive.rolledBackAt).map((v) => ({
+      key: v.version,
+      label: `Version ${v.version}`,
+      hint: [v.description, v.archive!.stableAt && `stable since ${new Date(v.archive!.stableAt).toLocaleString()}`].filter(Boolean).join(' · '),
+      disabledReason: v.version === liveAlias.version ? 'live now' : undefined,
+      onSelect: () => point(liveAlias, Number(v.version)),
+    }))
+    : [];
 
   const outcomeLine = outcome?.fn === fn.name && (
     <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
@@ -177,6 +217,13 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
           return (
             <>
             {outcomeLine}
+            {managed && (
+              <div className="panel-actions">
+                <MenuButton label="Redeploy from S3…" heading={`Redeploy a stable artifact to ${managed}`} items={redeployItems}
+                  disabledReason={disabledReason ?? (!liveAlias ? `No ${managed} alias.` : redeployItems.length ? undefined : 'No stable versions in the S3 archive yet.')}
+                  busy={busy} />
+              </div>
+            )}
             <DataTable rows={data?.versions ?? []} rowKey={(v) => v.version}
               message={message ?? (data!.versions.length ? undefined : { text: 'No published versions: only $LATEST.' })}
               columns={[
@@ -184,6 +231,7 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
                 { header: 'Version', cell: (v) => <div className="stacked">{v.version}{v.aliases.length > 0 && <StageTags stages={v.aliases} />}</div> },
                 { header: 'Description', cell: (v) => v.description || '—', className: 'wrap' },
                 { header: 'Published At', cell: (v) => <DateCell iso={v.publishedAt} />, className: 'date-wrap' },
+                { header: 'Stable', cell: (v) => <StableCell v={v} /> },
                 {
                   header: 'Actions',
                   cell: (v) => (

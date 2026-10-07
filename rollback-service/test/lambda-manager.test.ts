@@ -302,8 +302,14 @@ test('the scheduled check re-handles an alarm still in ALARM', async () => {
 const point = (aliasName: string, version: number, extra: Record<string, unknown> = {}) =>
   ({ type: 'point-alias' as const, functionName: FN, aliasName, version, actor: 'dashboard', ...extra });
 
+/** What the scheduled check does once a version was live with its alarms OK: live may go back to it. */
+const markStable = (...versions: number[]) => {
+  for (const v of versions) table.get(`VERSION#${String(v).padStart(10, '0')}`)!.stable = { BOOL: true };
+};
+
 test('pointing live back is a manual rollback: alias, $LATEST restored, cooldown, version left marked', async () => {
   const handle = await deployHistory();
+  markStable(1);
   const [result] = await handle(point('live', 1)) as any[];
 
   assert.deepEqual(result, {
@@ -324,6 +330,7 @@ test('pointing live back is a manual rollback: alias, $LATEST restored, cooldown
 
 test('pointing live forward is a promotion: nothing is marked rolled back, the version goes live', async () => {
   const handle = await deployHistory();
+  markStable(1, 2);
   await handle(point('live', 1));
   const [result] = await handle(point('live', 2)) as any[];
 
@@ -368,10 +375,27 @@ test('pointing live logs the steps the dashboard\'s progress bar follows', async
   const original = console.log;
   console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
   try {
+    markStable(1);
     await handle(point('live', 1));
   } finally {
     console.log = original;
   }
   const steps = lines.filter((l) => l.startsWith('{"msg":"step"')).map((l) => JSON.parse(l).step);
   assert.deepEqual(steps, ['archive-synced', 'alias-moved', 'latest-restored', 'recorded']);
+});
+
+test('live only moves to stable versions: never-stable and rolled-back ones are refused', async () => {
+  const handle = await deployHistory();
+  // v2 never marked stable
+  assert.match((await handle(point('live', 2)) as any[])[0].reason, /version 2 is not marked stable/);
+  // v1 was stable, then rolled back from
+  const v1 = table.get('VERSION#0000000001')!;
+  v1.stable = { BOOL: false };
+  v1.rolledBackAt = { S: new Date(NOW).toISOString() };
+  assert.match((await handle(point('live', 1)) as any[])[0].reason, /not marked stable .it was rolled back from/);
+  assert.equal(fn.live.version, 3);
+  assert.equal(fn.calls.some((c) => c instanceof UpdateAliasCommand), false);
+  // the integration alias isn't restricted
+  fn.others.set('integration', { version: 3, revision: 'i3' });
+  assert.equal(((await handle(point('integration', 2))) as any[])[0].pointed, true);
 });

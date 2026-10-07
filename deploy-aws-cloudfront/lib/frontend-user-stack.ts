@@ -110,6 +110,13 @@ export class FrontendUserStack extends cdk.Stack {
         resources: registered.map(({ name: fn }) =>
           `arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${fn.replaceAll('<env>', '*')}`),
       }));
+      // The rollback service's version archive (rollback-service: <project>-lambda-archive-<env>): which
+      // versions are archived in S3 and marked stable. Query only, and only those functions' items.
+      this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:Query'],
+        resources: [`arn:${cdk.Aws.PARTITION}:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${PROJECT_NAME}-lambda-archive-*`],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': registered.map(({ name: fn }) => fn.replaceAll('<env>', '*')) } },
+      }));
     }
     // CloudFront: list the distributions (no resource-level permission), then read one, and its
     // invalidations. Origin custom headers come with GetDistribution and are never sent on.

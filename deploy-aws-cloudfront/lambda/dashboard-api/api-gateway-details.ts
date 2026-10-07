@@ -21,6 +21,8 @@ export interface ApiGatewayDetails {
   configuration: Array<{ label: string; value: string }>;
   /** the deployments this project recorded (DynamoDB), newest first; absent for APIs it doesn't deploy */
   recorded?: RecordedApiDeployment[];
+  /** with recorded: each backend Lambda's live version now (function name -> version), what a restore runs */
+  liveLambdaVersions?: Record<string, string>;
 }
 
 export const MAX_DEPLOYMENTS = 25;

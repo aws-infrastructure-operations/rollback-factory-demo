@@ -185,9 +185,9 @@ export class RollbackServiceStack extends cdk.Stack {
     // The API's backend Lambdas, one per resource: rollback-factory-demo-api-<resource>-<env>
     const apiBackends = arn('lambda', 'function', name('api-*'));
     this.service.addToRolePolicy(new iam.PolicyStatement({
-      // AddPermission: make sure API Gateway may invoke versions a restored spec points to
-      // GetAlias: record the versions the live aliases serve
-      actions: ['lambda:AddPermission', 'lambda:GetAlias'],
+      // GetAlias: record the versions the live aliases serve. No AddPermission: a restored spec only
+      // invokes the stage aliases, whose permissions the API stack manages.
+      actions: ['lambda:GetAlias'],
       resources: [apiBackends, `${apiBackends}:*`],
     }));
     s3.Bucket.fromBucketName(this, 'ApiSpecBucket', name(`${cdk.Aws.ACCOUNT_ID}-deployments`)).grantReadWrite(this.service);

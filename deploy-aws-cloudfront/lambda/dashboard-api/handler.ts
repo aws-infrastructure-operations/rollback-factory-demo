@@ -11,7 +11,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
-import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
+import { isDeployedAt, listRecordedDeployments, liveLambdaVersions, restoreRecordedDeployment } from './api-gateway-deployments.js';
 import { getRecordedSpec } from './api-gateway-specs.js';
 import { listApiGateways, type ApiType } from './api-gateways.js';
 import { isAliasName, isVersion, pointAlias } from './lambda-aliases.js';
@@ -22,6 +22,7 @@ import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, isFunctionName, listLambdaFunctions,
 } from './lambda-functions.js';
 import { getOperation } from './operations.js';
+import { listArchivedVersions } from './lambda-archive.js';
 import { parseRegistered, registrationFor } from './registered-functions.js';
 
 /** The parts of a function URL event this handler reads. */
@@ -67,7 +68,7 @@ const RESOURCE_NAMES: Record<string, string> = {
 /**
  * GET /api/api-gateways: the region's APIs.
  * GET /api/api-gateways/<id>?type=REST|HTTP|WEBSOCKET: one API's stages, deployments and configuration,
- *   and for the APIs this project deploys, their recorded deployments.
+ *   and for the APIs this project deploys, their recorded deployments and what each backend's live alias serves now.
  * GET /api/api-gateways/<id>/spec?deployedAt=...: the routes a recorded deployment serves (its OpenAPI export).
  * POST /api/api-gateways/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded deployment.
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
@@ -76,7 +77,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  * The writes answer 202 with an operation id: the rollback service runs them, and
  * GET /api/operations/<id> follows the run (status, steps, progress, its log lines).
  * GET /api/lambda-functions: the region's functions registered for rollback (rollback-config.json).
- * GET /api/lambda-functions/<name>: one function's versions, aliases and configuration.
+ * GET /api/lambda-functions/<name>: one function's versions (with their archive and stable marks), aliases and configuration.
  * GET /api/lambda-functions/<name>/metrics: its last 24 hours of metrics.
  * GET /api/cloudfront-distributions: the account's distributions.
  * GET /api/cloudfront-distributions/<id>: one distribution's release history and configuration.
@@ -118,7 +119,8 @@ async function apiGateways(id: string | undefined, sub: string | undefined, quer
   const details = await getApiGatewayDetails(rest, v2, id, type, region);
   if (!details) return json(404, { message: `No ${type} API ${id}` });
   const recorded = type === 'REST' ? await listRecordedDeployments(dynamo, process.env.PROJECT_NAME!, details.name, id) : undefined;
-  return json(200, recorded ? { ...details, recorded } : details);
+  if (!recorded) return json(200, details);
+  return json(200, { ...details, recorded, liveLambdaVersions: await liveLambdaVersions(lambda, recorded) });
 }
 
 /** The routes a recorded deployment of a REST API serves, from its OpenAPI export in S3. */
@@ -194,9 +196,13 @@ async function lambdaFunctions(name: string | undefined, sub: string | undefined
   const registration = registrationFor(name, registered, project);
   if (!registration) return json(404, { message: `${name} isn't registered for rollback (rollback-config.json)` });
   if (sub === 'metrics') return json(200, await getLambdaFunctionMetrics(cloudwatch, name));
-  const details = await getLambdaFunctionDetails(lambda, name);
+  const [details, archive] = await Promise.all([
+    getLambdaFunctionDetails(lambda, name),
+    listArchivedVersions(dynamo, registration.archiveTable, name),
+  ]);
   if (!details) return json(404, { message: `No function ${name}` });
-  return json(200, { ...details, managedAlias: registration.alias });
+  const versions = details.versions.map((v) => (archive.has(v.version) ? { ...v, archive: archive.get(v.version) } : v));
+  return json(200, { ...details, versions, managedAlias: registration.alias });
 }
 
 async function pointLambdaAlias(name: string, event: FunctionUrlEvent) {

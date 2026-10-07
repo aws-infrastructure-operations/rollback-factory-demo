@@ -120,6 +120,14 @@ export function pointToAlias(spec: any, functionArn: string, aliasArn: string): 
   return copy;
 }
 
+/**
+ * The Lambda integrations of a spec that don't go through a stage variable alias
+ * (`<fn>:${stageVariables.lambdaAlias}`): a fixed function, version or alias, frozen in the spec.
+ */
+export function frozenLambdas(spec: any): string[] {
+  return lambdaArnsFromSpec(spec).filter((arn) => !arn.includes('${stageVariables.'));
+}
+
 /** Lambda function ARNs (incl. version qualifier) used by the spec's integrations. */
 export function lambdaArnsFromSpec(spec: any): string[] {
   const arns = new Set<string>();
