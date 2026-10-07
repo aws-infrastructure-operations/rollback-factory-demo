@@ -42,7 +42,7 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   activation or a rollback.
 - **Dashboard API** at `/api/*` on both distributions: a Lambda (`rollback-factory-demo-frontend-dashboard-api-<env>`,
   [`lambda/dashboard-api`](lambda/dashboard-api)) behind a function URL with IAM auth, which only these two
-  distributions can call (Origin Access Control). Never cached. It reads, and can only read, the stack region's
+  distributions can call (Origin Access Control). Never cached. It reads the stack region's
   API Gateways: the API list, each API, and its stages and deployments (`apigateway:GET`, one API id per
   path, so no stage exports). It also lists the region's Lambda functions
   with their aliases and versions (`lambda:ListFunctions`, `ListAliases`, `ListVersionsByFunction`) and reads
@@ -51,8 +51,14 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   distributions and reads one with its invalidations (`cloudfront:ListDistributions`, `GetDistribution`,
   `ListInvalidations`, `GetInvalidation`; origin custom headers are never sent on), the release history of
   every environment's `frontend-user-<env>` (`dynamodb:Query` on `rollback-factory-demo-frontend-deployments-*`),
-  and CloudFront metrics in us-east-1. It has no sign-in: anyone with the site URL can see the API, function
-  and distribution names, stages, versions, releases and settings.
+  and CloudFront metrics in us-east-1. For each `api-user-<env>` it reads the recorded deployments too
+  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`), and its one write is restoring one of them:
+  `POST /api/api-gateways/<id>/restore` with `{"deployedAt": "..."}` invokes
+  `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those functions only), which
+  re-imports that deployment's OpenAPI export from S3 and redeploys the stage, like `deployment:restore`.
+  The CloudFront behavior allows POST for it (OAC needs the body's SHA-256 in `x-amz-content-sha256`), and
+  waits up to 60 s. It has no sign-in: anyone with the site URL can see the API, function and distribution
+  names, stages, versions, releases and settings, **and restore an API deployment**.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -67,9 +73,11 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
 Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Control Center dashboard.
 - **API Gateways** is live: the region's REST, HTTP and WebSocket APIs with their stages and latest
   deployment, from `GET /api/api-gateways` (the dashboard API). Search filters the list, refresh reloads it
-  (and the selected API). Next to it, the selected API's **stages** (and the deployment each serves), its latest
-  **deployments** and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`.
-  The Rollback buttons are disabled until the dashboard has sign-in.
+  (and the selected API). Next to it, the selected API's **deployments**, its **stages** (and the deployment
+  each serves) and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`. For
+  `api-user-<env>` the deployments are the ones recorded in DynamoDB (marked live, verified or rolled back),
+  each with a **Restore** button (after a confirm; the live one can't be restored); for other APIs they are
+  API Gateway's own, with nothing to restore.
 - **Lambda Functions** is live too: the functions with their runtime, aliases and last change, from
   `GET /api/lambda-functions`. Next to it, the selected function's published **versions** (and the aliases
   serving each), its **aliases** (with weights), its **configuration**, and **monitoring**: invocations,

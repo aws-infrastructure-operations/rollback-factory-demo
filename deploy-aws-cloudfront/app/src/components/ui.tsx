@@ -55,8 +55,17 @@ export const StageTags = ({ stages }: { stages: string[] }) => (
   <span className="tags">{stages.map((s) => <span key={s} className={`tag ${stageTag(s)}`}>{s}</span>)}</span>
 );
 
-export const RollbackButton = ({ disabledReason }: { disabledReason?: string }) => (
-  <button type="button" className="rollback" disabled={!!disabledReason} title={disabledReason}>
-    <Icon name="rollback" size={14} />Rollback
+export const Tag = ({ kind, children }: { kind: 'prod' | 'staging' | 'dev' | 'bad'; children: string }) => (
+  <span className={`tag tag-${kind}`}>{children}</span>
+);
+
+export const RollbackButton = ({ disabledReason, label = 'Rollback', onClick }: {
+  disabledReason?: string;
+  label?: string;
+  onClick?: () => void;
+}) => (
+  <button type="button" className="rollback" disabled={!!disabledReason} title={disabledReason}
+    onClick={onClick && ((e) => { e.stopPropagation(); onClick(); })}>
+    <Icon name="rollback" size={14} />{label}
   </button>
 );

@@ -7,7 +7,7 @@ import {
 } from '../api.js';
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
-import { DataTable, RollbackButton, type TableMessage } from './ui.js';
+import { DataTable, RollbackButton, Tag, type TableMessage } from './ui.js';
 
 /** Until the dashboard has sign-in, nobody should be able to roll back a site from a public page. */
 const ROLLBACK_DISABLED = 'Rolling back from the dashboard comes with sign-in. Use the frontend restore workflow for now.';
@@ -19,10 +19,6 @@ const StatusBadge = ({ d }: { d: Pick<Distribution, 'status' | 'enabled'> }) => 
   if (!d.enabled) return <span className="status muted">Disabled</span>;
   return <span className={`status${d.status === 'Deployed' ? '' : ' pending'}`}>{d.status === 'InProgress' ? 'In progress' : d.status}</span>;
 };
-
-const Tag = ({ kind, children }: { kind: 'prod' | 'staging' | 'dev' | 'bad'; children: string }) => (
-  <span className={`tag tag-${kind}`}>{children}</span>
-);
 
 export function CloudFrontSection() {
   const [reloads, setReloads] = useState(0);

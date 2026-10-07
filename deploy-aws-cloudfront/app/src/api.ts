@@ -31,6 +31,27 @@ export interface ApiGatewayDetails {
   /** newest first, the latest 25 */
   deployments: Array<{ id: string; description?: string; createdAt?: string; status?: string; stages: string[] }>;
   configuration: Array<{ label: string; value: string }>;
+  /** the deployments this project recorded, newest first; absent for APIs it doesn't deploy */
+  recorded?: RecordedApiDeployment[];
+}
+
+/** Same shape as RecordedApiDeployment in lambda/dashboard-api/api-gateway-deployments.ts. */
+export interface RecordedApiDeployment {
+  /** what a restore names */
+  deployedAt: string;
+  deploymentId: string;
+  stageName: string;
+  lambdaVersion?: string;
+  /** s3:// URL of the OpenAPI export a restore re-imports */
+  spec: string;
+  source: string;
+  actor?: string;
+  commit?: string;
+  description?: string;
+  current: boolean;
+  verified: boolean;
+  rolledBack: boolean;
+  stableFor?: string;
 }
 
 export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'>, signal?: AbortSignal): Promise<ApiGatewayDetails> {
@@ -38,6 +59,29 @@ export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'
   const response = await fetch(url, { signal, headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   return response.json();
+}
+
+/**
+ * Restores the API's stage to a recorded deployment. Throws with the API's message when it refuses.
+ * Function URLs behind OAC need the body's SHA-256 in x-amz-content-sha256 to sign a POST.
+ */
+export async function restoreApiDeployment(apiId: string, deployedAt: string, reason?: string): Promise<void> {
+  const url = `/api/api-gateways/${encodeURIComponent(apiId)}/restore`;
+  const body = JSON.stringify({ deployedAt, ...(reason && { reason }) });
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+  const response = await fetch(url, {
+    method: 'POST',
+    body,
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'x-amz-content-sha256': Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join(''),
+    },
+  });
+  if (!response.ok) {
+    const { message } = await response.json().catch(() => ({ message: undefined }));
+    throw new Error(message ?? `POST ${url} answered ${response.status}`);
+  }
 }
 
 // --- Lambda functions --------------------------------------------------------------------------

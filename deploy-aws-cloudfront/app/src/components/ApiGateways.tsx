@@ -1,20 +1,23 @@
 // API Gateways: the region's APIs from the dashboard API, with search and refresh, and the
-// selected API's stages, deployments and configuration next to them.
+// selected API's deployments (restorable for the APIs this project deploys), stages and
+// configuration next to them.
 import { useMemo, useState } from 'react';
 import {
-  fetchApiGatewayDetails, fetchApiGateways, type ApiGateway, type ApiGatewayDetails, type ApiGatewayList,
+  fetchApiGatewayDetails, fetchApiGateways, restoreApiDeployment,
+  type ApiGateway, type ApiGatewayDetails, type ApiGatewayList, type RecordedApiDeployment,
 } from '../api.js';
 import { DateCell, loadState, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
-import { DataTable, RollbackButton, StageTags, type TableMessage } from './ui.js';
+import { DataTable, RollbackButton, StageTags, Tag, type TableMessage } from './ui.js';
 
 const matches = (api: ApiGateway, query: string) =>
   [api.name, api.id, api.type, ...api.stages].some((value) => value.toLowerCase().includes(query));
 
 const typeLabel = { REST: 'REST API', HTTP: 'HTTP API', WEBSOCKET: 'WebSocket API' };
 
-/** Until the dashboard has sign-in, nobody should be able to roll back an API from a public page. */
-const ROLLBACK_DISABLED = 'Rolling back from the dashboard comes with sign-in. Use the api-gateway restore workflow for now.';
+const STAGE_ROLLBACK = 'Restore a recorded deployment from the Deployments tab.';
+
+const formatAt = (iso: string) => new Date(iso).toLocaleString();
 
 export function ApiGatewaySection() {
   const [reloads, setReloads] = useState(0);
@@ -76,9 +79,30 @@ export function ApiGatewaySection() {
 }
 
 function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: number }) {
-  // refreshing the list reloads the selected API too
-  const details = useLoad<ApiGatewayDetails>(`${api.type}:${api.id}#${reloads}`, (signal) => fetchApiGatewayDetails(api, signal));
+  // refreshing the list reloads the selected API too, and so does a restore
+  const [restores, setRestores] = useState(0);
+  const details = useLoad<ApiGatewayDetails>(`${api.type}:${api.id}#${reloads}.${restores}`, (signal) => fetchApiGatewayDetails(api, signal));
   const data = details.data;
+  // the deployedAt being restored, and the last restore's outcome, for the API they belong to
+  const [restoring, setRestoring] = useState<{ apiId: string; deployedAt: string }>();
+  const [outcome, setOutcome] = useState<{ apiId: string; text: string; error?: boolean }>();
+
+  async function restore(d: RecordedApiDeployment) {
+    const what = `${api.name} stage ${d.stageName} to deployment ${d.deploymentId}, recorded ${formatAt(d.deployedAt)}`;
+    if (!window.confirm(`Restore ${what}?\n\nThe rollback service re-imports that deployment's OpenAPI export and redeploys the stage.`)) return;
+    setRestoring({ apiId: api.id, deployedAt: d.deployedAt });
+    setOutcome(undefined);
+    try {
+      await restoreApiDeployment(api.id, d.deployedAt);
+      setOutcome({ apiId: api.id, text: `Restored ${what}. It counts as verified once the integration tests pass again.` });
+    } catch (err) {
+      setOutcome({ apiId: api.id, text: `Restore failed: ${(err as Error).message}`, error: true });
+    } finally {
+      setRestoring(undefined);
+      setRestores((n) => n + 1);
+    }
+  }
+  const busy = restoring?.apiId === api.id;
 
   const message: TableMessage | undefined = details.failed && !data
     ? { text: `Could not load ${api.name}. Try refreshing.`, error: true }
@@ -89,7 +113,7 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
       id="api-gateway-details" icon="apiGateway" tint="tint-api" name={api.name}
       badge={api.stages.length ? 'Deployed' : undefined}
       subtitle={<>{api.id} &nbsp; {typeLabel[api.type]}</>}
-      tabs={['Stages', 'Deployments', 'Configuration']}
+      tabs={['Deployments', 'Stages', 'Configuration']}
       state={loadState(details)}
     >
       {(tab) => {
@@ -101,11 +125,54 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                 { header: 'Stage Name', cell: (s) => <><span className={`dot ${s.deploymentId ? 'ok' : 'muted'}`} />{s.name}</> },
                 { header: 'Deployment ID', cell: (s) => s.deploymentId ?? '—' },
                 { header: 'Deployed At', cell: (s) => <DateCell iso={s.deployedAt} /> },
-                { header: 'Actions', cell: () => <RollbackButton disabledReason={ROLLBACK_DISABLED} /> },
+                { header: 'Actions', cell: () => <RollbackButton disabledReason={STAGE_ROLLBACK} /> },
               ]} />
           );
         }
+        if (tab === 'Deployments' && data?.recorded) {
+          return (
+            <>
+              {outcome?.apiId === api.id && (
+                <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
+              )}
+              <DataTable rows={data.recorded} rowKey={(d) => d.deployedAt}
+                message={message ?? (data.recorded.length ? undefined : { text: 'No deployment recorded yet.' })}
+                columns={[
+                  {
+                    header: 'Deployment',
+                    cell: (d) => (
+                      <div className="stacked" title={[d.description, d.spec].filter(Boolean).join('\n')}>
+                        <span>{d.deploymentId} <span className="small muted-text">{d.stageName}</span></span>
+                        {(d.current || d.verified || d.rolledBack) && (
+                          <span className="tags">
+                            {d.current && <Tag kind="prod">live</Tag>}
+                            {d.verified && <Tag kind="staging">verified</Tag>}
+                            {d.rolledBack && <Tag kind="bad">rolled back</Tag>}
+                          </span>
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    header: 'Source',
+                    cell: (d) => <div className="stacked">{d.source}{d.commit && <span className="small muted-text">{d.commit.slice(0, 7)}</span>}</div>,
+                  },
+                  { header: 'Deployed At', cell: (d) => <DateCell iso={d.deployedAt} />, className: 'date-wrap' },
+                  {
+                    header: 'Actions',
+                    cell: (d) => (
+                      <RollbackButton
+                        label={busy && restoring!.deployedAt === d.deployedAt ? 'Restoring…' : 'Restore'}
+                        disabledReason={d.current ? `${d.stageName} serves this deployment.` : busy ? 'A restore is running.' : undefined}
+                        onClick={() => restore(d)} />
+                    ),
+                  },
+                ]} />
+            </>
+          );
+        }
         if (tab === 'Deployments') {
+          // an API this project doesn't deploy: API Gateway's own deployments, nothing to restore from
           return (
             <DataTable rows={data?.deployments ?? []} rowKey={(d) => d.id}
               message={message ?? (data!.deployments.length ? undefined : { text: 'No deployments.' })}

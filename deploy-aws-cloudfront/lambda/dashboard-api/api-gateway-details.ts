@@ -7,6 +7,7 @@ import {
   ApiGatewayV2Client, GetApiCommand, GetDeploymentsCommand as GetV2DeploymentsCommand,
   GetStagesCommand as GetV2StagesCommand,
 } from '@aws-sdk/client-apigatewayv2';
+import type { RecordedApiDeployment } from './api-gateway-deployments.js';
 import type { ApiType } from './api-gateways.js';
 
 /** What GET /api/api-gateways/<id>?type=<type> returns (app/src/api.ts has the same shape). */
@@ -18,6 +19,8 @@ export interface ApiGatewayDetails {
   /** newest first, at most MAX_DEPLOYMENTS */
   deployments: Array<{ id: string; description?: string; createdAt?: string; status?: string; stages: string[] }>;
   configuration: Array<{ label: string; value: string }>;
+  /** the deployments this project recorded (DynamoDB), newest first; absent for APIs it doesn't deploy */
+  recorded?: RecordedApiDeployment[];
 }
 
 export const MAX_DEPLOYMENTS = 25;
