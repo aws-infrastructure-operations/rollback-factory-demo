@@ -17,6 +17,8 @@ export const callerOf = (event: APIGatewayProxyEvent): string => event.requestCo
 /** A 500 for the share of requests chaos mode fails, else undefined. */
 export function injectedFailure(): APIGatewayProxyResult | undefined {
   if (Math.random() >= CHAOS_FAILURE_RATE) return undefined;
+  // chaos mode on: say so in the backend's log, so a 500 is never mistaken for a real failure
+  console.warn(JSON.stringify({ msg: 'injected failure', chaosFailureRate: CHAOS_FAILURE_RATE }));
   return json(500, { message: `Injected failure (CHAOS_FAILURE_RATE=${CHAOS_FAILURE_RATE})` });
 }
 
