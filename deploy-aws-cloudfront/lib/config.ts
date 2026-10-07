@@ -33,6 +33,11 @@ export interface EnvConfig {
   stackName: string;
   /** Alarms, SNS topic and rollback Lambda. CloudFront only publishes metrics in us-east-1. */
   alarmsStackName: string;
+  /** The TLS certificate of the two sites' domains: CloudFront only takes certificates from us-east-1. */
+  certificateStackName: string;
+  /** The sites' domains, in the hosted zone of deploy-aws-dns. */
+  domains: SiteDomains;
+  hostedZone: { id: string; name: string };
   alarmsRegion: string;
   /**
    * The release the distribution serves right now (from scripts/live-context.ts).
@@ -60,6 +65,31 @@ export interface EnvConfig {
   rollbackWindowMinutes: number;
 }
 
+/** The domain of each distribution of an environment. */
+export interface SiteDomains {
+  /** frontend-user-<env>: what clients use */
+  site: string;
+  /** frontend-user-<env>-integration: where CI tests each release first */
+  integration: string;
+}
+
+/**
+ * The hosted zone deploy-aws-dns creates (its HostedZoneId output), shared by every environment.
+ * It never changes: the zone is kept even if that stack is deleted.
+ */
+export const HOSTED_ZONE = { id: 'Z05783463JDFZM1R6MU2D', name: 'rollback.ionuteliantudor.com' };
+
+/**
+ * dev: dev.rollback… and dev-integration.rollback…; prod without a prefix: rollback… and
+ * integration.rollback…. The same rule as deploy-aws-dns/lib/config.ts (a test keeps them equal).
+ */
+export function siteDomains(envName: string): SiteDomains {
+  const zone = HOSTED_ZONE.name;
+  return envName === 'prod'
+    ? { site: zone, integration: `integration.${zone}` }
+    : { site: `${envName}.${zone}`, integration: `${envName}-integration.${zone}` };
+}
+
 /** Optional overrides, e.g. from `cdk deploy -c liveReleaseId=...`. */
 export interface ConfigOverrides {
   alarmNotifications?: string | boolean;
@@ -69,7 +99,10 @@ export interface ConfigOverrides {
 }
 
 export const PROJECT_NAME = 'rollback-factory-demo';
-/** This project's folder and stack name prefix: deploy-aws-cloudfront-<env> and deploy-aws-cloudfront-alarms-<env>. */
+/**
+ * This project's folder and stack name prefix: deploy-aws-cloudfront-<env>,
+ * deploy-aws-cloudfront-alarms-<env> and deploy-aws-cloudfront-certificate-<env>.
+ */
 export const STACK_PREFIX = 'deploy-aws-cloudfront';
 export const ALARMS_REGION = 'us-east-1';
 /** Where the API is deployed; only used when the app runs outside the CDK CLI (which always sets CDK_DEFAULT_REGION). */
@@ -102,6 +135,9 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     resourceName,
     stackName: `${STACK_PREFIX}-${envName}`,
     alarmsStackName: `${STACK_PREFIX}-alarms-${envName}`,
+    certificateStackName: `${STACK_PREFIX}-certificate-${envName}`,
+    domains: siteDomains(envName as EnvName),
+    hostedZone: HOSTED_ZONE,
     alarmsRegion: ALARMS_REGION,
     liveReleaseId,
     integrationReleaseId,

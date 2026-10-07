@@ -10,8 +10,11 @@ the work is split into tickets in [docs/](docs/README.md).
 
 | Stack | Region | Holds |
 |---|---|---|
-| `deploy-aws-cloudfront-<env>` | `CDK_DEFAULT_REGION` (the API's region) | site bucket, distribution `frontend-user-<env>`, deployments bucket + table |
+| `deploy-aws-cloudfront-certificate-<env>` | `us-east-1` | the TLS certificate of the two sites' domains (CloudFront only takes us-east-1 certificates) |
+| `deploy-aws-cloudfront-<env>` | `CDK_DEFAULT_REGION` (the API's region) | site bucket, distribution `frontend-user-<env>`, deployments bucket + table, the sites' DNS records |
 | `deploy-aws-cloudfront-alarms-<env>` | `us-east-1` | the CloudFront 4xx / 5xx alarms |
+
+`cdk deploy --all` creates them in that order; `cdk destroy --all` removes them in reverse.
 
 CloudFront only publishes its metrics in `us-east-1`, so the alarms stack lives there. The rollback itself is done by the
 [rollback service](../rollback-service): deploy it to the environment first, since the alarms publish to its us-east-1 topic.
@@ -32,6 +35,23 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   |---|---|---|
   | `frontend-user-<env>` | clients | yes |
   | `frontend-user-<env>-integration` | CI: each release is made live and tested here first | no, so test traffic never counts toward a rollback |
+
+- **Domains**, in the hosted zone `rollback.ionuteliantudor.com` of [`deploy-aws-dns`](../deploy-aws-dns):
+
+  | Distribution | Domain |
+  |---|---|
+  | `frontend-user-dev` | `dev.rollback.ionuteliantudor.com` |
+  | `frontend-user-dev-integration` | `dev-integration.rollback.ionuteliantudor.com` |
+  | `frontend-user-prod` | `rollback.ionuteliantudor.com` |
+  | `frontend-user-prod-integration` | `integration.rollback.ionuteliantudor.com` |
+
+  (`siteDomains()` in [`lib/config.ts`](lib/config.ts), the same rule as deploy-aws-dns's; the zone id is
+  `HOSTED_ZONE`.) Each environment's certificate covers its two domains, TLS 1.2 at least, validated by
+  DNS in the zone: the zone must be **delegated** (an NS record for `rollback` at `ionuteliantudor.com`'s
+  DNS host) before the first deploy, or that deploy waits for the certificate until it times out. Each
+  domain gets an A and an AAAA alias record. `SiteUrl` and `IntegrationSiteUrl` are the custom domains
+  (so the integration tests use them); the `*.cloudfront.net` domains still work and stay as outputs
+  (`DistributionDomainName`, `IntegrationDistributionDomainName`).
 
 - **Releases:** each release lives under `releases/<id>/`, and each distribution's **origin path**
   (`/releases/<id>`) selects the release it serves. Both read the same bucket, so the release that

@@ -28,7 +28,7 @@ export class DnsStack extends cdk.Stack {
 
     new cdk.CfnOutput(this, 'HostedZoneId', {
       value: this.zone.hostedZoneId,
-      description: 'Goes into deploy-aws-cloudfront/lib/config.ts (HOSTED_ZONE_ID)',
+      description: 'deploy-aws-cloudfront/lib/config.ts: HOSTED_ZONE',
       exportName: `${PROJECT_NAME}-dns-HostedZoneId`,
     });
     new cdk.CfnOutput(this, 'ZoneName', { value: ZONE_NAME });
