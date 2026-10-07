@@ -17,7 +17,7 @@ export interface AlarmConfig {
 }
 
 /** The API's resources: each is served by its own Lambda function. */
-export const BACKENDS = ['users', 'messages'] as const;
+export const BACKENDS = ['users', 'messages', 'orders'] as const;
 export type Backend = (typeof BACKENDS)[number];
 
 /** One backend Lambda: what serves /<resource>, and the alarm the rollback service rolls it back on. */
@@ -88,7 +88,7 @@ export interface ConfigOverrides {
   chaosFailureRate?: string | number;
   deployId?: string;
   liveDeploymentId?: string;
-  /** liveUsersVersion, liveMessagesVersion (see liveVersionContextKey) */
+  /** liveUsersVersion, liveMessagesVersion, liveOrdersVersion (see liveVersionContextKey) */
   [liveVersion: `live${string}Version`]: string | undefined;
 }
 

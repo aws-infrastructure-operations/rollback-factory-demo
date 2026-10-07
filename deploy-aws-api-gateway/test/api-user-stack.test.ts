@@ -19,18 +19,18 @@ test('names the API per environment and deploys stage v1', () => {
   }
 });
 
-test('exposes GET and POST on /users and /messages behind Cognito', () => {
+test('exposes GET and POST on /users, /messages and /orders behind Cognito', () => {
   const t = synth('dev');
   t.resourceCountIs('AWS::ApiGateway::Authorizer', 1);
   t.hasResourceProperties('AWS::ApiGateway::Authorizer', { Type: 'COGNITO_USER_POOLS' });
-  for (const path of ['users', 'messages']) {
+  for (const path of ['users', 'messages', 'orders']) {
     t.hasResourceProperties('AWS::ApiGateway::Resource', { PathPart: path });
   }
   const methods = t.findResources('AWS::ApiGateway::Method');
   const secured = Object.values(methods).filter(
     (m: any) => m.Properties.AuthorizationType === 'COGNITO_USER_POOLS',
   );
-  if (secured.length !== 4) throw new Error(`expected 4 Cognito-secured methods, got ${secured.length}`);
+  if (secured.length !== 6) throw new Error(`expected 6 Cognito-secured methods, got ${secured.length}`);
 });
 
 test('validates POST bodies', () => {
@@ -71,8 +71,8 @@ test('allows browsers to call the API from any origin (CORS)', () => {
   const t = synth('dev');
   const methods = Object.values(t.findResources('AWS::ApiGateway::Method')) as any[];
   const preflights = methods.filter((m) => m.Properties.HttpMethod === 'OPTIONS');
-  // root + /users + /messages; preflights must not require a token
-  assert.equal(preflights.length, 3);
+  // root + /users + /messages + /orders; preflights must not require a token
+  assert.equal(preflights.length, 4);
   for (const m of preflights) assert.equal(m.Properties.AuthorizationType, 'NONE');
   t.hasResourceProperties('AWS::ApiGateway::Method', {
     HttpMethod: 'OPTIONS',

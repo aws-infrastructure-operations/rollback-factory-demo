@@ -99,10 +99,10 @@ jobs:
 
       # The backends are registered in rollback-service/rollback-config.json: archive their new
       # versions and record the promotion (liveAt), so their errors alarms can roll live back.
-      - name: Sync the rollback service's version archive (users and messages backends)
+      - name: Sync the rollback service's version archive (users, messages and orders backends)
         run: |
           set -euo pipefail
-          for backend in users messages; do
+          for backend in users messages orders; do
             fn="rollback-factory-demo-api-$backend-$API_ENV"
             FUNCTION_ERROR=$(aws lambda invoke --function-name "rollback-factory-demo-rollback-service-$API_ENV" \
               --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \

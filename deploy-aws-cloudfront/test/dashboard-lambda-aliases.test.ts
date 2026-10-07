@@ -22,11 +22,12 @@ test('resolves a registered function to its environment\'s rollback service and 
 });
 
 test('reads the registered functions from rollback-config.json, enabled ones only', () => {
-  // service-lambda and the API's two backends (deploy-aws-api-gateway)
+  // service-lambda and the API's backends (deploy-aws-api-gateway)
   assert.deepEqual(registeredFunctions(), [
     { name: 'service-lambda-<env>', alias: 'live' },
     { name: 'rollback-factory-demo-api-users-<env>', alias: 'live' },
     { name: 'rollback-factory-demo-api-messages-<env>', alias: 'live' },
+    { name: 'rollback-factory-demo-api-orders-<env>', alias: 'live' },
   ]);
   assert.deepEqual(parseRegistered(JSON.stringify([...REGISTERED, { name: 'no-placeholder', alias: 'live' }])), REGISTERED);
   assert.deepEqual(parseRegistered(undefined), []);

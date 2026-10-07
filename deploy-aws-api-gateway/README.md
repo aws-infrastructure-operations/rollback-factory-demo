@@ -10,14 +10,14 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | CloudFormation stack | `deploy-aws-api-gateway-<env>` |
 | Cognito user pool + app client | `rollback-factory-demo-users-<env>` / `rollback-factory-demo-client-<env>` |
 | Cognito authorizer | `rollback-factory-demo-cognito-<env>` (`Authorization: <ID token>`) |
-| Lambda backends (Node 24, arm64), one per resource | `rollback-factory-demo-api-users-<env>` (`/users`) and `rollback-factory-demo-api-messages-<env>` (`/messages`), each with aliases `live` (stage `v1`) and `integration` (stage `integration`); both registered for rollback in [`rollback-service/rollback-config.json`](../rollback-service/rollback-config.json) |
+| Lambda backends (Node 24, arm64), one per resource | `rollback-factory-demo-api-users-<env>` (`/users`), `rollback-factory-demo-api-messages-<env>` (`/messages`) and `rollback-factory-demo-api-orders-<env>` (`/orders`, mocked like the others), each with aliases `live` (stage `v1`) and `integration` (stage `integration`); all registered for rollback in [`rollback-service/rollback-config.json`](../rollback-service/rollback-config.json) |
 | API stages | `v1` (clients) and `integration` (CI tests each deploy here before it is promoted to `v1`) |
 | S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
 | DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
 | CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-apigateway-api-user-4xx-rate-<env>`, `rollback-factory-demo-apigateway-api-user-5xx-rate-<env>` |
 | Alarm topic and rollback (from [`rollback-service`](../rollback-service)) | topic `rollback-factory-demo-rollback-notifications-<env>`, Lambda `rollback-factory-demo-rollback-service-<env>` |
 | Lambda 4xx / 5xx rate alarms (block the API rollback) | `rollback-factory-demo-apigateway-api-user-handler-4xx-rate-<env>`, `rollback-factory-demo-apigateway-api-user-handler-5xx-rate-<env>` |
-| Lambda errors alarms, one per backend (roll that backend's `live` back) | `rollback-factory-demo-lambda-api-users-errors-<env>`, `rollback-factory-demo-lambda-api-messages-errors-<env>` |
+| Lambda errors alarms, one per backend (roll that backend's `live` back) | `rollback-factory-demo-lambda-api-users-errors-<env>`, `rollback-factory-demo-lambda-api-messages-errors-<env>`, `rollback-factory-demo-lambda-api-orders-errors-<env>` |
 | API access logs (JSON, 30 days) | `rollback-factory-demo-api-access-logs-<env>` |
 | Saved Logs Insights queries | `rollback-factory-demo-api-5xx-by-cause-<env>`, `rollback-factory-demo-api-5xx-requests-<env>` |
 
@@ -33,6 +33,8 @@ All methods need a Cognito ID token in the `Authorization` header.
 | POST | `/users` | `{ "message": "..." }` (validated) |
 | GET | `/messages` | – |
 | POST | `/messages` | `{ "message": "..." }` (validated) |
+| GET | `/orders` | – |
+| POST | `/orders` | `{ "message": "..." }` (validated) |
 
 ## Usage
 
@@ -104,7 +106,7 @@ $env:API_ENV='dev'; npm run test:integration    # PowerShell
 ```
 
 The tests cover:
-- `GET` and `POST` on `/users` and `/messages` with a valid token (200 / 201, echoed message, caller email)
+- `GET` and `POST` on `/users`, `/messages` and `/orders` with a valid token (200 / 201, echoed message, caller email)
 - requests with no token or an invalid token get 401
 - a `POST` body without `message` gets 400 from the request validator
 - CORS: `OPTIONS` preflights answer with `Access-Control-Allow-Origin: *`, and so do normal responses and API Gateway's own errors (the browser frontend needs this)
@@ -211,7 +213,7 @@ How to read them:
 
 **2. The paired Lambda alarms.** `rollback-factory-demo-apigateway-api-user-handler-4xx-rate-<env>` / `-handler-5xx-rate-<env>` fire on the same rates as the API alarms, counting only the errors of requests that reached a backend Lambda (either one) (metric filters on the access logs, namespace `rollback-factory-demo/api-user-<env>`). API alarm + Lambda alarm → the code; API alarm alone → API Gateway. See "Is the Lambda at fault?" above.
 
-**3. The Lambda errors alarms, one per backend.** `rollback-factory-demo-lambda-api-users-errors-<env>` and `rollback-factory-demo-lambda-api-messages-errors-<env>` fire on one error (unhandled error or timeout) in a minute on that backend's `live` alias, unqualified calls or `$LATEST`, never `integration`:
+**3. The Lambda errors alarms, one per backend.** `rollback-factory-demo-lambda-api-<resource>-errors-<env>` (users, messages, orders) fire on one error (unhandled error or timeout) in a minute on that backend's `live` alias, unqualified calls or `$LATEST`, never `integration`:
 - 5xx alarm + a Lambda errors alarm together → that backend's **code** is failing.
 - 5xx alarm alone → API Gateway, a timeout, or 5xx responses the code returns on purpose (like `chaosFailureRate`).
 

@@ -7,9 +7,10 @@ test('the registry resolves <env> and registers the service and the API backends
   const registry = resolveRegistry(rollbackConfig, 'staging');
   assert.deepEqual([...registry.keys()], [
     'service-lambda-staging', 'rollback-factory-demo-api-users-staging', 'rollback-factory-demo-api-messages-staging',
+    'rollback-factory-demo-api-orders-staging',
   ]);
   // the API's backends (deploy-aws-api-gateway), one per resource, each with the errors alarm its stack creates
-  for (const backend of ['users', 'messages']) {
+  for (const backend of ['users', 'messages', 'orders']) {
     const registration = registry.get(`rollback-factory-demo-api-${backend}-staging`)!;
     assert.equal(registration.alias, 'live');
     assert.deepEqual([...registration.alarms], [`rollback-factory-demo-lambda-api-${backend}-errors-staging`]);

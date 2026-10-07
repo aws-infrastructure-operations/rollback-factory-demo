@@ -84,7 +84,7 @@ test('the Lambda manager\'s role is scoped to the registered functions', () => {
   const { main } = synth();
   const lambdaStatement = statements(main).find((s) => actions(s).includes('lambda:UpdateAlias'));
   assert.match(JSON.stringify(lambdaStatement.Resource), /function:service-lambda-dev/);
-  assert.match(JSON.stringify(statements(main)), /"dynamodb:LeadingKeys":\["service-lambda-dev","rollback-factory-demo-api-users-dev","rollback-factory-demo-api-messages-dev"\]/);
+  assert.match(JSON.stringify(statements(main)), /"dynamodb:LeadingKeys":\["service-lambda-dev","rollback-factory-demo-api-users-dev","rollback-factory-demo-api-messages-dev","rollback-factory-demo-api-orders-dev"]/);
 });
 
 test('owns the Lambda version archive, kept in prod only', () => {
