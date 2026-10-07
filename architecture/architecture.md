@@ -93,7 +93,7 @@ so a few intentional errors from the integration tests can't trigger a rollback.
 
 [`api-gateway.yml`](.github/workflows/api-gateway.yml) runs on pull requests (typecheck, unit tests,
 synth, a Bruno collection check). On `main` it deploys each environment in turn through
-[`api-gateway-deploy.yml`](.github/workflows/api-gateway-deploy.yml):
+[`api-gateway-deploy`](.github/actions/api-gateway-deploy/action.yml):
 
 1. `cdk deploy` to the **`integration` stage** only. Stage `v1` and the `live` alias are pinned to
    what they serve.

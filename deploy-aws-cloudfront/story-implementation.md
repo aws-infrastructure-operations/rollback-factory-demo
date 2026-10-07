@@ -138,7 +138,7 @@ back, invalidates `/*`, and records a `rollback`.
 #### 12. GitHub workflows
 
 - **[`frontend.yml`](../.github/workflows/frontend.yml):** PR checks. On `main`, dev then prod through
-  [`frontend-deploy.yml`](../.github/workflows/frontend-deploy.yml): cdk deploy (live release kept),
+  [`frontend-deploy`](../.github/actions/frontend-deploy/action.yml): cdk deploy (live release kept),
   build against the env's API, upload + manifest, make it live on the integration distribution,
   integration tests there, make the same release live on `frontend-user-<env>` (timed), record, verify.
 - **Failed tests:** the job stops, `frontend-user-<env>` was never touched, and the next environments

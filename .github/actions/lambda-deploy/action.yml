@@ -1,0 +1,144 @@
+name: lambda-deploy
+description: Deploy one environment of service-lambda (used by .github/workflows/lambda.yml)
+
+# Composite action: deploys one environment of service-lambda, testing each version on the `integration`
+# alias before clients get it (like the API's integration stage):
+#   cdk deploy (publishes the new version to `integration`; `live` stays where it is) ->
+#   integration tests on service-lambda-<env>:integration -> promote `live` to that version ->
+#   sync (the rollback system archives the version and records the deploy).
+# If the tests fail, the job stops with the test output in the summary and `live` was never touched.
+#
+# The calling job checks out the repository (fetch-depth: 0), sets runs-on, the GitHub environment,
+# timeout and concurrency, and passes the AWS credentials: actions see neither secrets nor vars.
+
+inputs:
+  environment:
+    description: dev or prod
+    required: true
+  aws-region:
+    description: vars.AWS_REGION of the environment
+    required: true
+  aws-access-key-id:
+    description: secrets.AWS_ACCESS_KEY_ID of the environment
+    required: true
+  aws-secret-access-key:
+    description: secrets.AWS_SECRET_ACCESS_KEY of the environment
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # what the workflow job used to set in env:, for every step below
+    - name: Environment
+      shell: bash
+      run: |
+        {
+          echo "LAMBDA_ENV=${{ inputs.environment }}"
+          echo "FUNCTION_NAME=service-lambda-${{ inputs.environment }}"
+          echo "AWS_REGION=${{ inputs.aws-region }}"
+        } >> "$GITHUB_ENV"
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: deploy-aws-lambda/package-lock.json
+    - run: npm ci
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: CDK bootstrap (no-op when up to date)
+      run: npx cdk bootstrap -c env="$LAMBDA_ENV"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Read the version live serves
+      id: live
+      run: |
+        context="$(npm run -s live:context -- --env "$LAMBDA_ENV")"
+        echo "context=$context" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Deploy (new version on integration, live stays where it is)
+      env:
+        LIVE_CONTEXT: ${{ steps.live.outputs.context }}
+      # LIVE_CONTEXT is unquoted on purpose: it is "-c liveLambdaVersion=<n>" or empty
+      run: npx cdk deploy -c env="$LAMBDA_ENV" $LIVE_CONTEXT --require-approval never
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Read the version integration serves
+      id: integration_version
+      run: |
+        version="$(aws lambda get-alias --function-name "$FUNCTION_NAME" --name integration --query FunctionVersion --output text)"
+        echo "Testing $FUNCTION_NAME version $version on the integration alias"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Integration tests on the integration alias
+      id: integration
+      env:
+        LAMBDA_ALIAS: integration
+        LAMBDA_VERSION: ${{ steps.integration_version.outputs.version }}
+      run: |
+        set -o pipefail
+        npm run test:integration 2>&1 | tee integration-tests.log
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Promote live to the tested version
+      id: promote
+      env:
+        VERSION: ${{ steps.integration_version.outputs.version }}
+      run: |
+        npm run -s deployment:promote -- --env "$LAMBDA_ENV" --version "$VERSION" > promotion.json
+        cat promotion.json
+        echo "from=$(jq -r '.from' promotion.json)" >> "$GITHUB_OUTPUT"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Sync (archive the version, record the deploy for the rollback system)
+      run: npm run -s deployment:sync -- --env "$LAMBDA_ENV"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Integration test failures -> job summary
+      if: failure() && steps.integration.outcome == 'failure'
+      env:
+        VERSION: ${{ steps.integration_version.outputs.version }}
+      run: |
+        {
+          echo "### :x: $FUNCTION_NAME: integration tests failed for version $VERSION"
+          echo "Tested on the \`integration\` alias. \`live\` was not changed."
+          echo '<details open><summary>Test output (last 100 lines)</summary>'
+          echo
+          echo '```'
+          tail -n 100 integration-tests.log
+          echo '```'
+          echo '</details>'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      working-directory: deploy-aws-lambda
+
+    - name: Versions
+      if: always() && steps.promote.outcome == 'success'
+      env:
+        VERSION: ${{ steps.integration_version.outputs.version }}
+        FROM: ${{ steps.promote.outputs.from }}
+      run: |
+        {
+          echo "### $FUNCTION_NAME"
+          echo "Version $VERSION passed on \`integration\` and is now \`live\` (was $FROM)."
+          echo '```'
+          npm run -s versions:list -- --env "$LAMBDA_ENV" --limit 5
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      working-directory: deploy-aws-lambda

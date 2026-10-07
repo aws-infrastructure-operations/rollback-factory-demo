@@ -11,7 +11,7 @@ the API workflows do.
 
 ## Scope
 
-- `.github/workflows/frontend.yml` (entry point) and `frontend-deploy.yml` (reusable, per env).
+- `.github/workflows/frontend.yml` (entry point) and `.github/actions/frontend-deploy` (composite action, per env).
 - **Triggers:** PRs and pushes to `main` that touch `deploy-aws-cloudfront/**` or
   `.github/workflows/frontend*.yml`, ignoring `*.md`, plus `workflow_dispatch` (`promote_to_prod`).
 - **PR job:** `npm ci`, typecheck, unit tests, app build with dummy config, `cdk synth` dev and prod.

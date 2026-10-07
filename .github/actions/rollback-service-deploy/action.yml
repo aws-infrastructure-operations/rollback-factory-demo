@@ -1,0 +1,82 @@
+name: rollback-service-deploy
+description: Deploy one environment of the rollback service (used by .github/workflows/rollback-service.yml)
+
+# Composite action: deploys one environment of the rollback service (rollback-service-us-east-1-<env>, then
+# rollback-service-<env>), runs its integration tests, and fails the job if they fail, which stops
+# the later environments.
+#
+# The calling job checks out the repository, sets runs-on, the GitHub environment,
+# timeout and concurrency, and passes the AWS credentials: actions see neither secrets nor vars.
+
+inputs:
+  environment:
+    description: dev or prod
+    required: true
+  aws-region:
+    description: vars.AWS_REGION of the environment
+    required: true
+  aws-access-key-id:
+    description: secrets.AWS_ACCESS_KEY_ID of the environment
+    required: true
+  aws-secret-access-key:
+    description: secrets.AWS_SECRET_ACCESS_KEY of the environment
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # what the workflow job used to set in env:, for every step below
+    - name: Environment
+      shell: bash
+      run: |
+        {
+          echo "ROLLBACK_ENV=${{ inputs.environment }}"
+          echo "AWS_REGION=${{ inputs.aws-region }}"
+        } >> "$GITHUB_ENV"
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+        cache: npm
+        cache-dependency-path: rollback-service/package-lock.json
+    - run: npm ci
+      shell: bash
+      working-directory: rollback-service
+
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: CDK bootstrap, main region and us-east-1 (no-op when up to date)
+      run: |
+        account="$(aws sts get-caller-identity --query Account --output text)"
+        npx cdk bootstrap -c env="$ROLLBACK_ENV" "aws://$account/$AWS_REGION" "aws://$account/us-east-1"
+      shell: bash
+      working-directory: rollback-service
+
+    - name: Deploy (us-east-1 topic first, then the main stack)
+      run: npx cdk deploy --all -c env="$ROLLBACK_ENV" --require-approval never
+      shell: bash
+      working-directory: rollback-service
+
+    - name: Integration tests
+      id: integration
+      run: |
+        set -o pipefail
+        npm run test:integration 2>&1 | tee integration-tests.log
+      shell: bash
+      working-directory: rollback-service
+
+    - name: Integration test failures -> job summary
+      if: failure() && steps.integration.outcome == 'failure'
+      run: |
+        {
+          echo "### :x: rollback service ($ROLLBACK_ENV): integration tests failed"
+          echo "The later environments are not deployed."
+          echo '```'
+          tail -n 100 integration-tests.log
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+      working-directory: rollback-service

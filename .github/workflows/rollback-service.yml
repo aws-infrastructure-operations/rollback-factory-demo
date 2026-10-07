@@ -12,11 +12,13 @@ on:
     paths:
       - rollback-service/**
       - .github/workflows/rollback-service*.yml
+      - .github/actions/rollback-service-deploy/**
       - "!**/*.md"
   pull_request:
     paths:
       - rollback-service/**
       - .github/workflows/rollback-service*.yml
+      - .github/actions/rollback-service-deploy/**
       - "!**/*.md"
   workflow_dispatch:
     inputs:
@@ -61,17 +63,41 @@ jobs:
           npx cdk synth -c env=prod -q -o cdk.out/prod
 
   deploy-dev:
+    name: deploy dev
     if: github.event_name != 'pull_request'
     needs: test
-    uses: ./.github/workflows/rollback-service-deploy.yml
-    with:
-      environment: dev
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 30
+    # Shared with cleanup.yml: never two changes to the same environment's service at once.
+    concurrency:
+      group: rollback-service-deploy-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rollback-service-deploy
+        with:
+          environment: dev
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
   deploy-prod:
+    name: deploy prod
     if: github.event_name == 'push' || inputs.promote_to_prod
     needs: deploy-dev
-    uses: ./.github/workflows/rollback-service-deploy.yml
-    with:
-      environment: prod
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 30
+    # Shared with cleanup.yml: never two changes to the same environment's service at once.
+    concurrency:
+      group: rollback-service-deploy-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rollback-service-deploy
+        with:
+          environment: prod
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
