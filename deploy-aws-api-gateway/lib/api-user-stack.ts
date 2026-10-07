@@ -132,8 +132,9 @@ export class ApiUserStack extends cdk.Stack {
       endpointTypes: [apigw.EndpointType.REGIONAL],
       // Access logging needs API Gateway's account-level CloudWatch role. It is one setting
       // per account and region, shared by all APIs, so keep it if this stack is deleted.
-      cloudWatchRole: true,
-      cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN,
+      // A pull request's stack relies on dev's: otherwise each would leave a retained role behind.
+      cloudWatchRole: !config.pr,
+      ...(!config.pr && { cloudWatchRoleRemovalPolicy: cdk.RemovalPolicy.RETAIN }),
       // Stage v1 may still serve an older deployment while the integration stage tests the
       // new one, so CloudFormation must not delete replaced deployments.
       retainDeployments: true,
@@ -296,8 +297,12 @@ export class ApiUserStack extends cdk.Stack {
     // --- Alarms ------------------------------------------------------------------
     // They publish to the rollback service's topic (rollback-service, deployed first), whose one
     // Lambda routes rollback-factory-demo-apigateway-* alarms to its API Gateway manager.
+    // A pull request's environment has no rollback service: its alarms exist but notify nobody.
     const rollbackTopic = sns.Topic.fromTopicArn(this, 'RollbackTopic',
       this.formatArn({ service: 'sns', resource: config.rollbackTopicName }));
+    const notifyRollback = (alarm: cloudwatch.Alarm) => {
+      if (!config.pr) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
+    };
 
     const apiMetric = (metricName: string) => new cloudwatch.Metric({
       namespace: 'AWS/ApiGateway',
@@ -321,7 +326,7 @@ export class ApiUserStack extends cdk.Stack {
       errors: apiMetric(c.metricName),
       requests: apiMetric('Count'),
     }));
-    for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
+    alarms.forEach(notifyRollback);
 
     // Paired Lambda alarms: the same rates, counting only the errors of requests that reached
     // a backend Lambda (the access log has a lambdaRequestId) - errors it returned, threw or
@@ -358,14 +363,14 @@ export class ApiUserStack extends cdk.Stack {
         requests: apiMetric('Count'),
       });
     });
-    for (const alarm of lambdaAlarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
+    lambdaAlarms.forEach(notifyRollback);
 
     // Each backend's errors alarm: unhandled errors on its live alias, unqualified calls or $LATEST
     // (never integration). Named rollback-factory-demo-lambda-api-<resource>-errors-<env>: the rollback
     // service's Lambda manager moves that function's live alias back (rollback-config.json).
     const errorsAlarms = BACKENDS.map((backend) => {
       const alarm = this.errorsAlarm(config, backend);
-      alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
+      notifyRollback(alarm);
       return alarm;
     });
 

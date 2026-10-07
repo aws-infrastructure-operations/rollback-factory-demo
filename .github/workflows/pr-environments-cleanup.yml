@@ -1,0 +1,84 @@
+name: pr-environments-cleanup
+
+# Nightly (or by hand): deletes the pull request environments that were left behind, i.e. every
+# deploy-aws-api-gateway-pr-<n> / deploy-aws-lambda-pr-<n> stack whose pull request is no longer open.
+# api-gateway.yml and lambda.yml delete them when the PR is closed; this catches the ones that
+# failed to delete, or whose PR was closed while their deploy was still running.
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only list what would be deleted
+        type: boolean
+        default: false
+
+concurrency:
+  group: pr-environments-cleanup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    # dev's credentials and region: the PR environments are deployed with them
+    environment: dev
+    outputs:
+      stacks: ${{ steps.find.outputs.stacks }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: PR stacks whose pull request is closed
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # every stack that is not deleted yet (DELETE_FAILED included)
+          aws cloudformation list-stacks --output text --query \
+            "StackSummaries[?StackStatus!='DELETE_COMPLETE'].[StackName,StackStatus]" > stacks.txt
+          stale=()
+          while read -r name status; do
+            [[ "$name" =~ ^deploy-aws-(api-gateway|lambda)-pr-([1-9][0-9]*)$ ]] || continue
+            pr="${BASH_REMATCH[2]}"
+            state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || echo UNKNOWN)
+            echo "$name ($status): PR #$pr is $state"
+            # UNKNOWN (no such PR, or the API failed) is left alone: only delete what is surely closed
+            if [[ "$state" == CLOSED || "$state" == MERGED ]]; then stale+=("$name"); fi
+          done < stacks.txt
+          json=$(printf '%s\n' "${stale[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+          echo "stacks=$json" >> "$GITHUB_OUTPUT"
+          {
+            echo "### PR environments to delete"
+            if [[ "$json" == "[]" ]]; then echo "None."; else jq -r '.[] | "- `\(.)`"' <<<"$json"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  delete:
+    needs: find
+    if: needs.find.outputs.stacks != '[]' && !inputs.dry_run
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: ${{ fromJSON(needs.find.outputs.stacks) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: ./.github/actions/pr-environment-delete
+        with:
+          stack-name: ${{ matrix.stack }}

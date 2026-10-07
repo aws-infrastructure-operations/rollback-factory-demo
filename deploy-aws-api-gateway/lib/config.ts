@@ -1,6 +1,13 @@
 /** In promotion order. Only prod keeps its data when its stacks are deleted. */
 export const ENV_NAMES = ['dev', 'testing', 'staging', 'prod'] as const;
-export type EnvName = (typeof ENV_NAMES)[number];
+/**
+ * A pull request's own environment, pr-<number>: a short-lived copy of the stack that CI deploys and
+ * tests for each push to the PR, and deletes when the PR is closed (.github/workflows/api-gateway.yml).
+ */
+export type PrEnvName = `pr-${number}`;
+export type EnvName = (typeof ENV_NAMES)[number] | PrEnvName;
+export const PR_ENV_PATTERN = /^pr-[1-9]\d*$/;
+export const isPrEnv = (envName: string): envName is PrEnvName => PR_ENV_PATTERN.test(envName);
 
 export interface AlarmConfig {
   /** Alarm actions (SNS -> rollback service) on/off. Alarms still change state either way. */
@@ -36,6 +43,11 @@ export const liveVersionContextKey = (backend: Backend) => `live${backend[0].toU
 
 export interface EnvConfig {
   envName: EnvName;
+  /**
+   * A pull request's environment (pr-<number>): no alarm actions (there is no rollback service for
+   * it), no account-level CloudWatch role (dev's serves it), and nothing is kept when it is deleted.
+   */
+  pr: boolean;
   /** The REST API keeps the story's name: api-user-<env>. */
   apiName: string;
   stackName: string;
@@ -64,8 +76,9 @@ export interface EnvConfig {
   integrationStageName: string;
   /**
    * Where the stages are mapped on the environment's shared API domain (deploy-aws-dns-api-domains):
-   * https://api.dev.rollback…/user/v1/users is stage v1's /users. Undefined for environments
-   * without an API domain (testing, staging).
+   * https://api.dev.rollback…/user/v1/users is stage v1's /users. A pull request's environment uses
+   * dev's domain under its own path: …/user-pr-<n>/v1/users. Undefined for environments without an
+   * API domain (testing, staging).
    */
   customDomain?: CustomDomain;
   /**
@@ -91,7 +104,7 @@ export interface EnvConfig {
 export interface CustomDomain {
   /** api.dev.rollback.ionuteliantudor.com, or api.rollback.ionuteliantudor.com for prod */
   domainName: string;
-  /** The mapping key of each stage: user/v1 and user/integration. */
+  /** The mapping key of each stage: user/v1 and user/integration (user-pr-<n>/… for a pull request). */
   basePaths: { stage: string; integration: string };
 }
 
@@ -129,9 +142,10 @@ export function apiDomain(envName: string): string {
 }
 
 export function getConfig(envName: string | undefined, overrides: ConfigOverrides = {}): EnvConfig {
-  if (!ENV_NAMES.includes(envName as EnvName)) {
-    throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}>`);
+  if (!ENV_NAMES.includes(envName as (typeof ENV_NAMES)[number]) && !isPrEnv(envName ?? '')) {
+    throw new Error(`Unknown env "${envName}". Pass -c env=<${ENV_NAMES.join('|')}|pr-<number>>`);
   }
+  const pr = isPrEnv(envName as string);
   const chaosFailureRate = Number(overrides.chaosFailureRate ?? 0);
   if (!(chaosFailureRate >= 0 && chaosFailureRate <= 1)) {
     throw new Error(`chaosFailureRate must be between 0 and 1, got ${overrides.chaosFailureRate}`);
@@ -141,6 +155,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
 
   return {
     envName: envName as EnvName,
+    pr,
     apiName: `${API_NAME}-${envName}`,
     stackName: `${STACK_PREFIX}-${envName}`,
     resourceName,
@@ -161,12 +176,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     metricsNamespace: `${PROJECT_NAME}/${API_NAME}-${envName}`,
     stageName: STAGE_NAME,
     integrationStageName: INTEGRATION_STAGE_NAME,
-    customDomain: API_DOMAIN_ENVS.includes(envName as EnvName)
-      ? {
-        domainName: apiDomain(envName as string),
-        basePaths: { stage: `${API_PATH}/${STAGE_NAME}`, integration: `${API_PATH}/${INTEGRATION_STAGE_NAME}` },
-      }
-      : undefined,
+    customDomain: customDomain(envName as EnvName),
     live: live(overrides),
     retainData: envName === 'prod',
     alarms: {
@@ -181,6 +191,17 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     rollbackWindowMinutes: Number(overrides.rollbackWindowMinutes ?? 30),
     chaosFailureRate,
     deployId: overrides.deployId ? String(overrides.deployId) : undefined,
+  };
+}
+
+/** user/v1 on the environment's API domain; a pull request's user-pr-<n>/v1 on dev's. */
+function customDomain(envName: EnvName): CustomDomain | undefined {
+  const pr = isPrEnv(envName);
+  if (!pr && !API_DOMAIN_ENVS.includes(envName)) return undefined;
+  const path = pr ? `${API_PATH}-${envName}` : API_PATH;
+  return {
+    domainName: apiDomain(pr ? 'dev' : envName),
+    basePaths: { stage: `${path}/${STAGE_NAME}`, integration: `${path}/${INTEGRATION_STAGE_NAME}` },
   };
 }
 
