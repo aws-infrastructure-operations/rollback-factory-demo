@@ -52,16 +52,21 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   `ListInvalidations`, `GetInvalidation`; origin custom headers are never sent on), the release history of
   every environment's `frontend-user-<env>` (`dynamodb:Query` on `rollback-factory-demo-frontend-deployments-*`),
   and CloudFront metrics in us-east-1. For each `api-user-<env>` it reads the recorded deployments too
-  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`). Its only writes are restores, which
-  invoke `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those functions only):
+  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`). Its only writes go through the rollback
+  service: they invoke `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those
+  functions only):
   - `POST /api/api-gateways/<id>/restore` with `{"deployedAt": "..."}`: the rollback service re-imports
     that deployment's OpenAPI export from S3 and redeploys the stage, like `deployment:restore`.
   - `POST /api/cloudfront-distributions/<id>/restore` with `{"deployedAt": "..."}` (`frontend-user-<env>`
     only): the rollback service points the site origin at that record's release, invalidates `/*` and
     records a `restore`, like `deployment:restore`. A release that is live already is refused.
+  - `POST /api/lambda-functions/<name>/point-alias` with `{"aliasName": "...", "version": 3}` (functions
+    registered for rollback only): the rollback service points the alias at the version (see the Lambda
+    Functions panel below).
   The CloudFront behavior allows POST for it (OAC needs the body's SHA-256 in `x-amz-content-sha256`), and
   waits up to 60 s. It has no sign-in: anyone with the site URL can see the API, function and distribution
-  names, stages, versions, releases and settings, **and restore an API deployment or a site release**.
+  names, stages, versions, releases and settings, **restore an API deployment or a site release, and point
+  the aliases of the registered Lambda functions**.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -84,8 +89,14 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
 - **Lambda Functions** is live too: the functions with their runtime, aliases and last change, from
   `GET /api/lambda-functions`. Next to it, the selected function's published **versions** (and the aliases
   serving each), its **aliases** (with weights), its **configuration**, and **monitoring**: invocations,
-  errors, throttles, durations and concurrency over 24 hours, fetched only when that tab opens. Rollback
-  is disabled there too.
+  errors, throttles, durations and concurrency over 24 hours, fetched only when that tab opens.
+  For functions registered for rollback (`rollback-service/rollback-config.json`, passed to the dashboard
+  API as `REGISTERED_FUNCTIONS` at deploy time), each alias has a **Point to version** menu and each version
+  a **Point alias** menu, after a confirm: `POST /api/lambda-functions/<name>/point-alias` with
+  `{"aliasName": "...", "version": 3}`, carried out by that environment's rollback service. Moving the
+  watched alias (`live`) restores `$LATEST` from the version's archived package too; going back is a
+  manual rollback (cooldown, the version left is marked rolled back from), going forward a promotion. Any
+  other alias (`integration`) just moves. Every other function's menus are disabled.
 - **CloudFront Distributions** is live as well: every distribution with its status and, for this project's
   sites, the release it serves, from `GET /api/cloudfront-distributions`. Next to it, the selected one's
   **deployments** (the activations, restores and rollbacks recorded for `frontend-user-<env>`, marked live,

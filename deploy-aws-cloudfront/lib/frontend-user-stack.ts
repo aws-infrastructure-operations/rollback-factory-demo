@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
@@ -65,9 +66,13 @@ export class FrontendUserStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
       bundling: { minify: true, sourceMap: true },
-      // finds the deployments table of each frontend-user-<env> distribution and api-user-<env> API,
-      // and the rollback service of each environment
-      environment: { PROJECT_NAME },
+      environment: {
+        // finds the deployments table of each frontend-user-<env> distribution and api-user-<env> API,
+        // and the rollback service of each environment
+        PROJECT_NAME,
+        // the functions whose aliases the Lambda panel may point (registered-functions.ts)
+        REGISTERED_FUNCTIONS: JSON.stringify(registeredFunctions()),
+      },
     });
     // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
     // API ids are 10 characters: '??????????' matches one id, where '*' would also match
@@ -236,4 +241,15 @@ export class FrontendUserStack extends cdk.Stack {
       rollbackWindowMinutes: config.rollbackWindowMinutes,
     }));
   }
+}
+
+/**
+ * The functions registered for rollback in rollback-service/rollback-config.json, with <env> kept:
+ * the dashboard of any environment resolves a name to that environment's rollback service.
+ */
+export function registeredFunctions(file = path.join(__dirname, '..', '..', 'rollback-service', 'rollback-config.json')) {
+  const config = JSON.parse(fs.readFileSync(file, 'utf8')) as { functions?: Array<{ name: string; enabled?: boolean; alias?: string }> };
+  return (config.functions ?? [])
+    .filter((fn) => fn.enabled !== false)
+    .map((fn) => ({ name: fn.name, alias: fn.alias ?? 'live' }));
 }

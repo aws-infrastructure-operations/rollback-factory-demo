@@ -62,12 +62,11 @@ export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'
 }
 
 /**
- * POSTs a restore: which recorded deployment (its deployedAt), and an optional reason. Throws with
- * the dashboard API's message when it refuses. Function URLs behind OAC need the body's SHA-256
- * in x-amz-content-sha256 to sign a POST.
+ * POSTs a JSON body to the dashboard API. Throws with its message when it refuses. Function URLs
+ * behind OAC need the body's SHA-256 in x-amz-content-sha256 to sign a POST.
  */
-async function postRestore(url: string, deployedAt: string, reason?: string): Promise<void> {
-  const body = JSON.stringify({ deployedAt, ...(reason && { reason }) });
+async function postJson(url: string, data: unknown): Promise<void> {
+  const body = JSON.stringify(data);
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
   const response = await fetch(url, {
     method: 'POST',
@@ -86,7 +85,7 @@ async function postRestore(url: string, deployedAt: string, reason?: string): Pr
 
 /** Restores the API's stage to a recorded deployment. */
 export const restoreApiDeployment = (apiId: string, deployedAt: string, reason?: string) =>
-  postRestore(`/api/api-gateways/${encodeURIComponent(apiId)}/restore`, deployedAt, reason);
+  postJson(`/api/api-gateways/${encodeURIComponent(apiId)}/restore`, { deployedAt, ...(reason && { reason }) });
 
 // --- Lambda functions --------------------------------------------------------------------------
 
@@ -113,6 +112,8 @@ export interface LambdaFunctionDetails {
   /** additionalVersions: version → weight (0..1) of a weighted alias */
   aliases: Array<{ name: string; version: string; description?: string; additionalVersions?: Record<string, number> }>;
   configuration: Array<{ label: string; value: string }>;
+  /** functions registered for rollback only: the alias the rollback service watches; their aliases can be pointed */
+  managedAlias?: string;
 }
 
 export interface LambdaFunctionMetrics {
@@ -139,6 +140,10 @@ export const fetchLambdaFunctionDetails = (name: string, signal?: AbortSignal) =
 
 export const fetchLambdaFunctionMetrics = (name: string, signal?: AbortSignal) =>
   getJson<LambdaFunctionMetrics>(`/api/lambda-functions/${encodeURIComponent(name)}/metrics`, signal);
+
+/** Points an alias of a registered function at a published version (the rollback service does it). */
+export const pointLambdaAlias = (name: string, aliasName: string, version: number) =>
+  postJson(`/api/lambda-functions/${encodeURIComponent(name)}/point-alias`, { aliasName, version });
 
 // --- CloudFront distributions --------------------------------------------------------------------
 
@@ -199,4 +204,4 @@ export const fetchDistributionMetrics = (id: string, signal?: AbortSignal) =>
 
 /** Makes the distribution serve a recorded release again (frontend-user-<env> only). */
 export const restoreDistributionRelease = (id: string, deployedAt: string, reason?: string) =>
-  postRestore(distributionUrl(id, '/restore'), deployedAt, reason);
+  postJson(distributionUrl(id, '/restore'), { deployedAt, ...(reason && { reason }) });

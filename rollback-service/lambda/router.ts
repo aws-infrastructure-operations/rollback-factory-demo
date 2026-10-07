@@ -7,6 +7,7 @@
 // Direct invocations:
 //   { type: 'scheduled-check' }                     EventBridge: Lambda manager's sync / stable / re-check
 //   { type: 'sync', functionName? }                 deploy-aws-lambda after promotion, manual rollbacks
+//   { type: 'point-alias', functionName, ... }      the dashboard's alias/version menus: Lambda manager
 //   { type: 'restore', manager: 'apigateway', ... } deploy-aws-api-gateway: deployment:restore, the dashboard
 //   { type: 'restore', manager: 'cloudfront', ... } the dashboard's Restore button (deploy-aws-cloudfront)
 import type { EnvName } from '../lib/config.js';
@@ -20,9 +21,20 @@ export interface AlarmNotification {
 
 type SnsRecord = { Sns: { Message: string } };
 
+/** Points an alias of a registered function at a version (see managers/lambda/rollback.ts: pointAlias). */
+export interface PointAliasEvent {
+  type: 'point-alias';
+  functionName: string;
+  aliasName: string;
+  version: number;
+  actor?: string;
+  reason?: string;
+}
+
 export type ServiceEvent =
   | { type: 'scheduled-check' }
   | { type: 'sync'; functionName?: string }
+  | PointAliasEvent
   | { type: 'restore'; manager: 'apigateway' | 'cloudfront'; deployedAt: string; reason?: string; actor?: string }
   | { Records: SnsRecord[] };
 
@@ -31,8 +43,8 @@ export interface Managers {
   apigatewayRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
   cloudfront: (alarm: AlarmNotification, env: EnvName) => Promise<unknown>;
   cloudfrontRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
-  /** The Lambda manager takes the raw event: SNS records, sync and scheduled checks. */
-  lambda: (event: { type: 'scheduled-check' } | { type: 'sync'; functionName?: string } | { Records: SnsRecord[] }) => Promise<unknown[]>;
+  /** The Lambda manager takes the raw event: SNS records, sync, scheduled checks and alias moves. */
+  lambda: (event: { type: 'scheduled-check' } | { type: 'sync'; functionName?: string } | PointAliasEvent | { Records: SnsRecord[] }) => Promise<unknown[]>;
 }
 
 const skip = (reason: string) => {
@@ -82,6 +94,11 @@ export function createRouter(envName: EnvName, managers: Managers) {
       case 'scheduled-check':
       case 'sync':
         return managers.lambda(event);
+      case 'point-alias': {
+        // the one result: what the dashboard shows
+        const [result] = await managers.lambda(event);
+        return result;
+      }
       case 'restore':
         if (event.manager === 'apigateway') return managers.apigatewayRestore(event, envName);
         if (event.manager === 'cloudfront') return managers.cloudfrontRestore(event, envName);

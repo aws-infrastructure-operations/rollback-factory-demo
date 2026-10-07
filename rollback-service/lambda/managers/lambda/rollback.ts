@@ -68,9 +68,20 @@ export interface AlarmMessage {
   Trigger?: AlarmTrigger;
 }
 
+/** Points an alias of a registered function at a version, chosen by hand (the dashboard's menus). */
+export interface PointAliasRequest {
+  type: 'point-alias';
+  functionName: string;
+  aliasName: string;
+  version: number;
+  actor?: string;
+  reason?: string;
+}
+
 export type RollbackEvent =
   | { type: 'scheduled-check' }
   | { type: 'sync'; functionName?: string }
+  | PointAliasRequest
   | { Records: Array<{ Sns: { Message: string } }> };
 
 /**
@@ -590,6 +601,75 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
   }
 
   // -------------------------------------------------------------------------------------------
+  // Pointing an alias at a version by hand
+  // -------------------------------------------------------------------------------------------
+
+  // The registered alias (live) moves like the manual rollback workflow: alias, $LATEST restored
+  // from the version's zip, and the archive updated. Going back counts as a manual rollback (starts
+  // the cooldown, not the consecutive-rollback count, marks the version left as rolled back from);
+  // going forward as a promotion. Any other alias of the function (integration) just moves.
+  async function pointAlias(req: PointAliasRequest) {
+    const { functionName, aliasName, version: target } = req;
+    const registration = registry.get(functionName);
+    if (!registration) return skip(`${functionName} is not registered for rollback (see rollback-config.json)`);
+    if (!Number.isInteger(target) || target < 1) return skip(`version must be a published version number, got ${target}`);
+
+    const clients = await deps.scopedClients(functionName);
+    const { lambda, ddb } = clients;
+    // archive the newest version and record any deploy first, like a rollback does
+    await syncFunction(clients, functionName);
+
+    const alias = await lambda.send(new GetAliasCommand({ FunctionName: functionName, Name: aliasName }));
+    const current = Number(alias.FunctionVersion);
+    if (current === target) return skip(`${functionName}:${aliasName} already points to version ${target}`);
+    const by = req.actor ?? 'manual';
+    const reason = req.reason ?? `${aliasName} pointed to v${target} by ${by}`;
+
+    if (aliasName !== registration.alias) {
+      // RevisionId makes the update fail if someone else moved the alias since we read it.
+      await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: aliasName, FunctionVersion: String(target), RevisionId: alias.RevisionId }));
+      console.log(`${functionName}:${aliasName}: ${current} -> ${target} (${reason})`);
+      return { pointed: true, functionName, aliasName, from: current, to: target, kind: 'alias' };
+    }
+
+    const archivedTarget = await getVersionItem(ddb, TABLE, functionName, target);
+    if (!archivedTarget) return skip(`${functionName} version ${target} is not archived, so $LATEST can't be restored from it`);
+
+    await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: aliasName, FunctionVersion: String(target), RevisionId: alias.RevisionId }));
+    await restoreLatest(clients, functionName, archivedTarget);
+    const kind = target < current ? 'rollback' : 'promotion';
+    if (kind === 'rollback') {
+      // manual: starts the cooldown but resets the consecutive-rollback count, like the workflow
+      await recordRollback(ddb, functionName, { from: current, to: target, by, rollbackCount: 0, reason });
+    } else {
+      await ddb.send(new PutItemCommand({
+        TableName: TABLE,
+        Item: {
+          functionName: S(functionName),
+          sk: S(CURRENT_SK),
+          version: N(target),
+          previousVersion: N(current),
+          updatedBy: S(by),
+          updatedAt: S(nowIso()),
+          rollbackCount: N(0),
+        },
+      }));
+    }
+    // the target is live now (it may never have been, if chosen by hand)
+    await markLive(ddb, TABLE, functionName, target, nowIso());
+    console.log(`${functionName}:${aliasName}: ${current} -> ${target} (${kind}, ${reason}); $LATEST restored`);
+    return {
+      pointed: true,
+      functionName,
+      aliasName,
+      from: current,
+      to: target,
+      kind,
+      restoredFrom: `s3://${archivedTarget.s3Bucket}/${archivedTarget.s3Key}`,
+    };
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Pre-hook
   // -------------------------------------------------------------------------------------------
 
@@ -619,6 +699,7 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
       return [...stable, ...rollbacks];
     }
     if ('type' in event && event.type === 'sync') return syncAll(event.functionName);
+    if ('type' in event && event.type === 'point-alias') return [await pointAlias(event)];
 
     const results = [];
     for (const record of ('Records' in event ? event.Records : []) ?? []) {
