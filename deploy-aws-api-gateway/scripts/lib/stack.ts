@@ -48,5 +48,5 @@ export const deploymentTarget = (config: EnvConfig, outputs: StackOutputs): Depl
   stageName: outputs.StageName,
   specBucket: outputs.SpecBucketName,
   table: outputs.DeploymentsTableName,
-  handlerFunction: config.resourceName('handler'),
+  backendFunctions: Object.values(config.backends).map((b) => b.functionName),
 });

@@ -47,7 +47,7 @@ LAYOUT (left to right):
       - "Amazon EventBridge" — label "scheduled check", caption "every 5 min"
       - "AWS Lambda" — label "rollback-service", with a small router chip "alarm name → lambda manager"
       - Small "AWS STS" icon next to it, caption "role scoped to one function"
-      - Small file icon "rollback-config.json", caption "registered functions + alarms"
+      - Small file icon "rollback-config.json", caption "registered: service-lambda, api-users, api-messages"
 
    c) Group "Version archive" (bottom, spanning under both groups, inside rollback-service):
       - "Amazon S3" — label "lambda-archive", caption "<fn>/<fn>-<version>.zip"

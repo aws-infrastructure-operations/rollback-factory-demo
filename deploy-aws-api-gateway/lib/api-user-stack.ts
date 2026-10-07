@@ -12,7 +12,14 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
-import { EnvConfig } from './config.js';
+import { Backend, BACKENDS, EnvConfig } from './config.js';
+
+/** One backend Lambda with the aliases the stages invoke. */
+interface BackendResources {
+  fn: NodejsFunction;
+  live: lambda.Alias;
+  integration: lambda.Alias;
+}
 
 export interface ApiUserStackProps extends cdk.StackProps {
   config: EnvConfig;
@@ -58,41 +65,16 @@ export class ApiUserStack extends cdk.Stack {
     });
 
     // --- Backend --------------------------------------------------------------
-    const handler = new NodejsFunction(this, 'ApiHandler', {
-      functionName: name('handler'),
-      entry: path.join(__dirname, '..', 'lambda', 'api', 'handler.ts'),
-      runtime: lambda.Runtime.NODEJS_24_X,
-      architecture: lambda.Architecture.ARM_64,
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        API_NAME: config.apiName,
-        CHAOS_FAILURE_RATE: String(config.chaosFailureRate),
-      },
-      logGroup: new logs.LogGroup(this, 'ApiHandlerLogs', {
-        retention: logs.RetentionDays.TWO_WEEKS,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-      bundling: { minify: true, sourceMap: true },
-      // Keep every published version: specs recorded before the "live" alias reference them.
-      currentVersionOptions: { removalPolicy: cdk.RemovalPolicy.RETAIN },
-    });
-    // Each stage invokes its own alias, named by its `lambdaAlias` stage variable:
+    // One Lambda per resource (/users, /messages), so each can be rolled back on its own: both are
+    // registered in rollback-service/rollback-config.json with their errors alarm (below).
+    // Each stage invokes its own alias of them, named by its `lambdaAlias` stage variable:
     // - `integration` moves to the newly published version on every `cdk deploy`
     // - `live` (stage v1) stays where it is when CI passes config.live; scripts/promote-deployment.ts
-    //   moves it once the integration tests passed. Without config.live it moves on deploy too.
-    // An API rollback re-imports an old spec but keeps the alias, so it never rolls the code
-    // back (see pointToAlias in lambda/rollback/plan.ts).
-    const integrationAlias = new lambda.Alias(this, 'ApiHandlerIntegration', {
-      aliasName: 'integration',
-      version: handler.currentVersion,
-    });
-    const handlerAlias = new lambda.Alias(this, 'ApiHandlerLive', {
-      aliasName: 'live',
-      version: config.live?.lambdaVersion
-        ? lambda.Version.fromVersionAttributes(this, 'LiveVersion', { lambda: handler, version: config.live.lambdaVersion })
-        : handler.currentVersion,
-    });
+    //   moves it once the integration tests passed, and the rollback service moves it back on its
+    //   errors alarm. Without config.live it moves on deploy too.
+    // An API rollback re-imports an old spec but keeps the aliases, so it never rolls the code back
+    // (see pointToAlias in rollback-service/lambda/managers/apigateway/plan.ts).
+    const backends = Object.fromEntries(BACKENDS.map((backend) => [backend, this.backend(config, backend)])) as Record<Backend, BackendResources>;
 
     // --- Access logs ----------------------------------------------------------
     // One JSON line per request. errorType / integration* tell API Gateway failures
@@ -139,7 +121,7 @@ export class ApiUserStack extends cdk.Stack {
       retainDeployments: true,
       deployOptions: {
         stageName: config.stageName,
-        variables: { lambdaAlias: handlerAlias.aliasName },
+        variables: { lambdaAlias: 'live' },
         metricsEnabled: true,
         throttlingRateLimit: 50,
         throttlingBurstLimit: 100,
@@ -210,27 +192,28 @@ export class ApiUserStack extends cdk.Stack {
       validateRequestBody: true,
     });
 
-    // Integrate with the stage's alias (stage variable lambdaAlias), so v1 runs the promoted
-    // code and the integration stage the code under test - also after an API rollback.
-    const integration = new apigw.Integration({
-      type: apigw.IntegrationType.AWS_PROXY,
-      integrationHttpMethod: 'POST',
-      uri: `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}:lambda:path/2015-03-31/functions/`
-        + `${handler.functionArn}:\${stageVariables.lambdaAlias}/invocations`,
-    });
-    for (const resourceName of ['users', 'messages']) {
-      const resource = this.api.root.addResource(resourceName);
+    // Each resource integrates with its own function's stage alias (stage variable lambdaAlias), so
+    // v1 runs the promoted code and the integration stage the code under test - also after an API rollback.
+    for (const backend of BACKENDS) {
+      const { fn, live, integration: integrationAlias } = backends[backend];
+      const integration = new apigw.Integration({
+        type: apigw.IntegrationType.AWS_PROXY,
+        integrationHttpMethod: 'POST',
+        uri: `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}:lambda:path/2015-03-31/functions/`
+          + `${fn.functionArn}:\${stageVariables.lambdaAlias}/invocations`,
+      });
+      const resource = this.api.root.addResource(backend);
       resource.addMethod('GET', integration);
       resource.addMethod('POST', integration, {
         requestValidator: bodyValidator,
         requestModels: { 'application/json': messageModel },
       });
-    }
-    for (const alias of [handlerAlias, integrationAlias]) {
-      alias.addPermission('ApiGatewayInvoke', {
-        principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
-        sourceArn: this.api.arnForExecuteApi('*', '/*', '*'),
-      });
+      for (const alias of [live, integrationAlias]) {
+        alias.addPermission('ApiGatewayInvoke', {
+          principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+          sourceArn: this.api.arnForExecuteApi('*', `/*/${backend}`, '*'),
+        });
+      }
     }
 
     // CI keeps stage v1 on the deployment it serves and deploys to the integration stage;
@@ -243,7 +226,7 @@ export class ApiUserStack extends cdk.Stack {
     const integrationStage = new apigw.Stage(this, 'IntegrationStage', {
       deployment: this.api.latestDeployment!,
       stageName: config.integrationStageName,
-      variables: { lambdaAlias: integrationAlias.aliasName },
+      variables: { lambdaAlias: 'integration' },
       throttlingRateLimit: 10,
       throttlingBurstLimit: 20,
     });
@@ -301,11 +284,11 @@ export class ApiUserStack extends cdk.Stack {
     for (const alarm of alarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
     // Paired Lambda alarms: the same rates, counting only the errors of requests that reached
-    // the backend Lambda (the access log has a lambdaRequestId) - errors it returned, threw or
+    // a backend Lambda (the access log has a lambdaRequestId) - errors it returned, threw or
     // timed out on. Errors API Gateway produced on its own (authorizer, validator, unknown route,
     // throttling, invoke permissions) are left out. While the paired Lambda alarm is in ALARM the
-    // rollback service skips the API rollback: the API always invokes the latest Lambda, so
-    // re-importing an old spec would not fix the code.
+    // rollback service skips the API rollback: the API always invokes the latest Lambdas, so
+    // re-importing an old spec would not fix the code (each Lambda's own errors alarm is for that).
     const lambdaAlarms = errorClasses.map((c) => {
       const metricName = `Lambda${c.metricName}`;
       new logs.MetricFilter(this, `LambdaErrorsFilter${c.kind}`, {
@@ -323,7 +306,7 @@ export class ApiUserStack extends cdk.Stack {
       return this.errorRateAlarm(`AlarmLambda${c.kind}`, config, {
         ...c,
         alarmName: config.lambdaAlarmNames[c.key],
-        description: `More than ${c.threshold}% ${c.kind} responses produced by the backend Lambda `
+        description: `More than ${c.threshold}% ${c.kind} responses produced by the backend Lambdas `
           + `(min ${c.minRequests} requests/min) on ${config.apiName}/${config.stageName}. `
           + `While in ALARM, ${config.alarmNames[c.key]} does not roll the API back.`,
         errors: new cloudwatch.Metric({
@@ -337,24 +320,14 @@ export class ApiUserStack extends cdk.Stack {
     });
     for (const alarm of lambdaAlarms) alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
-    // Informational: unhandled errors thrown by the backend Lambda (all versions).
-    // Comparing it with the 5xx alarm tells code failures apart from API Gateway
-    // failures. It notifies the topic (e.g. e-mail) but never triggers a rollback: the rollback
-    // service's API Gateway manager only acts on config.alarmNames.
-    const lambdaErrorsAlarm = new cloudwatch.Alarm(this, 'AlarmLambdaErrors', {
-      alarmName: config.lambdaErrorsAlarmName,
-      alarmDescription:
-        `${handler.functionName} threw unhandled errors (Lambda Errors > 0 in 2 of 3 minutes). `
-        + 'Informational - does not trigger a rollback.',
-      metric: handler.metricErrors({ period: cdk.Duration.minutes(1), statistic: cloudwatch.Stats.SUM }),
-      threshold: 0,
-      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      evaluationPeriods: config.alarms.evaluationPeriods,
-      datapointsToAlarm: config.alarms.datapointsToAlarm,
-      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
-      actionsEnabled: config.alarms.notificationsEnabled,
+    // Each backend's errors alarm: unhandled errors on its live alias, unqualified calls or $LATEST
+    // (never integration). Named rollback-factory-demo-lambda-api-<resource>-errors-<env>: the rollback
+    // service's Lambda manager moves that function's live alias back (rollback-config.json).
+    const errorsAlarms = BACKENDS.map((backend) => {
+      const alarm = this.errorsAlarm(config, backend);
+      alarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
+      return alarm;
     });
-    lambdaErrorsAlarm.addAlarmAction(new cwActions.SnsAction(rollbackTopic));
 
     // --- Outputs --------------------------------------------------------------
     const out = (name: string, value: string) =>
@@ -370,7 +343,11 @@ export class ApiUserStack extends cdk.Stack {
     out('DeploymentsTableName', this.deploymentsTable.tableName);
     out('Alarm4xxName', alarms[0].alarmName);
     out('Alarm5xxName', alarms[1].alarmName);
-    out('LambdaErrorsAlarmName', lambdaErrorsAlarm.alarmName);
+    BACKENDS.forEach((backend, i) => {
+      const key = `${backend[0].toUpperCase()}${backend.slice(1)}`;
+      out(`${key}FunctionName`, backends[backend].fn.functionName);
+      out(`${key}ErrorsAlarmName`, errorsAlarms[i].alarmName);
+    });
     out('LambdaAlarm4xxName', lambdaAlarms[0].alarmName);
     out('LambdaAlarm5xxName', lambdaAlarms[1].alarmName);
     out('AccessLogGroupName', this.accessLogGroup.logGroupName);
@@ -382,7 +359,8 @@ export class ApiUserStack extends cdk.Stack {
       stageName: config.stageName,
       specBucket: this.specBucket.bucketName,
       table: this.deploymentsTable.tableName,
-      handlerFunctionArn: handler.functionArn,
+      // every backend: an API rollback keeps their integrations on the stage's alias
+      backendFunctionArns: BACKENDS.map((backend) => backends[backend].fn.functionArn),
       alarmNames: Object.values(config.alarmNames),
       // API alarm -> its paired Lambda alarm and the metrics the manager compares
       alarmPairs: errorClasses.map((c) => ({
@@ -395,6 +373,78 @@ export class ApiUserStack extends cdk.Stack {
       rollbackWindowMinutes: config.rollbackWindowMinutes,
       evaluationMinutes: config.alarms.evaluationPeriods,
     }));
+  }
+
+  /** The Lambda serving /<backend>, with its integration alias and its live alias (pinned by config.live). */
+  private backend(config: EnvConfig, backend: Backend): BackendResources {
+    const id = `${backend[0].toUpperCase()}${backend.slice(1)}`;
+    const fn = new NodejsFunction(this, `${id}Handler`, {
+      functionName: config.backends[backend].functionName,
+      description: `/${backend} of ${config.apiName}; rolled back on its own by the rollback service`,
+      entry: path.join(__dirname, '..', 'lambda', 'api', `${backend}.ts`),
+      runtime: lambda.Runtime.NODEJS_24_X,
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      environment: {
+        API_NAME: config.apiName,
+        CHAOS_FAILURE_RATE: String(config.chaosFailureRate),
+      },
+      logGroup: new logs.LogGroup(this, `${id}HandlerLogs`, {
+        retention: logs.RetentionDays.TWO_WEEKS,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+      bundling: { minify: true, sourceMap: true },
+      // Keep every published version: the rollback service rolls live back to older ones.
+      currentVersionOptions: { removalPolicy: cdk.RemovalPolicy.RETAIN },
+    });
+    const liveVersion = config.live?.lambdaVersions[backend];
+    return {
+      fn,
+      integration: new lambda.Alias(this, `${id}Integration`, { aliasName: 'integration', version: fn.currentVersion }),
+      live: new lambda.Alias(this, `${id}Live`, {
+        aliasName: 'live',
+        version: liveVersion
+          ? lambda.Version.fromVersionAttributes(this, `${id}LiveVersion`, { lambda: fn, version: liveVersion })
+          : fn.currentVersion,
+      }),
+    };
+  }
+
+  /**
+   * Errors (unhandled errors and timeouts) of a backend on its live alias, unqualified calls and
+   * $LATEST, never the integration alias: >= 1 in a minute. Like deploy-aws-lambda's alarm, so the
+   * rollback service's Lambda manager finds the function from the FunctionName dimension.
+   */
+  private errorsAlarm(config: EnvConfig, backend: Backend): cloudwatch.Alarm {
+    const id = `${backend[0].toUpperCase()}${backend.slice(1)}`;
+    const functionName = config.backends[backend].functionName;
+    const errorsFor = (resource: string) => new cloudwatch.Metric({
+      namespace: 'AWS/Lambda',
+      metricName: 'Errors',
+      dimensionsMap: { FunctionName: functionName, Resource: resource },
+      statistic: cloudwatch.Stats.SUM,
+      period: cdk.Duration.minutes(1),
+    });
+    return new cloudwatch.Alarm(this, `Alarm${id}Errors`, {
+      alarmName: config.backends[backend].errorsAlarmName,
+      alarmDescription: `Errors on ${functionName}:live or $LATEST; the rollback service rolls ${functionName}:live back`,
+      metric: new cloudwatch.MathExpression({
+        expression: 'FILL(live, 0) + FILL(unqualified, 0) + FILL(latest, 0)',
+        usingMetrics: {
+          live: errorsFor(`${functionName}:live`),
+          unqualified: errorsFor(functionName),
+          latest: errorsFor(`${functionName}:$LATEST`),
+        },
+        label: `${functionName} errors (live + $LATEST)`,
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 1,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      actionsEnabled: config.alarms.notificationsEnabled,
+    });
   }
 
   /**

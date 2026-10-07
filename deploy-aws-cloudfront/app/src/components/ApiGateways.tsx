@@ -38,11 +38,21 @@ async function routeChanges(apiId: string, target: RecordedApiDeployment, live: 
   }
 }
 
+/** "users v3 · messages v5" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
+function lambdaVersionsHint(d: RecordedApiDeployment) {
+  if (d.lambdaVersions) {
+    return Object.entries(d.lambdaVersions)
+      .map(([fn, version]) => `${/-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn} v${version}`)
+      .join(' · ');
+  }
+  return d.lambdaVersion && `Lambda v${d.lambdaVersion}`;
+}
+
 /** One recorded deployment as a menu hint: where it came from and what happened to it. */
 const recordHint = (d: RecordedApiDeployment) => [
   d.source,
   d.commit?.slice(0, 7),
-  d.lambdaVersion && `Lambda v${d.lambdaVersion}`,
+  lambdaVersionsHint(d),
   d.verified && 'verified',
   d.rolledBack && 'rolled back',
 ].filter(Boolean).join(' · ');

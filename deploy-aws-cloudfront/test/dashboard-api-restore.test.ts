@@ -17,7 +17,10 @@ const record = (deployedAt: string, extra: Record<string, unknown> = {}) => ({
 });
 
 const records = [
-  record('2026-10-07T12:00:00.000Z', { current: true, verifiedAt: '2026-10-07T12:05:00.000Z', commitSha: '74f6e80aaaa', lambdaVersion: '7' }),
+  record('2026-10-07T12:00:00.000Z', {
+    current: true, verifiedAt: '2026-10-07T12:05:00.000Z', commitSha: '74f6e80aaaa',
+    lambdaVersions: { 'rollback-factory-demo-api-messages-dev': '3', 'rollback-factory-demo-api-users-dev': '7' },
+  }),
   record('2026-10-07T10:00:00.000Z', { stable: false, rolledBackAt: '2026-10-07T10:20:00.000Z' }),
   record('2026-10-06T09:00:00.000Z', { stable: true, stableForHumanReadable: '1 day', verifiedAt: '2026-10-06T09:05:00.000Z' }),
   // an earlier API of the same name
@@ -72,7 +75,8 @@ test('lists the recorded deployments of this API id, newest first, with their st
   assert.equal(sent[0].input.ScanIndexForward, false);
   assert.deepEqual(recorded!.map((d) => d.deployedAt), ['2026-10-07T12:00:00.000Z', '2026-10-07T10:00:00.000Z', '2026-10-06T09:00:00.000Z']);
   assert.deepEqual(recorded![0], {
-    deployedAt: '2026-10-07T12:00:00.000Z', deploymentId: 'dep-12', stageName: 'v1', lambdaVersion: '7',
+    deployedAt: '2026-10-07T12:00:00.000Z', deploymentId: 'dep-12', stageName: 'v1',
+    lambdaVersions: { 'rollback-factory-demo-api-messages-dev': '3', 'rollback-factory-demo-api-users-dev': '7' },
     spec: 's3://rollback-factory-demo-860193728768-deployments-dev/api-user-dev/2026-10-07T12:00:00.000Z/openapi.json',
     source: 'cicd', actor: 'github:someone', commit: '74f6e80aaaa', current: true, verified: true, rolledBack: false,
   });

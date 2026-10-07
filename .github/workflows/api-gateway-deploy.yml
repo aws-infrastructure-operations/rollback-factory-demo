@@ -95,6 +95,24 @@ jobs:
       - name: Mark deployment verified (rollbacks only restore verified deployments)
         run: npm run -s deployment:verify -- --env "$API_ENV"
 
+      # The backends are registered in rollback-service/rollback-config.json: archive their new
+      # versions and record the promotion (liveAt), so their errors alarms can roll live back.
+      - name: Sync the rollback service's version archive (users and messages backends)
+        run: |
+          set -euo pipefail
+          for backend in users messages; do
+            fn="rollback-factory-demo-api-$backend-$API_ENV"
+            FUNCTION_ERROR=$(aws lambda invoke --function-name "rollback-factory-demo-rollback-service-$API_ENV" \
+              --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \
+              --payload "{\"type\":\"sync\",\"functionName\":\"$fn\"}" \
+              --query 'FunctionError' --output text "$RUNNER_TEMP/sync-$backend.json")
+            cat "$RUNNER_TEMP/sync-$backend.json"; echo
+            if [[ "$FUNCTION_ERROR" != "None" ]] || jq -e 'any(.[]; .synced != true)' "$RUNNER_TEMP/sync-$backend.json" >/dev/null; then
+              echo "::error::Sync of $fn failed: $(cat "$RUNNER_TEMP/sync-$backend.json")"
+              exit 1
+            fi
+          done
+
       - name: Integration test failures -> job summary
         if: failure() && steps.integration.outcome == 'failure'
         run: |
