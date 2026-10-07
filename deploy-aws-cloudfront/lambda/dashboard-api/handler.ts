@@ -7,9 +7,11 @@ import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { LambdaClient } from '@aws-sdk/client-lambda';
+import { S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
 import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
+import { getRecordedSpec } from './api-gateway-specs.js';
 import { listApiGateways, type ApiType } from './api-gateways.js';
 import { isAliasName, isVersion, pointAlias } from './lambda-aliases.js';
 import {
@@ -43,6 +45,7 @@ const cloudfront = new CloudFrontClient({});
 // CloudFront metrics only exist in us-east-1
 const edgeCloudwatch = new CloudWatchClient({ region: 'us-east-1' });
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const s3 = new S3Client({});
 // the functions whose aliases the dashboard may point, from rollback-service/rollback-config.json
 const registered = parseRegistered(process.env.REGISTERED_FUNCTIONS);
 
@@ -62,6 +65,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  * GET /api/api-gateways: the region's APIs.
  * GET /api/api-gateways/<id>?type=REST|HTTP|WEBSOCKET: one API's stages, deployments and configuration,
  *   and for the APIs this project deploys, their recorded deployments.
+ * GET /api/api-gateways/<id>/spec?deployedAt=...: the routes a recorded deployment serves (its OpenAPI export).
  * POST /api/api-gateways/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded deployment.
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
  * POST /api/lambda-functions/<name>/point-alias {"aliasName": "...", "version": 3}: points an alias of a
@@ -76,7 +80,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  */
 export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
   const { method } = event.requestContext.http;
-  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias))?)?$/.exec(event.rawPath);
+  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
   const restore = sub === 'restore' && (resource === 'api-gateways' || resource === 'cloudfront-distributions');
@@ -100,6 +104,7 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResul
 
 async function apiGateways(id: string | undefined, sub: string | undefined, query: URLSearchParams) {
   const region = process.env.AWS_REGION!;
+  if (sub === 'spec') return apiSpec(id!, query.get('deployedAt'));
   if (sub) return json(404, { message: 'Not found' });
   if (!id) return json(200, { region, apis: await listApiGateways(rest, v2) });
   const type = query.get('type') as ApiType;
@@ -110,7 +115,21 @@ async function apiGateways(id: string | undefined, sub: string | undefined, quer
   return json(200, recorded ? { ...details, recorded } : details);
 }
 
-const RESTORE_BODY = '{"deployedAt": "<ISO 8601>", "reason"?: "<up to 200 characters>"}';
+/** The routes a recorded deployment of a REST API serves, from its OpenAPI export in S3. */
+async function apiSpec(id: string, deployedAt: string | null) {
+  if (!isApiId(id) || !isDeployedAt(deployedAt)) return json(400, { message: 'Expected a REST API id and ?deployedAt=<ISO 8601>' });
+  let name: string;
+  try {
+    name = (await rest.send(new GetRestApiCommand({ restApiId: id }))).name ?? id;
+  } catch (err) {
+    if ((err as Error).name === 'NotFoundException') return json(404, { message: `No REST API ${id}` });
+    throw err;
+  }
+  const outcome = await getRecordedSpec(dynamo, s3, process.env.PROJECT_NAME!, { id, name }, deployedAt);
+  return outcome.ok ? json(200, outcome.spec) : json(outcome.status, { message: outcome.message });
+}
+
+const RESTORE_BODY ='{"deployedAt": "<ISO 8601>", "reason"?: "<up to 200 characters>"}';
 
 /** A restore's body: which record (its deployedAt), and an optional reason. Undefined if malformed. */
 function restoreBody(event: FunctionUrlEvent): { deployedAt: string; reason?: string } | undefined {

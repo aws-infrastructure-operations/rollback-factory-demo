@@ -83,6 +83,19 @@ async function postJson(url: string, data: unknown): Promise<void> {
   }
 }
 
+/** Same shape as ApiSpecSummary in lambda/dashboard-api/api-gateway-specs.ts. */
+export interface ApiSpecSummary {
+  deployedAt: string;
+  title?: string;
+  version?: string;
+  /** "GET /users", sorted */
+  routes: string[];
+}
+
+/** The routes a recorded deployment serves, from its OpenAPI export in S3. */
+export const fetchApiSpec = (apiId: string, deployedAt: string, signal?: AbortSignal) =>
+  getJson<ApiSpecSummary>(`/api/api-gateways/${encodeURIComponent(apiId)}/spec?deployedAt=${encodeURIComponent(deployedAt)}`, signal);
+
 /** Restores the API's stage to a recorded deployment. */
 export const restoreApiDeployment = (apiId: string, deployedAt: string, reason?: string) =>
   postJson(`/api/api-gateways/${encodeURIComponent(apiId)}/restore`, { deployedAt, ...(reason && { reason }) });

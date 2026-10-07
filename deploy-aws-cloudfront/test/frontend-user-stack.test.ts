@@ -240,7 +240,7 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   assert.deepEqual(actions, [
     'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
     'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query',
-    'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
+    'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction', 's3:GetObject',
   ]);
   const query = statements.find((s: any) => s.Action === 'dynamodb:Query');
   assert.equal(query.Resource.length, 2);
@@ -251,4 +251,7 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
   // the functions registered for rollback only (service-lambda-<env>), of this account and region
   assert.match(JSON.stringify(scoped.Resource), /:function:service-lambda-\*"\]\]}$/, 'aliases and versions of the registered functions only');
+  // the api-user OpenAPI exports in the API deployments buckets, nothing else of them
+  const specs = statements.find((s: any) => s.Action === 's3:GetObject');
+  assert.match(JSON.stringify(specs.Resource), /-deployments-\*\/api-user-\*\/openapi\.json"\]\]}$/);
 });
