@@ -124,7 +124,7 @@ test('restores only with POST /api/api-gateways/<id>/restore and a valid body, c
   assert.equal((await handler(request(`/api/api-gateways/${API.id}/restore`, 'GET'))).statusCode, 405);
   assert.equal((await handler(request(`/api/api-gateways/${API.id}`, 'POST', '{}'))).statusCode, 405);
   assert.equal((await handler(request('/api/lambda-functions/fn/restore', 'GET'))).statusCode, 404);
-  assert.equal((await handler(request('/api/cloudfront-distributions/E1LIVE0000000/restore', 'GET'))).statusCode, 404);
+  assert.equal((await handler(request('/api/cloudfront-distributions/E1LIVE0000000/restore', 'GET'))).statusCode, 405);
   for (const body of [undefined, 'not json', '{}', '{"deployedAt":"yesterday"}', `{"deployedAt":"2026-10-06T09:00:00.000Z","reason":${JSON.stringify('x'.repeat(201))}}`]) {
     assert.equal((await handler(request(`/api/api-gateways/${API.id}/restore`, 'POST', body))).statusCode, 400, String(body));
   }

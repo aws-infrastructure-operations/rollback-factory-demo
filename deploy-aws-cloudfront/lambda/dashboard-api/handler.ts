@@ -12,7 +12,7 @@ import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
 import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
 import { listApiGateways, type ApiType } from './api-gateways.js';
 import {
-  getDistributionDetails, getDistributionMetrics, isDistributionId, listDistributions, listInvalidations,
+  getDistributionDetails, getDistributionMetrics, isDistributionId, listDistributions, listInvalidations, restoreRelease,
 } from './cloudfront-distributions.js';
 import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, isFunctionName, listLambdaFunctions,
@@ -59,6 +59,7 @@ const RESOURCE_NAMES: Record<string, string> = {
  * GET /api/api-gateways/<id>?type=REST|HTTP|WEBSOCKET: one API's stages, deployments and configuration,
  *   and for the APIs this project deploys, their recorded deployments.
  * POST /api/api-gateways/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded deployment.
+ * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
  * GET /api/lambda-functions: the region's functions.
  * GET /api/lambda-functions/<name>: one function's versions, aliases and configuration.
  * GET /api/lambda-functions/<name>/metrics: its last 24 hours of metrics.
@@ -72,17 +73,18 @@ export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResul
   const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
-  const restore = resource === 'api-gateways' && sub === 'restore';
+  const restore = sub === 'restore' && (resource === 'api-gateways' || resource === 'cloudfront-distributions');
   if (restore ? method !== 'POST' : method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
   try {
-    if (restore) return await restoreApiDeployment(id!, event);
+    if (restore && resource === 'api-gateways') return await restoreApiDeployment(id!, event);
+    if (restore) return await restoreDistributionRelease(id!, event);
     if (resource === 'api-gateways') return await apiGateways(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
     if (resource === 'lambda-functions') return await lambdaFunctions(id, sub);
     return await distributions(id, sub);
   } catch (err) {
     // details stay in the logs; the page only needs to know the data isn't available
     console.error(`${restore ? 'Restoring' : 'Reading'} ${event.rawPath} failed`, err);
-    return json(502, { message: restore ? 'Could not restore the deployment' : `Could not read the ${RESOURCE_NAMES[resource]}` });
+    return json(502, { message: restore ? `Could not restore the ${resource === 'api-gateways' ? 'deployment' : 'release'}` : `Could not read the ${RESOURCE_NAMES[resource]}` });
   }
 }
 
@@ -98,15 +100,24 @@ async function apiGateways(id: string | undefined, sub: string | undefined, quer
   return json(200, recorded ? { ...details, recorded } : details);
 }
 
-async function restoreApiDeployment(id: string, event: FunctionUrlEvent) {
+const RESTORE_BODY = '{"deployedAt": "<ISO 8601>", "reason"?: "<up to 200 characters>"}';
+
+/** A restore's body: which record (its deployedAt), and an optional reason. Undefined if malformed. */
+function restoreBody(event: FunctionUrlEvent): { deployedAt: string; reason?: string } | undefined {
   let body: { deployedAt?: unknown; reason?: unknown } | undefined;
   try {
     body = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : event.body ?? '');
-  } catch { /* answered below */ }
-  const reason = body?.reason;
-  if (!isApiId(id) || !isDeployedAt(body?.deployedAt) || (reason !== undefined && (typeof reason !== 'string' || reason.length > 200))) {
-    return json(400, { message: 'Expected a REST API id and {"deployedAt": "<ISO 8601>", "reason"?: "<up to 200 characters>"}' });
+  } catch {
+    return undefined;
   }
+  const reason = body?.reason;
+  if (!isDeployedAt(body?.deployedAt) || (reason !== undefined && (typeof reason !== 'string' || reason.length > 200))) return undefined;
+  return { deployedAt: body!.deployedAt as string, ...(reason !== undefined && { reason: reason as string }) };
+}
+
+async function restoreApiDeployment(id: string, event: FunctionUrlEvent) {
+  const body = restoreBody(event);
+  if (!isApiId(id) || !body) return json(400, { message: `Expected a REST API id and ${RESTORE_BODY}` });
   let name: string;
   try {
     name = (await rest.send(new GetRestApiCommand({ restApiId: id }))).name ?? id;
@@ -114,9 +125,14 @@ async function restoreApiDeployment(id: string, event: FunctionUrlEvent) {
     if ((err as Error).name === 'NotFoundException') return json(404, { message: `No REST API ${id}` });
     throw err;
   }
-  const outcome = await restoreRecordedDeployment(dynamo, lambda, process.env.PROJECT_NAME!, { id, name }, {
-    deployedAt: body!.deployedAt as string, reason: reason as string | undefined,
-  });
+  const outcome = await restoreRecordedDeployment(dynamo, lambda, process.env.PROJECT_NAME!, { id, name }, body);
+  return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
+}
+
+async function restoreDistributionRelease(id: string, event: FunctionUrlEvent) {
+  const body = restoreBody(event);
+  if (!isDistributionId(id) || !body) return json(400, { message: `Expected a distribution id and ${RESTORE_BODY}` });
+  const outcome = await restoreRelease(cloudfront, dynamo, lambda, process.env.PROJECT_NAME!, id, body);
   return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
 }
 
@@ -132,7 +148,6 @@ async function lambdaFunctions(name: string | undefined, sub: string | undefined
 async function distributions(id: string | undefined, sub: string | undefined) {
   if (!id) return json(200, { distributions: await listDistributions(cloudfront) });
   if (!isDistributionId(id)) return json(400, { message: 'Expected a distribution id' });
-  if (sub === 'restore') return json(404, { message: 'Not found' });
   if (sub === 'metrics') return json(200, await getDistributionMetrics(edgeCloudwatch, id));
   if (sub === 'invalidations') return json(200, { invalidations: await listInvalidations(cloudfront, id) });
   const details = await getDistributionDetails(cloudfront, dynamo, id, process.env.PROJECT_NAME!);

@@ -52,13 +52,16 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   `ListInvalidations`, `GetInvalidation`; origin custom headers are never sent on), the release history of
   every environment's `frontend-user-<env>` (`dynamodb:Query` on `rollback-factory-demo-frontend-deployments-*`),
   and CloudFront metrics in us-east-1. For each `api-user-<env>` it reads the recorded deployments too
-  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`), and its one write is restoring one of them:
-  `POST /api/api-gateways/<id>/restore` with `{"deployedAt": "..."}` invokes
-  `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those functions only), which
-  re-imports that deployment's OpenAPI export from S3 and redeploys the stage, like `deployment:restore`.
+  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`). Its only writes are restores, which
+  invoke `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those functions only):
+  - `POST /api/api-gateways/<id>/restore` with `{"deployedAt": "..."}`: the rollback service re-imports
+    that deployment's OpenAPI export from S3 and redeploys the stage, like `deployment:restore`.
+  - `POST /api/cloudfront-distributions/<id>/restore` with `{"deployedAt": "..."}` (`frontend-user-<env>`
+    only): the rollback service points the site origin at that record's release, invalidates `/*` and
+    records a `restore`, like `deployment:restore`. A release that is live already is refused.
   The CloudFront behavior allows POST for it (OAC needs the body's SHA-256 in `x-amz-content-sha256`), and
   waits up to 60 s. It has no sign-in: anyone with the site URL can see the API, function and distribution
-  names, stages, versions, releases and settings, **and restore an API deployment**.
+  names, stages, versions, releases and settings, **and restore an API deployment or a site release**.
 - **Release switches touch the site origin only:** activations, restores and the rollback service
   set the origin path of the S3 origin and leave the function URL origin alone (`releaseOrigins`).
 - **No SPA fallback:** missing files are real 403s (S3 answers 403 for missing keys when the reader
@@ -88,7 +91,8 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   **deployments** (the activations, restores and rollbacks recorded for `frontend-user-<env>`, marked live,
   verified or rolled back), its **configuration**, its latest **invalidations** and **monitoring** (requests,
   data transferred, 4xx and 5xx rates over 24 hours); the last two load only when their tab opens.
-  Rollback is disabled here too.
+  Each recorded release has a **Restore** button (after a confirm; the live release can't be restored). It
+  counts as verified once the integration tests pass again; CloudFront takes a few minutes to deploy it.
 
 The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"

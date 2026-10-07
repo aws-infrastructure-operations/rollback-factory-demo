@@ -2,15 +2,14 @@
 // refresh, and the selected one's release history, configuration, invalidations and last 24 hours.
 import { useMemo, useState } from 'react';
 import {
-  fetchDistributionDetails, fetchDistributionInvalidations, fetchDistributionMetrics, fetchDistributions,
+  fetchDistributionDetails, fetchDistributionInvalidations, fetchDistributionMetrics, fetchDistributions, restoreDistributionRelease,
   type Distribution, type DistributionDetails, type DistributionInvalidation, type DistributionMetrics,
 } from '../api.js';
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, RollbackButton, Tag, type TableMessage } from './ui.js';
 
-/** Until the dashboard has sign-in, nobody should be able to roll back a site from a public page. */
-const ROLLBACK_DISABLED = 'Rolling back from the dashboard comes with sign-in. Use the frontend restore workflow for now.';
+const formatAt = (iso: string) => new Date(iso).toLocaleString();
 
 const matches = (d: Distribution, query: string) =>
   [d.name, d.id, d.domain, d.status, d.releaseId ?? '', ...d.aliases].some((value) => value.toLowerCase().includes(query));
@@ -78,17 +77,42 @@ export function CloudFrontSection() {
   );
 }
 
+type Release = DistributionDetails['deployments'][number];
+
 function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: number }) {
-  // refreshing the list reloads the selected distribution too
-  const details = useLoad<DistributionDetails>(`${d.id}#${reloads}`, (signal) => fetchDistributionDetails(d.id, signal));
+  // refreshing the list reloads the selected distribution too, and so does a restore
+  const [restores, setRestores] = useState(0);
+  const details = useLoad<DistributionDetails>(`${d.id}#${reloads}.${restores}`, (signal) => fetchDistributionDetails(d.id, signal));
   const data = details.data;
   const message = pendingMessage(details, d.name);
+  // the release the site origin serves now: from the details, which a restore reloads
+  const live = data?.releaseId ?? d.releaseId;
+  // the deployedAt being restored, and the last restore's outcome, for the distribution they belong to
+  const [restoring, setRestoring] = useState<{ id: string; deployedAt: string }>();
+  const [outcome, setOutcome] = useState<{ id: string; text: string; error?: boolean }>();
+
+  async function restore(r: Release) {
+    const what = `${d.name} to release ${r.releaseId}, recorded ${formatAt(r.deployedAt)}`;
+    if (!window.confirm(`Restore ${what}?\n\nThe rollback service points the distribution at that release and invalidates its cache. The distribution takes a few minutes to deploy.`)) return;
+    setRestoring({ id: d.id, deployedAt: r.deployedAt });
+    setOutcome(undefined);
+    try {
+      await restoreDistributionRelease(d.id, r.deployedAt);
+      setOutcome({ id: d.id, text: `Restored ${what}. CloudFront takes a few minutes to deploy it; it counts as verified once the integration tests pass again.` });
+    } catch (err) {
+      setOutcome({ id: d.id, text: `Restore failed: ${(err as Error).message}`, error: true });
+    } finally {
+      setRestoring(undefined);
+      setRestores((n) => n + 1);
+    }
+  }
+  const busy = restoring?.id === d.id;
 
   return (
     <DetailPanel
       id="cloudfront-distribution-details" icon="globe" tint="tint-cloudfront" name={d.name}
       badge={d.enabled && d.status === 'Deployed' ? 'Deployed' : undefined}
-      subtitle={d.releaseId ? <>{d.domain} &nbsp; release {d.releaseId}</> : d.domain}
+      subtitle={live ? <>{d.domain} &nbsp; release {live}</> : d.domain}
       tabs={['Deployments', 'Configuration', 'Invalidations', 'Monitoring']}
       state={loadState(details)}
     >
@@ -101,6 +125,10 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
             deploymentsMessage = { text: 'No release recorded yet.' };
           }
           return (
+            <>
+            {outcome?.id === d.id && (
+              <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
+            )}
             <DataTable rows={data?.deployments ?? []} rowKey={(r) => r.deployedAt} message={deploymentsMessage} columns={[
               {
                 header: 'Release',
@@ -122,8 +150,17 @@ function DistributionDetailPanel({ d, reloads }: { d: Distribution; reloads: num
                 cell: (r) => <div className="stacked">{r.source}{r.commit && <span className="small muted-text">{r.commit.slice(0, 7)}</span>}</div>,
               },
               { header: 'Deployed At', cell: (r) => <DateCell iso={r.deployedAt} />, className: 'date-wrap' },
-              { header: 'Actions', cell: () => <RollbackButton disabledReason={ROLLBACK_DISABLED} /> },
+              {
+                header: 'Actions',
+                cell: (r) => (
+                  <RollbackButton
+                    label={busy && restoring!.deployedAt === r.deployedAt ? 'Restoring…' : 'Restore'}
+                    disabledReason={r.releaseId === live ? 'This release is live.' : busy ? 'A restore is running.' : undefined}
+                    onClick={() => restore(r)} />
+                ),
+              },
             ]} />
+            </>
           );
         }
         if (tab === 'Invalidations') return <Invalidations id={d.id} reloads={reloads} />;

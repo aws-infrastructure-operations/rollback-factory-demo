@@ -62,11 +62,11 @@ export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'
 }
 
 /**
- * Restores the API's stage to a recorded deployment. Throws with the API's message when it refuses.
- * Function URLs behind OAC need the body's SHA-256 in x-amz-content-sha256 to sign a POST.
+ * POSTs a restore: which recorded deployment (its deployedAt), and an optional reason. Throws with
+ * the dashboard API's message when it refuses. Function URLs behind OAC need the body's SHA-256
+ * in x-amz-content-sha256 to sign a POST.
  */
-export async function restoreApiDeployment(apiId: string, deployedAt: string, reason?: string): Promise<void> {
-  const url = `/api/api-gateways/${encodeURIComponent(apiId)}/restore`;
+async function postRestore(url: string, deployedAt: string, reason?: string): Promise<void> {
   const body = JSON.stringify({ deployedAt, ...(reason && { reason }) });
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
   const response = await fetch(url, {
@@ -83,6 +83,10 @@ export async function restoreApiDeployment(apiId: string, deployedAt: string, re
     throw new Error(message ?? `POST ${url} answered ${response.status}`);
   }
 }
+
+/** Restores the API's stage to a recorded deployment. */
+export const restoreApiDeployment = (apiId: string, deployedAt: string, reason?: string) =>
+  postRestore(`/api/api-gateways/${encodeURIComponent(apiId)}/restore`, deployedAt, reason);
 
 // --- Lambda functions --------------------------------------------------------------------------
 
@@ -192,3 +196,7 @@ export const fetchDistributionInvalidations = (id: string, signal?: AbortSignal)
 
 export const fetchDistributionMetrics = (id: string, signal?: AbortSignal) =>
   getJson<DistributionMetrics>(distributionUrl(id, '/metrics'), signal);
+
+/** Makes the distribution serve a recorded release again (frontend-user-<env> only). */
+export const restoreDistributionRelease = (id: string, deployedAt: string, reason?: string) =>
+  postRestore(distributionUrl(id, '/restore'), deployedAt, reason);

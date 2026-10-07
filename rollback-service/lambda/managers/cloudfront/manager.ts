@@ -22,8 +22,64 @@ export interface CloudFrontRollbackTarget {
   rollbackWindowMinutes: number;
 }
 
+/** A release chosen by hand (the dashboard's Restore button), named by its record's deployedAt. */
+export interface RestoreRequest {
+  deployedAt: string;
+  reason?: string;
+  actor?: string;
+}
+
 const cloudfront = new CloudFrontClient({});
 const log = (msg: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ manager: 'cloudfront', msg, ...data }));
+
+/**
+ * Points the distribution back at the release recorded at `req.deployedAt`, invalidates /* and
+ * records a "restore", like deploy-aws-cloudfront's deployment:restore. Not verified: the release
+ * has to pass the integration tests again. Skips (changing nothing) when it is already live.
+ */
+export async function restore(
+  target: CloudFrontRollbackTarget,
+  req: RestoreRequest,
+  { client = cloudfront, now = () => new Date() } = {},
+) {
+  const store = createDeploymentStore({ table: target.table, frontendName: target.frontendName });
+  const to = await store.get(req.deployedAt);
+  // a recreated distribution starts a new history under the same name
+  if (!to || to.distributionId !== target.distributionId) {
+    throw new Error(`No release of ${target.frontendName} recorded at ${req.deployedAt}`);
+  }
+  const liveReleaseId = await getLiveReleaseId(client, target.distributionId);
+  if (liveReleaseId === to.releaseId) {
+    log('restore skipped', { reason: 'already live', releaseId: to.releaseId });
+    return { action: 'skip', reason: `${target.frontendName} already serves release ${to.releaseId}` };
+  }
+
+  log('restoring', { to: to.releaseId, toDeployedAt: to.deployedAt, actor: req.actor });
+  const switched = await switchRelease(client, target.distributionId, to.releaseId, `restore-${to.deployedAt}-${now().getTime()}`);
+  const description = `Restore to ${to.releaseId} (recorded ${to.deployedAt})${req.reason ? `: ${req.reason}` : ''}`;
+  const record = await store.record({
+    frontendName: target.frontendName,
+    releaseId: to.releaseId,
+    originPath: to.originPath,
+    distributionId: target.distributionId,
+    manifestKey: to.manifestKey,
+    invalidationId: switched.invalidationId,
+    previousReleaseId: switched.previousReleaseId,
+    source: 'restore',
+    actor: req.actor ?? 'manual',
+    commit: to.commit,
+    description,
+  }, { now: now(), force: true });
+
+  log('restore complete', { ...switched, deployedAt: record?.deployedAt });
+  return {
+    action: 'restored',
+    from: switched.previousReleaseId,
+    to: to.releaseId,
+    invalidationId: switched.invalidationId,
+    deployedAt: record?.deployedAt,
+  };
+}
 
 export async function handleAlarm(
   target: CloudFrontRollbackTarget,
