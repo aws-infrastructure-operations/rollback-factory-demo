@@ -313,3 +313,10 @@ td.date-wrap { white-space: normal; min-width: 90px; }
 
 /* actions above a detail table, e.g. the Lambda panel's "Redeploy from S3" */
 .panel-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+
+/* DEMO BRANCH (demo/break-frontend) - DO NOT MERGE. */
+.demo-label {
+  margin: 12px 12px 0; padding: 8px 12px; border: 1px solid var(--lambda); border-radius: 6px;
+  background: #fff4e6; color: #b25400; font-weight: 600;
+}
+.demo-label code { font-weight: 500; }

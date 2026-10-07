@@ -15,6 +15,11 @@ export function App({ config }: { config: AppConfig }) {
       <Sidebar config={config} />
       <div className="content">
         <TopBar lastUpdated={built} />
+        {/* DEMO BRANCH (demo/break-frontend) - DO NOT MERGE. A visible, harmless change, so a new
+            release (and a rollback away from it) is easy to spot on the page. */}
+        <p id="demo-label" className="demo-label">
+          Demo release <code>{config.releaseId}</code> from <code>demo/break-frontend</code>
+        </p>
         <main className="panels">
           <ApiGatewaySection />
           <LambdaSection />
