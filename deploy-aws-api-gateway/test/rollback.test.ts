@@ -184,3 +184,34 @@ describe('stack', () => {
     assert.throws(() => getConfig('dev', { chaosFailureRate: '2' }), /between 0 and 1/);
   });
 });
+
+describe('backend permissions and versions', () => {
+  const t = synth('dev');
+
+  test('each backend\'s aliases may be invoked for its own resource only, from any stage and method', () => {
+    const permissions = Object.values(t.findResources('AWS::Lambda::Permission'))
+      .map((p: any) => p.Properties)
+      .filter((p: any) => p.Principal === 'apigateway.amazonaws.com');
+    assert.equal(permissions.length, 4, 'live and integration of both backends');
+    for (const p of permissions) {
+      const backend = JSON.stringify(p.FunctionName).includes('Users') ? 'users' : 'messages';
+      // <api>/<stage>/<method>/<path>: a call to /users is <api>/integration/GET/users
+      const arn = JSON.stringify(p.SourceArn);
+      assert.ok(arn.endsWith(`"/*/*/${backend}"]]}`), arn);
+    }
+  });
+
+  test('every deploy (deployId) publishes a new version of both backends', () => {
+    const versionIds = (template: Template) => Object.keys(template.findResources('AWS::Lambda::Version')).sort();
+    const first = synth('dev', { deployId: '100.1' });
+    const second = synth('dev', { deployId: '101.1' });
+    assert.equal(versionIds(first).length, 2);
+    // same code, another deploy: new version resources for both
+    assert.equal(versionIds(first).filter((id) => versionIds(second).includes(id)).length, 0);
+    first.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'rollback-factory-demo-api-users-dev',
+      Environment: { Variables: Match.objectLike({ DEPLOY_ID: '100.1' }) },
+    });
+    first.hasResourceProperties('AWS::Lambda::Version', { Description: Match.stringLikeRegexp('^deploy 100\.1 · ') });
+  });
+});

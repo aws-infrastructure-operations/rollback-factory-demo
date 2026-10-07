@@ -239,6 +239,8 @@ main / manual ─► test ─► deploy dev ────────────
 ```
 
 **Integration stage.** `cdk deploy` in CI gets `-c liveDeploymentId=... -c liveUsersVersion=... -c liveMessagesVersion=...` from `npm run live:context`, so CloudFormation keeps stage `v1` on the deployment it serves and each backend's `live` alias on its version. Only stage `integration` and the `integration` aliases get the new API config and code. The tests run there (`API_STAGE=integration npm run test:integration`). If they pass, `npm run deployment:promote` points `v1` at the tested deployment and each backend's `live` at its tested version. If they fail, the job stops: `v1` was never changed, so there is nothing to roll back, and the test output goes to the job summary.
+
+**A new version per deploy.** CI also passes `-c deployId=<run id>.<attempt>`, which goes into each backend's configuration (`DEPLOY_ID`). So every deploy publishes a new version of both backends, even when their code didn't change, and the `integration` aliases always point at what this run deployed. Each version's description names the deploy and the last commit of the backend code, e.g. `deploy 18234.1 · 4f46d40 Split the API backend …`. A local `cdk deploy` without `deployId` publishes a new version only when the code or configuration changes.
 A `cdk deploy` without that context (e.g. `npm run deploy:dev`, or the break-api demo) updates `v1` and both aliases directly.
 
 Prod is deployed only when every dev step passes, including the integration tests.

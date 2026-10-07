@@ -9,6 +9,7 @@ const config = getConfig(ctx('env') ?? process.env.API_ENV ?? 'dev', {
   alarmNotifications: ctx('alarmNotifications'),
   rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
   chaosFailureRate: ctx('chaosFailureRate'),
+  deployId: ctx('deployId'),
   liveDeploymentId: ctx('liveDeploymentId'),
   ...Object.fromEntries(BACKENDS.map((backend) => [liveVersionContextKey(backend), ctx(liveVersionContextKey(backend))])),
 });
