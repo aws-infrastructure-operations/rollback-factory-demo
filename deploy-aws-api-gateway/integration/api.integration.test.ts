@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
-import { getConfig } from '../lib/config.js';
+import { BACKENDS, getConfig } from '../lib/config.js';
 import { deleteUser, ensureUser, getIdToken, randomPassword } from '../scripts/lib/cognito.js';
 import { requireStackOutputs, StackOutputs } from '../scripts/lib/stack.js';
 
@@ -67,19 +67,22 @@ before(async () => {
 
 /**
  * A fresh deployment (and its Lambda invoke permissions) can take a few seconds
- * to serve everywhere, answering 5xx / 403 meanwhile. Wait up to READY_TIMEOUT_MS
- * for a normal answer; if it never comes the tests run anyway and report the failure.
+ * to serve everywhere, answering 5xx / 403 meanwhile - and until then the stage
+ * still serves the previous deployment, which has no route for a new resource
+ * (403). So wait for every resource, not one: up to READY_TIMEOUT_MS for a normal
+ * answer from each; if it never comes the tests run anyway and report the failure.
  */
-const READY_TIMEOUT_MS = 60_000;
+const READY_TIMEOUT_MS = 90_000;
 async function waitUntilReady() {
   const until = Date.now() + READY_TIMEOUT_MS;
-  let last = 0;
+  let last: Record<string, number> = {};
   while (Date.now() < until) {
-    last = (await call('GET', '/users', { token })).status;
-    if (last < 500 && last !== 403) return;
+    last = Object.fromEntries(await Promise.all(BACKENDS.map(async (r) => [r, (await call('GET', `/${r}`, { token })).status] as const)));
+    if (Object.values(last).every((status) => status < 500 && status !== 403)) return;
     await new Promise((r) => setTimeout(r, 3_000));
   }
-  console.warn(`API not ready after ${READY_TIMEOUT_MS / 1000}s (last GET /users: ${last}) - running tests anyway`);
+  const statuses = Object.entries(last).map(([r, status]) => `GET /${r}: ${status}`).join(', ');
+  console.warn(`API not ready after ${READY_TIMEOUT_MS / 1000}s (${statuses}) - running tests anyway`);
 }
 
 after(async () => {
@@ -87,7 +90,7 @@ after(async () => {
 });
 
 describe(`${config.apiName} (stage ${stage})`, () => {
-  for (const resource of ['users', 'messages', 'orders']) {
+  for (const resource of BACKENDS) {
     test(`GET /${resource} returns 200`, async () => {
       const res = await call('GET', `/${resource}`, { token });
       assert.equal(res.status, 200, JSON.stringify(res.body));
