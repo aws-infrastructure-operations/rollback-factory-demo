@@ -1,0 +1,4 @@
+; ACM DNS validation for the dev frontend certificate (deploy-aws-cloudfront-certificate-dev, us-east-1)
+; Import into the ionuteliantudor.com hosted zone: Route 53 > Hosted zones > ionuteliantudor.com > Import zone file
+_3a11a5ff0ac4b8a8071d8e198e7db632.dev.rollback.ionuteliantudor.com. 300 IN CNAME _1ed787e2b9e4f96a04cb7ef72e01cd60.wzccmgtwzk.acm-validations.aws.
+_429a90b05838a3d4305f481e2f2bef64.dev-integration.rollback.ionuteliantudor.com. 300 IN CNAME _9a5dbdde69ceb75dacdbbfb9c38657e8.wzccmgtwzk.acm-validations.aws.

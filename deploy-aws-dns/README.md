@@ -41,6 +41,12 @@ dig NS rollback.ionuteliantudor.com +short
 Do this **before** deploying the frontend with its domains: their certificates are validated through
 this zone, and the deploy waits until they are.
 
+Without the delegation, the certificates can still be validated from the parent zone:
+[`zone-files/acm-validation-dev.zone`](zone-files/acm-validation-dev.zone) holds the dev
+certificate's two validation CNAMEs, for Route 53's *Import zone file* on `ionuteliantudor.com`. That
+only validates the certificate: the sites' alias records live in this zone, so the domains resolve
+once `rollback` is delegated (then the CNAMEs in the parent are unused and can be deleted).
+
 Its `HostedZoneId` (`Z05783463JDFZM1R6MU2D`) is `HOSTED_ZONE` in `deploy-aws-cloudfront/lib/config.ts`.
 
 ## CI
