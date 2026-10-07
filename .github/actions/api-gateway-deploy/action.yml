@@ -37,6 +37,12 @@ runs:
           echo "API_ENV=${{ inputs.environment }}"
           echo "AWS_REGION=${{ inputs.aws-region }}"
           echo "CHAOS_FAILURE_RATE=${{ inputs.chaos_failure_rate }}"
+          # the environment's shared API domain (deploy-aws-dns-api-domains); prod has no prefix
+          if [[ "${{ inputs.environment }}" == prod ]]; then
+            echo "API_DOMAIN=api.rollback.ionuteliantudor.com"
+          else
+            echo "API_DOMAIN=api.${{ inputs.environment }}.rollback.ionuteliantudor.com"
+          fi
         } >> "$GITHUB_ENV"
     - uses: actions/setup-node@v7
       with:
@@ -71,6 +77,21 @@ runs:
       shell: bash
       working-directory: deploy-aws-api-gateway
 
+    # The stack maps its stages on the API domain, which the dns workflow creates. When a change
+    # to both lands at once, both workflows start together: wait for the domain instead of failing.
+    - name: Wait for the API domain (deploy-aws-dns-api-domains)
+      run: |
+        for attempt in $(seq 1 40); do
+          if aws apigateway get-domain-name --domain-name "$API_DOMAIN" >/dev/null 2>&1; then
+            echo "$API_DOMAIN exists"; exit 0
+          fi
+          echo "waiting for $API_DOMAIN (the dns workflow creates it) ... $attempt/40"
+          sleep 30
+        done
+        echo "::error::API domain $API_DOMAIN not found: run the dns workflow first (deploy-aws-dns-api-domains)"
+        exit 1
+      shell: bash
+
     - name: Deploy to the integration stage (v1 and its Lambda alias stay as they are)
       env:
         LIVE_CONTEXT: ${{ steps.live.outputs.context }}
@@ -104,6 +125,18 @@ runs:
       run: npm run -s deployment:promote -- --env "$API_ENV"
       shell: bash
       working-directory: deploy-aws-api-gateway
+
+    # Not a gate: v1 is already promoted. Without a token the API answers 401, which proves the
+    # mapping user/v1 reaches it; anything else is a warning (e.g. DNS not delegated yet).
+    - name: Check the custom domain (https://${{ env.API_DOMAIN }}/user/v1/users)
+      run: |
+        status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "https://$API_DOMAIN/user/v1/users" || true)
+        if [[ "$status" == 401 ]]; then
+          echo "https://$API_DOMAIN/user/v1/users -> 401 without a token, as expected"
+        else
+          echo "::warning::https://$API_DOMAIN/user/v1/users answered '$status', expected 401"
+        fi
+      shell: bash
 
     - name: Record deployment (OpenAPI spec -> S3, record -> DynamoDB)
       run: npm run -s deployment:record -- --env "$API_ENV" --description "GitHub run $GITHUB_RUN_ID ($GITHUB_REF_NAME)"

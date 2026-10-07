@@ -12,6 +12,7 @@ AWS CDK (TypeScript) app for the `api-user-<env>` REST API. Implementation plan:
 | Cognito authorizer | `rollback-factory-demo-cognito-<env>` (`Authorization: <ID token>`) |
 | Lambda backends (Node 24, arm64), one per resource | `rollback-factory-demo-api-users-<env>` (`/users`), `rollback-factory-demo-api-messages-<env>` (`/messages`) and `rollback-factory-demo-api-orders-<env>` (`/orders`, mocked like the others), each with aliases `live` (stage `v1`) and `integration` (stage `integration`); all registered for rollback in [`rollback-service/rollback-config.json`](../rollback-service/rollback-config.json) |
 | API stages | `v1` (clients) and `integration` (CI tests each deploy here before it is promoted to `v1`) |
+| API mappings on the environment's API domain (dev and prod) | `user/v1` → stage `v1`, `user/integration` → stage `integration`, on `api.dev.rollback.ionuteliantudor.com` / `api.rollback.ionuteliantudor.com` |
 | S3 bucket (versioned) for OpenAPI specs | `rollback-factory-demo-<account>-deployments-<env>` |
 | DynamoDB deployments table | `rollback-factory-demo-deployments-<env>` |
 | CloudWatch alarms (4xx rate, 5xx rate) | `rollback-factory-demo-apigateway-api-user-4xx-rate-<env>`, `rollback-factory-demo-apigateway-api-user-5xx-rate-<env>` |
@@ -36,6 +37,22 @@ All methods need a Cognito ID token in the `Authorization` header.
 | GET | `/orders` | – |
 | POST | `/orders` | `{ "message": "..." }` (validated) |
 
+### Custom domain
+
+Every API of an environment shares one custom domain, created by
+[`deploy-aws-dns`](../deploy-aws-dns) (stack `deploy-aws-dns-api-domains`). Each API maps its stages on
+it as `https://<api domain>/<api path>/<stage>/...`; this one's path is `user` (`API_PATH` in
+[`lib/config.ts`](lib/config.ts)):
+
+| Environment | Stage `v1` (clients) | Stage `integration` |
+|---|---|---|
+| dev | `https://api.dev.rollback.ionuteliantudor.com/user/v1/users` | `https://api.dev.rollback.ionuteliantudor.com/user/integration/users` |
+| prod | `https://api.rollback.ionuteliantudor.com/user/v1/users` | `https://api.rollback.ionuteliantudor.com/user/integration/users` |
+
+The `execute-api` URLs keep working, and CI and the scripts still use them. The domain must exist
+before the stack is deployed: CI waits for it, and checks after the promotion that
+`…/user/v1/users` answers 401 without a token. A new API adds its own two mappings the same way.
+
 ## Usage
 
 ```bash
@@ -48,7 +65,7 @@ npm run deploy:prod
 
 The first deploy to an account/region needs `npx cdk bootstrap`. Deploy the [rollback service](../rollback-service) to the environment first: the alarms publish to its topic.
 
-Stack outputs (exported as `rollback-factory-demo-<Name>-<env>`): `ApiId`, `ApiUrl`, `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`, `Alarm4xxName`, `Alarm5xxName`, and `RollbackTarget` (JSON: what the rollback service needs to roll this API back).
+Stack outputs (exported as `rollback-factory-demo-<Name>-<env>`): `ApiId`, `ApiUrl`, `CustomDomainUrl`, `IntegrationCustomDomainUrl` (dev and prod), `StageName`, `UserPoolId`, `UserPoolClientId`, `SpecBucketName`, `DeploymentsTableName`, `Alarm4xxName`, `Alarm5xxName`, and `RollbackTarget` (JSON: what the rollback service needs to roll this API back).
 
 ## Bruno collection & Cognito token
 

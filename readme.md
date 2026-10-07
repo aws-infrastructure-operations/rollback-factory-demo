@@ -11,7 +11,7 @@ deployment, one shared **rollback service** puts the previous good version back.
 | [`deploy-aws-lambda`](deploy-aws-lambda) | Lambda function `service-lambda-<env>` with `integration` and `live` aliases | pointing `live` back at the previous version that went live, and restoring `$LATEST` from its archived zip | [README](deploy-aws-lambda/README.md) |
 | [`deploy-aws-cloudfront`](deploy-aws-cloudfront) | The React dashboard `frontend-user-<env>` on CloudFront, plus its API (a Lambda behind `/api/*`) | pointing the distribution's origin path back at the previous verified release | [README](deploy-aws-cloudfront/README.md), [story](deploy-aws-cloudfront/story-implementation.md), [tickets](deploy-aws-cloudfront/docs/README.md) |
 | [`rollback-service`](rollback-service) | One Lambda per environment that every alarm goes to. It picks the API Gateway, CloudFront or Lambda manager from the alarm's name | (does the rollbacks above) | [README](rollback-service/README.md) |
-| [`deploy-aws-dns`](deploy-aws-dns) | The hosted zone `rollback.ionuteliantudor.com`, shared by every environment's CloudFront sites | — | [README](deploy-aws-dns/README.md), [delegation](deploy-aws-dns/DELEGATION.md) |
+| [`deploy-aws-dns`](deploy-aws-dns) | The hosted zone `rollback.ionuteliantudor.com`, shared by every environment's CloudFront sites, and the API domain `api.<env>.rollback.ionuteliantudor.com` every API is mapped on | — | [README](deploy-aws-dns/README.md), [delegation](deploy-aws-dns/DELEGATION.md) |
 
 The sites are served on:
 
@@ -19,6 +19,13 @@ The sites are served on:
 |---|---|---|
 | dev | https://dev.rollback.ionuteliantudor.com | https://dev-integration.rollback.ionuteliantudor.com |
 | prod | https://rollback.ionuteliantudor.com | https://integration.rollback.ionuteliantudor.com |
+
+The APIs are served on one domain per environment, as `<api path>/<stage>`:
+
+| Environment | `api-user` (stage `v1`) | `api-user` (stage `integration`, CI tests it first) |
+|---|---|---|
+| dev | https://api.dev.rollback.ionuteliantudor.com/user/v1/users | https://api.dev.rollback.ionuteliantudor.com/user/integration/users |
+| prod | https://api.rollback.ionuteliantudor.com/user/v1/users | https://api.rollback.ionuteliantudor.com/user/integration/users |
 
 ## Architecture
 
@@ -151,4 +158,4 @@ environment, for all projects or one of them:
 - **Confirming:** type `destroy <env>`.
 - **Waiting:** it waits for any deploy or rollback of that environment to finish.
 - **Left behind in prod:** buckets, tables and the user pool survive their stacks. Delete them by hand before deploying prod again.
-- **Never destroyed:** the DNS zone. Destroy the frontend before you ever delete the zone, or the frontend stack can't remove its records ([DELEGATION.md](deploy-aws-dns/DELEGATION.md#teardown-order)).
+- **Never destroyed:** the DNS zone and the API domains (`deploy-aws-dns`); an API stack takes only its mappings with it. Destroy the frontend before you ever delete the zone, or the frontend stack can't remove its records ([DELEGATION.md](deploy-aws-dns/DELEGATION.md#teardown-order)).
