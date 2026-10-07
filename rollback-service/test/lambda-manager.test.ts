@@ -326,6 +326,7 @@ test('pointing live back is a manual rollback: alias, $LATEST restored, cooldown
   assert.equal(current.rollbackCount.N, '0', 'manual: not counted towards the consecutive-rollback limit');
   assert.ok(current.lastRollbackAt?.S, 'starts the cooldown');
   assert.equal(table.get('VERSION#0000000003')!.rolledBackBy.S, 'dashboard');
+  assert.equal(table.get('VERSION#0000000003')!.rolledBackTo.N, '1', 'where live went');
 });
 
 test('pointing live forward is a promotion: nothing is marked rolled back, the version goes live', async () => {

@@ -268,3 +268,23 @@ export interface OperationView {
 
 export const fetchOperation = (id: string, signal?: AbortSignal) =>
   getJson<OperationView>(`/api/operations/${encodeURIComponent(id)}`, signal);
+
+/** One rollback (lambda/dashboard-api/rollbacks.ts has the same shape). */
+export interface RollbackEntry {
+  kind: 'api' | 'lambda' | 'frontend';
+  env: string;
+  /** api-user-dev, service-lambda-dev, frontend-user-dev, ... */
+  target: string;
+  at: string;
+  /** an alarm fired, or someone restored / pointed back by hand */
+  trigger: 'alarm' | 'manual';
+  /** the alarm's name, or who did it */
+  by: string;
+  /** what was replaced, and what it went back to: deployment ids, release ids or vN */
+  from?: string;
+  to?: string;
+  reason?: string;
+}
+
+/** Every rollback of the APIs, Lambda functions and sites (dev and prod), newest first. Read-only. */
+export const fetchRollbacks = (signal?: AbortSignal) => getJson<{ rollbacks: RollbackEntry[] }>('/api/rollbacks', signal);
