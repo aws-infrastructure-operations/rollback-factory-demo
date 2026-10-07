@@ -2,7 +2,7 @@
  * Prints the CDK context that keeps stage v1 and each backend's `live` alias where they
  * are, so `cdk deploy` only updates the integration stage (and the `integration` aliases):
  *
- *   -c liveDeploymentId=<v1 deployment> -c liveUsersVersion=<n> -c liveMessagesVersion=<n>
+ *   -c liveDeploymentId=<v1 deployment> -c liveUsersVersion=<n> -c liveMessagesVersion=<n> -c liveOrdersVersion=<n>
  *
  * Prints nothing for a value that doesn't exist yet (first deploy): that part is then
  * deployed directly. Used by CI before `cdk deploy`; scripts/promote-deployment.ts moves

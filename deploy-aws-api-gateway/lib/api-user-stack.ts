@@ -82,7 +82,7 @@ export class ApiUserStack extends cdk.Stack {
     });
 
     // --- Backend --------------------------------------------------------------
-    // One Lambda per resource (/users, /messages), so each can be rolled back on its own: both are
+    // One Lambda per resource (/users, /messages, /orders), so each can be rolled back on its own: all are
     // registered in rollback-service/rollback-config.json with their errors alarm (below).
     // Each stage invokes its own alias of them, named by its `lambdaAlias` stage variable:
     // - `integration` moves to the newly published version on every `cdk deploy`

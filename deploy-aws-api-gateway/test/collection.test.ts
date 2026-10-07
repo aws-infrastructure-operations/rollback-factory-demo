@@ -18,7 +18,7 @@ test('extracts every API method from the synthesized stack', () => {
   const routes = extractRoutes(template());
   assert.deepEqual(
     routes.map((r) => `${r.method} ${r.path}`),
-    ['GET /messages', 'POST /messages', 'GET /users', 'POST /users'],
+    ['GET /messages', 'POST /messages', 'GET /orders', 'POST /orders', 'GET /users', 'POST /users'],
   );
   assert.deepEqual(routes.find((r) => r.method === 'POST')?.sampleBody, {
     message: 'hello from bruno (message)',

@@ -60,7 +60,7 @@ function RouteChanges({ apiId, target, live }: { apiId: string; target: Recorded
 /** rollback-factory-demo-api-users-dev -> users */
 const backendName = (fn: string) => /-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn;
 
-/** "users v3 · messages v5" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
+/** "users v3 · messages v5 · orders v2" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
 function lambdaVersionsHint(d: RecordedApiDeployment) {
   if (d.lambdaVersions) {
     return Object.entries(d.lambdaVersions)

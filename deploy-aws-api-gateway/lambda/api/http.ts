@@ -24,12 +24,22 @@ export function injectedFailure(): APIGatewayProxyResult | undefined {
 
 /** The routes of one resource: GET lists, POST echoes the validated body. */
 export function resourceHandler(resource: string) {
+  const handle = routes(resource);
   return async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    const started = Date.now();
     const route = `${event.httpMethod} ${event.resource}`;
+    const requestId = event.requestContext.requestId;
     // one line per request: which route, under which API Gateway request id (no caller details)
-    console.log(JSON.stringify({ msg: 'request', route, requestId: event.requestContext.requestId }));
-    const failure = injectedFailure();
-    if (failure) return failure;
+    console.log(JSON.stringify({ msg: 'request', route, requestId, stage: event.requestContext.stage }));
+    const result = injectedFailure() ?? handle(event, route);
+    // and one per response, so a slow or failing route shows up without the access logs
+    console.log(JSON.stringify({ msg: 'response', route, requestId, status: result.statusCode, durationMs: Date.now() - started }));
+    return result;
+  };
+}
+
+function routes(resource: string) {
+  return (event: APIGatewayProxyEvent, route: string): APIGatewayProxyResult => {
     const caller = callerOf(event);
 
     switch (route) {

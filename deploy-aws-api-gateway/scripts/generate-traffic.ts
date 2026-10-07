@@ -72,7 +72,7 @@ run(async () => {
     let i = 0;
 
     while (Date.now() < deadline) {
-      const status = await call(i++ % 2 ? '/messages' : '/users');
+      const status = await call(['/users', '/messages', '/orders'][i++ % 3]);
       count(window, status);
       count(total, status);
       if (Date.now() - lastReport >= 30_000) {

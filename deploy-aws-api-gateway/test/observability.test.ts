@@ -51,7 +51,7 @@ test('saves Logs Insights queries for 5xx by cause and the latest 5xx requests',
 });
 
 test('alarms on each backend\'s errors on live and $LATEST, for the rollback service\'s Lambda manager', () => {
-  for (const backend of ['users', 'messages']) {
+  for (const backend of ['users', 'messages', 'orders']) {
     const fn = `rollback-factory-demo-api-${backend}-dev`;
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       // the "lambda" type routes it to the Lambda manager, which rolls fn:live back (rollback-config.json)
