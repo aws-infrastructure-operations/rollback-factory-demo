@@ -53,7 +53,9 @@ npx cdk bootstrap aws://<account>/<main-region> aws://<account>/us-east-1
   `ListInvalidations`, `GetInvalidation`; origin custom headers are never sent on), the release history of
   every environment's `frontend-user-<env>` (`dynamodb:Query` on `rollback-factory-demo-frontend-deployments-*`),
   and CloudFront metrics in us-east-1. For each `api-user-<env>` it reads the recorded deployments too
-  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`). Its only writes go through the rollback
+  (`dynamodb:Query` on `rollback-factory-demo-deployments-*`) and the routes of their OpenAPI exports
+  (`s3:GetObject` on `rollback-factory-demo-<account>-deployments-*/api-user-*/openapi.json` only; the
+  routes are sent on, never the integration details). Its only writes go through the rollback
   service: they invoke `rollback-factory-demo-rollback-service-<env>` (`lambda:InvokeFunction` on those
   functions only):
   - `POST /api/api-gateways/<id>/restore` with `{"deployedAt": "..."}`: the rollback service re-imports
@@ -86,7 +88,12 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   each serves) and its **configuration**, from `GET /api/api-gateways/<id>?type=<REST|HTTP|WEBSOCKET>`. For
   `api-user-<env>` the deployments are the ones recorded in DynamoDB (marked live, verified or rolled back),
   each with a **Restore** button (after a confirm; the live one can't be restored); for other APIs they are
-  API Gateway's own, with nothing to restore.
+  API Gateway's own, with nothing to restore. On the **Stages** tab, the stage these deployments are
+  recorded for (`v1`) has a **Rollback** menu listing them newest first, with their source, commit, Lambda
+  version and whether they were verified or rolled back; the previous verified one is marked. Before a
+  rollback or restore, the confirm lists the routes it removes and brings back, from both deployments'
+  OpenAPI exports in S3 (`GET /api/api-gateways/<id>/spec?deployedAt=...`). Either goes through the
+  same restore. Other stages (`integration`, redeployed by CI) and other APIs can't be rolled back here.
 - **Lambda Functions** is live too, for the functions registered for rollback only
   (`rollback-service/rollback-config.json`, passed to the dashboard API as `REGISTERED_FUNCTIONS` at deploy
   time): their runtime, aliases and last change, from `GET /api/lambda-functions`. Next to it, the selected

@@ -6,7 +6,7 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 /** The parts of a record (deploy-aws-api-gateway/lambda/shared/deployments.ts) the dashboard reads. */
-interface ApiDeploymentRecord {
+export interface ApiDeploymentRecord {
   apiName: string;
   deployedAt: string;
   restApiId: string;
@@ -110,6 +110,18 @@ export async function listRecordedDeployments(
   const table = deploymentsTableFor(apiName, project);
   const records = table ? await query(dynamo, table, apiName) : undefined;
   return records?.filter((r) => r.restApiId === restApiId).map(view);
+}
+
+/** The record of the API (this id) at `deployedAt`; undefined for APIs this project doesn't deploy. */
+export async function getRecordedDeployment(
+  dynamo: DynamoDBDocumentClient,
+  project: string,
+  api: { id: string; name: string },
+  deployedAt: string,
+): Promise<ApiDeploymentRecord | undefined> {
+  const table = deploymentsTableFor(api.name, project);
+  const [record] = (table ? await query(dynamo, table, api.name, deployedAt) : undefined) ?? [];
+  return record?.restApiId === api.id ? record : undefined;
 }
 
 export type RestoreResult =

@@ -3,10 +3,11 @@
 // configuration next to them.
 import { useMemo, useState } from 'react';
 import {
-  fetchApiGatewayDetails, fetchApiGateways, restoreApiDeployment,
+  fetchApiGatewayDetails, fetchApiGateways, fetchApiSpec, restoreApiDeployment,
   type ApiGateway, type ApiGatewayDetails, type ApiGatewayList, type RecordedApiDeployment,
 } from '../api.js';
 import { DateCell, loadState, useLoad } from './loading.js';
+import { MenuButton, type MenuItem } from './Menu.js';
 import { DetailPanel, ListPanel } from './Panels.js';
 import { DataTable, RollbackButton, StageTags, Tag, type TableMessage } from './ui.js';
 
@@ -15,9 +16,36 @@ const matches = (api: ApiGateway, query: string) =>
 
 const typeLabel = { REST: 'REST API', HTTP: 'HTTP API', WEBSOCKET: 'WebSocket API' };
 
-const STAGE_ROLLBACK = 'Restore a recorded deployment from the Deployments tab.';
-
 const formatAt = (iso: string) => new Date(iso).toLocaleString();
+
+/**
+ * What restoring `target` changes in the routes the stage serves now (`live`), from both
+ * deployments' OpenAPI exports in S3. A line for the confirm dialog.
+ */
+async function routeChanges(apiId: string, target: RecordedApiDeployment, live: RecordedApiDeployment | undefined) {
+  if (!live) return 'Routes: no live deployment recorded to compare with.';
+  try {
+    const [to, from] = await Promise.all([fetchApiSpec(apiId, target.deployedAt), fetchApiSpec(apiId, live.deployedAt)]);
+    const removed = from.routes.filter((r) => !to.routes.includes(r));
+    const added = to.routes.filter((r) => !from.routes.includes(r));
+    if (!removed.length && !added.length) return `Routes: the same ${to.routes.length} as live.`;
+    return [
+      removed.length && `Routes it removes: ${removed.join(', ')}`,
+      added.length && `Routes it brings back: ${added.join(', ')}`,
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    return `Routes: could not compare (${(err as Error).message}).`;
+  }
+}
+
+/** One recorded deployment as a menu hint: where it came from and what happened to it. */
+const recordHint = (d: RecordedApiDeployment) => [
+  d.source,
+  d.commit?.slice(0, 7),
+  d.lambdaVersion && `Lambda v${d.lambdaVersion}`,
+  d.verified && 'verified',
+  d.rolledBack && 'rolled back',
+].filter(Boolean).join(' · ');
 
 export function ApiGatewaySection() {
   const [reloads, setReloads] = useState(0);
@@ -87,11 +115,16 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
   const [restoring, setRestoring] = useState<{ apiId: string; deployedAt: string }>();
   const [outcome, setOutcome] = useState<{ apiId: string; text: string; error?: boolean }>();
 
-  async function restore(d: RecordedApiDeployment) {
+  async function restore(d: RecordedApiDeployment, verb = 'Restore') {
     const what = `${api.name} stage ${d.stageName} to deployment ${d.deploymentId}, recorded ${formatAt(d.deployedAt)}`;
-    if (!window.confirm(`Restore ${what}?\n\nThe rollback service re-imports that deployment's OpenAPI export and redeploys the stage.`)) return;
     setRestoring({ apiId: api.id, deployedAt: d.deployedAt });
     setOutcome(undefined);
+    const live = data?.recorded?.find((r) => r.current && r.stageName === d.stageName);
+    const changes = await routeChanges(api.id, d, live);
+    if (!window.confirm(`${verb} ${what}?\n\n${changes}\n\nThe rollback service re-imports that deployment's OpenAPI export and redeploys the stage. The Lambda alias stays on live: the code isn't rolled back.`)) {
+      setRestoring(undefined);
+      return;
+    }
     try {
       await restoreApiDeployment(api.id, d.deployedAt);
       setOutcome({ apiId: api.id, text: `Restored ${what}. It counts as verified once the integration tests pass again.` });
@@ -103,6 +136,31 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     }
   }
   const busy = restoring?.apiId === api.id;
+
+  const outcomeLine = outcome?.apiId === api.id && (
+    <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
+  );
+
+  /** Why a stage can't be rolled back from here, if it can't. */
+  function stageRollbackDisabled(stage: string) {
+    if (!data?.recorded) return 'Only api-user-<env> keeps a deployment history (DynamoDB + S3) to roll back to.';
+    if (!data.recorded.some((r) => r.stageName === stage)) return `${stage} has no recorded deployments: CI redeploys it on every deploy.`;
+    return undefined;
+  }
+
+  /** The stage's recorded deployments, newest first; the previous verified one is the usual rollback. */
+  function stageItems(stage: string): MenuItem[] {
+    const records = (data?.recorded ?? []).filter((r) => r.stageName === stage);
+    const liveAt = records.find((r) => r.current)?.deployedAt ?? '';
+    const previous = records.find((r) => !r.current && r.verified && !r.rolledBack && r.deployedAt < liveAt);
+    return records.map((d) => ({
+      key: d.deployedAt,
+      label: `${d.deploymentId} · ${formatAt(d.deployedAt)}${d === previous ? ' (previous verified)' : ''}`,
+      hint: recordHint(d),
+      disabledReason: d.current ? 'live now' : undefined,
+      onSelect: () => restore(d, 'Roll back'),
+    }));
+  }
 
   const message: TableMessage | undefined = details.failed && !data
     ? { text: `Could not load ${api.name}. Try refreshing.`, error: true }
@@ -119,22 +177,29 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
       {(tab) => {
         if (tab === 'Stages') {
           return (
+            <>
+            {outcomeLine}
             <DataTable rows={data?.stages ?? []} rowKey={(s) => s.name}
               message={message ?? (data!.stages.length ? undefined : { text: 'No stages: this API was never deployed.' })}
               columns={[
                 { header: 'Stage Name', cell: (s) => <><span className={`dot ${s.deploymentId ? 'ok' : 'muted'}`} />{s.name}</> },
                 { header: 'Deployment ID', cell: (s) => s.deploymentId ?? '—' },
                 { header: 'Deployed At', cell: (s) => <DateCell iso={s.deployedAt} /> },
-                { header: 'Actions', cell: () => <RollbackButton disabledReason={STAGE_ROLLBACK} /> },
+                {
+                  header: 'Actions',
+                  cell: (s) => (
+                    <MenuButton label="Rollback" heading={`Roll ${s.name} back to…`} items={stageItems(s.name)}
+                      disabledReason={stageRollbackDisabled(s.name)} busy={busy} />
+                  ),
+                },
               ]} />
+            </>
           );
         }
         if (tab === 'Deployments' && data?.recorded) {
           return (
             <>
-              {outcome?.apiId === api.id && (
-                <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
-              )}
+              {outcomeLine}
               <DataTable rows={data.recorded} rowKey={(d) => d.deployedAt}
                 message={message ?? (data.recorded.length ? undefined : { text: 'No deployment recorded yet.' })}
                 columns={[

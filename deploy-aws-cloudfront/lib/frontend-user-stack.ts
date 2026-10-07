@@ -120,6 +120,12 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['dynamodb:Query'],
       resources: [table('frontend-deployments'), table('deployments')],
     }));
+    // The OpenAPI export of each recorded api-user-<env> deployment, to show what a rollback changes
+    // (api-gateway-specs.ts): GetObject on those exports only, in every environment's bucket
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: [`arn:${cdk.Aws.PARTITION}:s3:::${PROJECT_NAME}-${cdk.Aws.ACCOUNT_ID}-deployments-*/api-user-*/openapi.json`],
+    }));
     // Restoring a recorded API deployment: the rollback service re-imports its spec and redeploys
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
