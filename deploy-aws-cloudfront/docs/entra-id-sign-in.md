@@ -4,8 +4,9 @@ Only the people assigned to an Entra ID app may open the dashboard: the page, it
 the actions behind them (API and CloudFront restores, Lambda alias moves). Today anyone with a site URL
 can do all of that.
 
-Status: **planned**. It comes after the custom domains (`deploy-aws-dns`, then the certificate and
-domains on the distributions): the sign-in redirect URIs need those stable hostnames.
+Status: **planned**. Its prerequisite, the custom domains, is in place: the zone
+`rollback.ionuteliantudor.com` ([`deploy-aws-dns`](../../deploy-aws-dns)) and the certificate and
+domains on the distributions. The sign-in redirect URIs below use those stable hostnames.
 
 ## How it works
 
