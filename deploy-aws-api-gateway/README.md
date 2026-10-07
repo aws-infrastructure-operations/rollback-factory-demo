@@ -244,6 +244,8 @@ Logging needs API Gateway's account-level CloudWatch role. The stack creates tha
 
 ```
 PR ───────► test (typecheck, unit tests, synth dev+prod, Bruno collection up to date)
+            └► pr environment: cdk deploy deploy-aws-api-gateway-pr-<n> ─► integration tests (stage integration)
+PR closed ─► delete pr environment (delete-stack deploy-aws-api-gateway-pr-<n>)
 
 main / manual ─► test ─► deploy dev ──────────────────────────► deploy prod (same steps)
                          ├ cdk bootstrap
@@ -265,6 +267,28 @@ A `cdk deploy` without that context (e.g. `npm run deploy:dev`, or the break-api
 Prod is deployed only when every dev step passes, including the integration tests.
 The workflow does not watch the alarms after a deploy; that part is done in AWS. A 4xx or 5xx alarm notifies SNS, which invokes the rollback service (see [Alarms & automatic rollback](#alarms--automatic-rollback)), whether or not a workflow is running.
 A manual run (`workflow_dispatch`) can skip prod, or set `dev_chaos_failure_rate=1`: the integration tests then fail on the integration stage and `v1` stays as it is.
+
+### Pull request environments
+
+Each pull request that changes this project gets its own copy of the stack, environment `pr-<number>`:
+`deploy-aws-api-gateway-pr-<n>` with `api-user-pr-<n>`, its own user pool, backends, bucket and table.
+The `pr environment` job deploys it on every push (updating the same stack) and runs the integration
+tests on its `integration` stage. It is also reachable on dev's API domain under its own path:
+`https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/integration/users` (and `…/v1/…`).
+
+Compared with dev, a PR environment:
+- is not promoted, recorded or verified: there are no rollbacks for it;
+- has its alarms, but they notify nobody (no rollback service for it);
+- uses dev's account-level CloudWatch role instead of creating one;
+- keeps nothing when it is deleted (only `prod` keeps data).
+
+Closing the PR, merged or not, runs `delete pr environment`, which deletes the stack
+([`pr-environment-delete`](../.github/actions/pr-environment-delete/action.yml)). The nightly
+[`pr-environments-cleanup`](../.github/workflows/pr-environments-cleanup.yml) workflow deletes any
+`*-pr-<n>` stack whose PR is no longer open. PRs from forks get no environment: they get no secrets.
+The jobs use the `dev` GitHub environment's credentials and region.
+
+While it exists, the dashboard lists `api-user-pr-<n>` with the other APIs.
 
 ### Rollback demo (manual workflow)
 

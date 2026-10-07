@@ -216,6 +216,14 @@ the rollback topic. Permissions, the scheduled check and the sync are generated 
 | [`lambda rollback by version`](../.github/workflows/lambda-rollback-by-version.yml) | Manual: environment, `target_version`, `dry_run` | See [Manual rollback](#manual-rollback) |
 | [`lambda rollback to commit`](../.github/workflows/lambda-rollback-to-commit.yml) | Manual: environment, `commit`, `dry_run` | Resolves the commit to a version in that environment, then runs rollback by version |
 
+**Pull request environments.** Each pull request that changes this project gets its own copy of the
+stack, environment `pr-<number>`: `deploy-aws-lambda-pr-<n>` with `service-lambda-pr-<n>`. The
+`pr environment` job deploys it on every push and runs the integration tests on its `integration`
+alias. Nothing is promoted or archived, its errors alarm notifies nobody, and the function is not in
+the rollback service's `rollback-config.json`. Closing the PR deletes the stack; the nightly
+[`pr-environments-cleanup`](../.github/workflows/pr-environments-cleanup.yml) workflow deletes any
+left behind. PRs from forks get no environment. The jobs use the `dev` GitHub environment.
+
 Deploys and manual rollbacks of the same environment share the lock `lambda-release-<env>`.
 Secrets per GitHub environment: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, variable `AWS_REGION`;
 optionally `WORKFLOW_PAT` (repository secret) for the dropdown.

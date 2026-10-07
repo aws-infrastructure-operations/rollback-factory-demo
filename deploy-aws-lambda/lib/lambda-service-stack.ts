@@ -105,8 +105,11 @@ export class LambdaServiceStack extends cdk.Stack {
       evaluationPeriods: 1,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     });
-    errorsAlarm.addAlarmAction(new cwActions.SnsAction(sns.Topic.fromTopicArn(this, 'RollbackTopic',
-      this.formatArn({ service: 'sns', resource: config.rollbackTopicName }))));
+    // A pull request's environment has no rollback service: its alarm exists but notifies nobody.
+    if (!config.pr) {
+      errorsAlarm.addAlarmAction(new cwActions.SnsAction(sns.Topic.fromTopicArn(this, 'RollbackTopic',
+        this.formatArn({ service: 'sns', resource: config.rollbackTopicName }))));
+    }
 
     // --- Outputs --------------------------------------------------------------
     // Export names are unique per account and region: prefix ours so they never clash with the

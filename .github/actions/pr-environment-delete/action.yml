@@ -1,0 +1,51 @@
+name: pr-environment-delete
+description: Delete a pull request's stack (deploy-aws-<project>-pr-<number>) and wait until it is gone
+
+# Used when a pull request is closed (api-gateway.yml, lambda.yml) and by the nightly
+# pr-environments-cleanup.yml for stacks whose pull request is closed but which are still there.
+# A stack that is already gone is fine. If the delete fails (DELETE_FAILED, e.g. a resource that
+# could not be removed yet), it is retried once with FORCE_DELETE_STACK, which deletes the stack and
+# leaves the stuck resources behind: they show in the job log as the stack events' reasons.
+#
+# The calling job configures the AWS credentials.
+
+inputs:
+  stack-name:
+    description: deploy-aws-api-gateway-pr-<n> or deploy-aws-lambda-pr-<n>
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Delete ${{ inputs.stack-name }}
+      shell: bash
+      env:
+        STACK: ${{ inputs.stack-name }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$STACK" =~ ^deploy-aws-(api-gateway|lambda)-pr-[1-9][0-9]*$ ]]; then
+          echo "::error::$STACK is not a pull request's stack; refusing to delete it"
+          exit 1
+        fi
+        status() { aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo GONE; }
+
+        if [[ "$(status)" == GONE ]]; then
+          echo "$STACK does not exist (already deleted)"
+          exit 0
+        fi
+        mode=STANDARD
+        [[ "$(status)" == DELETE_FAILED ]] && mode=FORCE_DELETE_STACK
+        for attempt in 1 2; do
+          echo "Deleting $STACK ($mode)"
+          aws cloudformation delete-stack --stack-name "$STACK" --deletion-mode "$mode"
+          if aws cloudformation wait stack-delete-complete --stack-name "$STACK"; then
+            echo "$STACK deleted"
+            exit 0
+          fi
+          echo "::warning::$STACK: delete ended in $(status)"
+          aws cloudformation describe-stack-events --stack-name "$STACK" --max-items 20 \
+            --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceStatusReason]" --output text || true
+          mode=FORCE_DELETE_STACK
+        done
+        echo "::error::Could not delete $STACK"
+        exit 1

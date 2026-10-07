@@ -99,7 +99,13 @@ Where the drawing is behind the code:
 
 ![service-lambda: the GitHub Actions workflows (PR checks, deploy per environment, commit dropdown)](architecture/images/workflow-architecture-lambda.png)
 
-- **Pull requests:** each project's workflow runs the typecheck, unit tests and `cdk synth`.
+- **Pull requests:** each project's workflow runs the typecheck, unit tests and `cdk synth`. For the
+  API and the Lambda, the PR then gets **its own environment**, `pr-<number>`: a copy of the stack
+  (`deploy-aws-api-gateway-pr-<n>`, `deploy-aws-lambda-pr-<n>`) that is deployed on every push, and
+  the integration tests run on it. The PR's API is also on
+  `https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/v1/`. Closing the PR deletes the stacks,
+  and the nightly [`pr-environments-cleanup`](.github/workflows/pr-environments-cleanup.yml) deletes
+  any left behind.
 - **`main` (or a manual run):** it deploys dev, then prod. One environment at a time, a job:
   1. deploys to the integration target;
   2. runs the integration tests there;
