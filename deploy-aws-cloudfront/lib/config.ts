@@ -77,7 +77,7 @@ export interface SiteDomains {
  * The hosted zone deploy-aws-dns creates (its HostedZoneId output), shared by every environment.
  * It never changes: the zone is kept even if that stack is deleted.
  */
-export const HOSTED_ZONE = { id: 'Z05783463JDFZM1R6MU2D', name: 'rollback.ionuteliantudor.com' };
+export const HOSTED_ZONE = { id: 'Z0085229C3Q59CDL7JTH', name: 'rollback.ionuteliantudor.com' };
 
 /**
  * dev: dev.rollback… and dev-integration.rollback…; prod without a prefix: rollback… and
