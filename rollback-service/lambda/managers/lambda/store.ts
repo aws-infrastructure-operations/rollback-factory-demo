@@ -19,6 +19,11 @@ export interface ArchivedVersion {
   codeSha256: string;
   s3Bucket: string;
   s3Key: string;
+  /** set by the scheduled check once the version was live with all its alarms OK; false once rolled back from */
+  stable?: boolean;
+  stableAt?: string;
+  liveAt?: string;
+  rolledBackAt?: string;
 }
 
 const archived = (item: Record<string, AttributeValue>): ArchivedVersion => ({
@@ -26,6 +31,10 @@ const archived = (item: Record<string, AttributeValue>): ArchivedVersion => ({
   codeSha256: item.codeSha256.S!,
   s3Bucket: item.s3Bucket.S!,
   s3Key: item.s3Key.S!,
+  ...(item.stable?.BOOL !== undefined && { stable: item.stable.BOOL }),
+  ...(item.stableAt?.S && { stableAt: item.stableAt.S }),
+  ...(item.liveAt?.S && { liveAt: item.liveAt.S }),
+  ...(item.rolledBackAt?.S && { rolledBackAt: item.rolledBackAt.S }),
 });
 
 export async function getCurrent(ddb: DynamoDBClient, table: string, functionName: string): Promise<CurrentState | undefined> {

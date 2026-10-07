@@ -8,6 +8,7 @@ import {
   LambdaClient, ListAliasesCommand, ListFunctionsCommand, ListVersionsByFunctionCommand,
   type AliasConfiguration, type FunctionConfiguration,
 } from '@aws-sdk/client-lambda';
+import type { ArchivedVersionInfo } from './lambda-archive.js';
 import { mapLimit } from './util.js';
 
 /** What GET /api/lambda-functions returns per function (app/src/api.ts has the same shape). */
@@ -29,7 +30,8 @@ export interface LambdaFunctionDetails {
   name: string;
   arn: string;
   /** published versions, newest first, at most MAX_VERSIONS; each with the aliases that serve it */
-  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[] }>;
+  /** archive: registered functions only, for versions in the rollback service's archive (stable ones can be redeployed) */
+  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[]; archive?: ArchivedVersionInfo }>;
   aliases: Array<{ name: string; version: string; description?: string; additionalVersions?: Record<string, number> }>;
   configuration: Array<{ label: string; value: string }>;
   /**

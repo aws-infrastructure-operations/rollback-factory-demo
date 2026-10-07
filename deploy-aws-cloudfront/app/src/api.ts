@@ -125,11 +125,25 @@ export interface LambdaFunctionList {
   functions: LambdaFunction[];
 }
 
+/** A version in the rollback service's archive (lambda/dashboard-api/lambda-archive.ts has the same shape). */
+export interface ArchivedVersion {
+  /** s3://<bucket>/<fn>/<fn>-<version>.zip */
+  s3Uri: string;
+  /** live with all its alarms OK long enough; false once rolled back from */
+  stable: boolean;
+  stableAt?: string;
+  liveAt?: string;
+  rolledBackAt?: string;
+}
+
 export interface LambdaFunctionDetails {
   name: string;
   arn: string;
-  /** newest first, the latest 25 published versions */
-  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[] }>;
+  /**
+   * newest first, the latest 25 published versions. archive: registered functions, versions in the
+   * rollback service's S3 archive; only stable ones can go live
+   */
+  versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[]; archive?: ArchivedVersion }>;
   /** additionalVersions: version → weight (0..1) of a weighted alias */
   aliases: Array<{ name: string; version: string; description?: string; additionalVersions?: Record<string, number> }>;
   configuration: Array<{ label: string; value: string }>;

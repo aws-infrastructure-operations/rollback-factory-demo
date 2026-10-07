@@ -610,7 +610,8 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
   // The registered alias (live) moves like the manual rollback workflow: alias, $LATEST restored
   // from the version's zip, and the archive updated. Going back counts as a manual rollback (starts
   // the cooldown, not the consecutive-rollback count, marks the version left as rolled back from);
-  // going forward as a promotion. Any other alias of the function (integration) just moves.
+  // going forward as a promotion. It only moves to versions marked stable (redeploying a stable
+  // artifact from S3). Any other alias of the function (integration) just moves, to any version.
   async function pointAlias(req: PointAliasRequest) {
     const { functionName, aliasName, version: target } = req;
     const registration = registry.get(functionName);
@@ -639,6 +640,10 @@ export function createRollbackSystem(deps: Deps, settings: Settings) {
 
     const archivedTarget = await getVersionItem(ddb, TABLE, functionName, target);
     if (!archivedTarget) return skip(`${functionName} version ${target} is not archived, so $LATEST can't be restored from it`);
+    // the live alias only goes to versions that proved themselves: live with all alarms OK, never rolled back from
+    if (archivedTarget.stable !== true) {
+      return skip(`${functionName} version ${target} is not marked stable${archivedTarget.rolledBackAt ? ' (it was rolled back from)' : ''}: ${aliasName} only moves to stable versions`);
+    }
 
     await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: aliasName, FunctionVersion: String(target), RevisionId: alias.RevisionId }));
     logStep('alias-moved', { functionName, aliasName, from: current, to: target });

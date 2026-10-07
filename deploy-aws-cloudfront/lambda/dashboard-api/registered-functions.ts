@@ -14,6 +14,8 @@ export interface RegisteredFunction {
 export interface Registration {
   rollbackService: string;
   alias: string;
+  /** the rollback service's version archive of that environment: which versions are in S3, which are stable */
+  archiveTable: string;
 }
 
 export function parseRegistered(json: string | undefined): RegisteredFunction[] {
@@ -29,7 +31,7 @@ export function registrationFor(functionName: string, registered: RegisteredFunc
   for (const fn of registered) {
     const [before, after] = fn.name.split('<env>');
     const env = new RegExp(`^${escape(before)}([a-z0-9]+)${escape(after)}$`).exec(functionName)?.[1];
-    if (env) return { rollbackService: `${project}-rollback-service-${env}`, alias: fn.alias };
+    if (env) return { rollbackService: `${project}-rollback-service-${env}`, alias: fn.alias, archiveTable: `${project}-lambda-archive-${env}` };
   }
   return undefined;
 }
