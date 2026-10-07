@@ -61,12 +61,19 @@ const route = createRouter(ENV_NAME, {
 
 export const handler = async (event: ServiceEvent) => {
   targets.clear();
+  const started = Date.now();
+  // runs the dashboard started carry an operation id: with the duration, the dashboard estimates
+  // how long the next run of that kind takes (deploy-aws-cloudfront operations.ts)
+  const run = () => ({
+    ...('operationId' in event && typeof event.operationId === 'string' && { operationId: event.operationId }),
+    durationMs: Date.now() - started,
+  });
   try {
     const result = await route(event);
-    console.log(JSON.stringify({ msg: 'result', result }));
+    console.log(JSON.stringify({ msg: 'result', ...run(), result }));
     return result;
   } catch (err) {
-    console.error(JSON.stringify({ msg: 'failed', error: (err as Error).message }));
+    console.error(JSON.stringify({ msg: 'failed', ...run(), error: (err as Error).message }));
     throw err;
   }
 };

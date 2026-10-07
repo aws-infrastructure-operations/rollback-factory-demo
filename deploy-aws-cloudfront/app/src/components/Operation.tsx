@@ -3,6 +3,7 @@
 // from GET /api/operations/<id>.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fetchOperation, type OperationView, type StartedOperation } from '../api.js';
+import { etaText } from '../eta.js';
 
 /** How a run the page started ended (or that the popup was closed before it did). */
 export interface OperationOutcome {
@@ -27,6 +28,8 @@ interface Run {
   view?: OperationView;
   /** the request to start it failed */
   error?: string;
+  /** when the page asked to start it (this browser's clock: the ETA runs on it) */
+  sentAt?: number;
 }
 
 const ENDED = ['succeeded', 'skipped', 'failed'];
@@ -61,14 +64,15 @@ export function useOperationDialog() {
         return { status: 'cancelled' };
       }
     }
-    setRun({ title });
+    const sentAt = Date.now();
+    setRun({ title, sentAt });
     const ended = new Promise<OperationOutcome>((resolve) => { settle.current = resolve; });
     try {
       const { operationId } = await begin();
-      setRun({ title, id: operationId });
+      setRun({ title, id: operationId, sentAt });
     } catch (err) {
       const reason = (err as Error).message;
-      setRun({ title, error: reason });
+      setRun({ title, error: reason, sentAt });
       finish({ status: 'failed', reason });
     }
     return ended;
@@ -159,10 +163,31 @@ const STATUS_TEXT: Record<OperationView['status'], string> = {
 
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+/** Ticks while the run goes on; freezes when it ends. */
+function useEta(run: Run, status: string) {
+  const ended = ENDED.includes(status);
+  const [now, setNow] = useState(() => Date.now());
+  const [endedAt, setEndedAt] = useState<number>();
+  useEffect(() => {
+    if (ended) {
+      setEndedAt((at) => at ?? Date.now());
+      return;
+    }
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, [ended]);
+  const elapsedMs = Math.max(0, (endedAt ?? now) - (run.sentAt ?? now));
+  const estimate = run.view?.estimate;
+  return { elapsedMs, estimateMs: estimate?.ms, text: etaText(elapsedMs, estimate, ended) };
+}
+
 function OperationDialog({ run, onClose }: { run: Run; onClose: () => void }) {
   const { view, error } = run;
   const status = error ? 'failed' : view?.status ?? 'queued';
-  const progress = error ? 100 : view?.progress ?? 2;
+  const timer = useEta(run, status);
+  // between steps the bar moves with the time against the estimate, never past 95% before it ends
+  const progress = error ? 100 : ENDED.includes(status) ? 100
+    : Math.max(view?.progress ?? 2, timer.estimateMs ? Math.min(95, Math.round((timer.elapsedMs / timer.estimateMs) * 95)) : 0);
   const reason = error ?? view?.reason;
   const ended = ENDED.includes(status);
   const logRef = useRef<HTMLPreElement>(null);
@@ -187,6 +212,7 @@ function OperationDialog({ run, onClose }: { run: Run; onClose: () => void }) {
         <div className="operation-status">
           <span className={`status ${status === 'failed' ? 'bad' : status === 'succeeded' ? '' : 'pending'}`}>{STATUS_TEXT[status]}</span>
           {reason && <span className="operation-reason">{reason}</span>}
+          <span className="operation-eta" aria-live="off">{timer.text}</span>
         </div>
         <div className={`progress ${status}`} role="progressbar" aria-label="Progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
           <div className="progress-bar" style={{ width: `${progress}%` }} />
