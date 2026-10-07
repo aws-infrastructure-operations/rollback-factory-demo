@@ -13,6 +13,8 @@ on:
       - deploy-aws-cloudfront/**
       # the dashboard reads the functions registered for rollback (frontend-user-stack.ts)
       - rollback-service/rollback-config.json
+      # the domain rule (siteDomains) the frontend test compares its own with
+      - deploy-aws-dns/lib/config.ts
       - .github/workflows/frontend*.yml
       - "!**/*.md"
   pull_request:
@@ -20,6 +22,8 @@ on:
       - deploy-aws-cloudfront/**
       # the dashboard reads the functions registered for rollback (frontend-user-stack.ts)
       - rollback-service/rollback-config.json
+      # the domain rule (siteDomains) the frontend test compares its own with
+      - deploy-aws-dns/lib/config.ts
       - .github/workflows/frontend*.yml
       - "!**/*.md"
   workflow_dispatch:

@@ -89,7 +89,7 @@ jobs:
           name_servers=$(jq -r '."deploy-aws-dns".NameServers' outputs.json)
           {
             echo "### rollback.ionuteliantudor.com"
-            echo "Hosted zone id: \`$zone_id\` (deploy-aws-cloudfront/lib/config.ts: HOSTED_ZONE_ID)"
+            echo "Hosted zone id: \`$zone_id\` (deploy-aws-cloudfront/lib/config.ts: HOSTED_ZONE)"
             echo
             echo "Delegate the zone once: at ionuteliantudor.com's DNS host, add an **NS** record for **rollback** with:"
             echo '```'

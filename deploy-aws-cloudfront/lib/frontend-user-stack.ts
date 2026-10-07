@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
@@ -8,6 +9,8 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
@@ -16,6 +19,12 @@ import { INITIAL_RELEASE_ID, originPathFor, releasePrefix } from '../lambda/shar
 
 export interface FrontendUserStackProps extends cdk.StackProps {
   config: EnvConfig;
+  /**
+   * The certificate of config.domains (FrontendCertificateStack, us-east-1). With it, each distribution
+   * serves its domain and gets alias records in the hosted zone; without it (unit tests of the rest),
+   * only its *.cloudfront.net domain.
+   */
+  certificate?: acm.ICertificate;
 }
 
 /**
@@ -149,9 +158,20 @@ export class FrontendUserStack extends cdk.Stack {
     // The origin path selects the release a distribution serves. `cdk deploy` keeps both on
     // -c liveReleaseId / -c integrationReleaseId (scripts/live-context.ts), so a deploy never
     // undoes an activation or a rollback.
-    const siteDistribution = (id: string, comment: string, releaseId = INITIAL_RELEASE_ID) => {
+    const { certificate } = props;
+    const zone = certificate && route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+      hostedZoneId: config.hostedZone.id,
+      zoneName: config.hostedZone.name,
+    });
+    const siteDistribution = (id: string, comment: string, domain: string, releaseId = INITIAL_RELEASE_ID) => {
       const distribution = new cloudfront.Distribution(this, id, {
         comment,
+        // its own domain, e.g. dev.rollback.ionuteliantudor.com (the *.cloudfront.net one keeps working)
+        ...(certificate && {
+          domainNames: [domain],
+          certificate,
+          minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+        }),
         defaultRootObject: 'index.html',
         httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
         priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
@@ -183,6 +203,12 @@ export class FrontendUserStack extends cdk.Stack {
         // missing file has to stay a 4xx so the 4xx alarm can see a broken release.
       });
       cdk.Tags.of(distribution).add('Name', comment);
+      if (zone) {
+        // the domain points at the distribution, over IPv4 and IPv6
+        const target = route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution));
+        new route53.ARecord(this, `${id}AliasA`, { zone, recordName: domain, target });
+        new route53.AaaaRecord(this, `${id}AliasAaaa`, { zone, recordName: domain, target });
+      }
       // FunctionUrlOrigin grants lambda:InvokeFunctionUrl; function URLs also need
       // lambda:InvokeFunction, limited here to calls made through the URL
       this.dashboardApi.addPermission(`InvokeFrom${id}`, {
@@ -195,11 +221,11 @@ export class FrontendUserStack extends cdk.Stack {
     };
     // What clients use. Only this one has alarms and is rolled back (alarms stack).
     // Its construct id stays 'Distribution' so existing stacks update it in place.
-    this.distribution = siteDistribution('Distribution', config.frontendName, config.liveReleaseId);
+    this.distribution = siteDistribution('Distribution', config.frontendName, config.domains.site, config.liveReleaseId);
     // Where CI makes each release live first and runs the integration tests, like the API's
     // integration stage. No alarms: test traffic never counts toward a rollback.
     this.integrationDistribution = siteDistribution(
-      'IntegrationDistribution', config.integrationName, config.integrationReleaseId,
+      'IntegrationDistribution', config.integrationName, config.domains.integration, config.integrationReleaseId,
     );
 
     // A fresh stack serves a placeholder until the first release is activated.
@@ -242,9 +268,11 @@ export class FrontendUserStack extends cdk.Stack {
       new cdk.CfnOutput(this, outputName, { value, exportName: name(`frontend-${outputName}`) });
     out('DistributionId', this.distribution.distributionId);
     out('DistributionDomainName', this.distribution.distributionDomainName);
-    out('SiteUrl', `https://${this.distribution.distributionDomainName}`);
+    // the custom domains once there is a certificate; the *.cloudfront.net ones are outputs too
+    out('SiteUrl', `https://${certificate ? config.domains.site : this.distribution.distributionDomainName}`);
     out('IntegrationDistributionId', this.integrationDistribution.distributionId);
-    out('IntegrationSiteUrl', `https://${this.integrationDistribution.distributionDomainName}`);
+    out('IntegrationSiteUrl', `https://${certificate ? config.domains.integration : this.integrationDistribution.distributionDomainName}`);
+    out('IntegrationDistributionDomainName', this.integrationDistribution.distributionDomainName);
     out('SiteBucketName', this.siteBucket.bucketName);
     out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
     out('DeploymentsTableName', this.deploymentsTable.tableName);
