@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     timeout-minutes: 45
-    # Shared with api-gateway-deploy.yml, api-gateway-restore.yml and break-api-demo.yml.
+    # Shared with the deploy jobs of api-gateway.yml, api-gateway-restore.yml and break-api-demo.yml.
     concurrency:
       group: api-gateway-deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -98,7 +98,7 @@ jobs:
     environment: ${{ inputs.environment }}
     # Deleting a CloudFront distribution means disabling it first, which takes a while.
     timeout-minutes: 90
-    # Shared with frontend-deploy.yml, frontend-restore.yml and break-frontend-demo.yml.
+    # Shared with the deploy jobs of frontend.yml, frontend-restore.yml and break-frontend-demo.yml.
     concurrency:
       group: frontend-deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     timeout-minutes: 45
-    # Shared with lambda-deploy.yml and the lambda rollback workflows.
+    # Shared with the deploy jobs of lambda.yml and the lambda rollback workflows.
     concurrency:
       group: lambda-release-${{ inputs.environment }}
       cancel-in-progress: false
@@ -160,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     timeout-minutes: 45
-    # Shared with rollback-service-deploy.yml.
+    # Shared with the deploy jobs of rollback-service.yml.
     concurrency:
       group: rollback-service-deploy-${{ inputs.environment }}
       cancel-in-progress: false

@@ -223,7 +223,7 @@ Logging needs API Gateway's account-level CloudWatch role. The stack creates tha
 
 ## CI/CD (GitHub Actions)
 
-[`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.yml) runs when `deploy-aws-api-gateway/**` changes. It calls [`api-gateway-deploy.yml`](../.github/workflows/api-gateway-deploy.yml) once per environment.
+[`.github/workflows/api-gateway.yml`](../.github/workflows/api-gateway.yml) runs when `deploy-aws-api-gateway/**` changes. Each environment's job runs the [`api-gateway-deploy`](../.github/actions/api-gateway-deploy/action.yml) composite action.
 
 ```
 PR ───────► test (typecheck, unit tests, synth dev+prod, Bruno collection up to date)

@@ -8,9 +8,12 @@ import { getConfig } from '../lib/config.js';
 // Check every script the lambda workflows run exists, and that the names they hard-code match config.
 
 const root = path.resolve(__dirname, '..');
-const workflows = path.resolve(root, '..', '.github', 'workflows');
-const files = ['lambda.yml', 'lambda-deploy.yml', 'lambda-rollback-by-version.yml', 'lambda-rollback-to-commit.yml'];
-const read = (file: string) => readFileSync(path.join(workflows, file), 'utf8');
+// the workflows and the deploy action they run (.github/actions/lambda-deploy)
+const github = path.resolve(root, '..', '.github');
+const files = [
+  'workflows/lambda.yml', 'actions/lambda-deploy/action.yml', 'workflows/lambda-rollback-by-version.yml', 'workflows/lambda-rollback-to-commit.yml',
+];
+const read = (file: string) => readFileSync(path.join(github, file), 'utf8');
 const { scripts } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
 
 test('every npm script the lambda workflows run is defined', () => {
