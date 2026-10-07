@@ -11,7 +11,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { CloudWatchLogsClient } from '@aws-sdk/client-cloudwatch-logs';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
-import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
+import { isDeployedAt, listRecordedDeployments, liveLambdaVersions, restoreRecordedDeployment } from './api-gateway-deployments.js';
 import { getRecordedSpec } from './api-gateway-specs.js';
 import { listApiGateways, type ApiType } from './api-gateways.js';
 import { isAliasName, isVersion, pointAlias } from './lambda-aliases.js';
@@ -67,7 +67,7 @@ const RESOURCE_NAMES: Record<string, string> = {
 /**
  * GET /api/api-gateways: the region's APIs.
  * GET /api/api-gateways/<id>?type=REST|HTTP|WEBSOCKET: one API's stages, deployments and configuration,
- *   and for the APIs this project deploys, their recorded deployments.
+ *   and for the APIs this project deploys, their recorded deployments and what each backend's live alias serves now.
  * GET /api/api-gateways/<id>/spec?deployedAt=...: the routes a recorded deployment serves (its OpenAPI export).
  * POST /api/api-gateways/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded deployment.
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
@@ -118,7 +118,8 @@ async function apiGateways(id: string | undefined, sub: string | undefined, quer
   const details = await getApiGatewayDetails(rest, v2, id, type, region);
   if (!details) return json(404, { message: `No ${type} API ${id}` });
   const recorded = type === 'REST' ? await listRecordedDeployments(dynamo, process.env.PROJECT_NAME!, details.name, id) : undefined;
-  return json(200, recorded ? { ...details, recorded } : details);
+  if (!recorded) return json(200, details);
+  return json(200, { ...details, recorded, liveLambdaVersions: await liveLambdaVersions(lambda, recorded) });
 }
 
 /** The routes a recorded deployment of a REST API serves, from its OpenAPI export in S3. */

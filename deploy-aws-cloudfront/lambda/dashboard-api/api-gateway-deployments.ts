@@ -3,7 +3,7 @@ import { startOperation } from './operations.js';
 // deployment of api-user-<env> has a record in <project>-deployments-<env> and its OpenAPI
 // export in the deployments bucket. Restoring one goes through the rollback service, which
 // re-imports that export and redeploys the stage (deploy-aws-api-gateway: deployment:restore).
-import type { LambdaClient } from '@aws-sdk/client-lambda';
+import { ListAliasesCommand, type LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
 /** The parts of a record (deploy-aws-api-gateway/lambda/shared/deployments.ts) the dashboard reads. */
@@ -128,6 +128,27 @@ export async function getRecordedDeployment(
   const table = deploymentsTableFor(api.name, project);
   const [record] = (table ? await query(dynamo, table, api.name, deployedAt) : undefined) ?? [];
   return record?.restApiId === api.id ? record : undefined;
+}
+
+/**
+ * What each backend Lambda's `live` alias serves right now (function name -> version): a restore
+ * points the API at these, not at the versions recorded with the old export. The backends are the
+ * ones the newest record names. A function the dashboard may not read (not registered for rollback)
+ * or that is gone is left out.
+ */
+export async function liveLambdaVersions(lambda: LambdaClient, recorded: RecordedApiDeployment[]): Promise<Record<string, string>> {
+  const functions = Object.keys(recorded.find((r) => r.lambdaVersions)?.lambdaVersions ?? {});
+  const entries = await Promise.all(functions.map(async (fn) => {
+    try {
+      const { Aliases = [] } = await lambda.send(new ListAliasesCommand({ FunctionName: fn }));
+      const version = Aliases.find((a) => a.Name === 'live')?.FunctionVersion;
+      return version ? [[fn, version] as const] : [];
+    } catch (err) {
+      if (['ResourceNotFoundException', 'AccessDeniedException'].includes((err as Error).name)) return [];
+      throw err;
+    }
+  }));
+  return Object.fromEntries(entries.flat().sort(([a], [b]) => a.localeCompare(b)));
 }
 
 export type RestoreResult =

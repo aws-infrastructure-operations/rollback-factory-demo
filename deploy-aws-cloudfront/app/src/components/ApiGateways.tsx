@@ -1,7 +1,7 @@
 // API Gateways: the region's APIs from the dashboard API, with search and refresh, and the
 // selected API's deployments (restorable for the APIs this project deploys), stages and
 // configuration next to them.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   fetchApiGatewayDetails, fetchApiGateways, fetchApiSpec, restoreApiDeployment,
   type ApiGateway, type ApiGatewayDetails, type ApiGatewayList, type RecordedApiDeployment,
@@ -57,14 +57,34 @@ function RouteChanges({ apiId, target, live }: { apiId: string; target: Recorded
   );
 }
 
+/** rollback-factory-demo-api-users-dev -> users */
+const backendName = (fn: string) => /-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn;
+
 /** "users v3 · messages v5" (rollback-factory-demo-api-<resource>-<env>), or "Lambda v5" for older records. */
 function lambdaVersionsHint(d: RecordedApiDeployment) {
   if (d.lambdaVersions) {
     return Object.entries(d.lambdaVersions)
-      .map(([fn, version]) => `${/-api-(.+)-[a-z0-9]+$/.exec(fn)?.[1] ?? fn} v${version}`)
+      .map(([fn, version]) => `${backendName(fn)} v${version}`)
       .join(' · ');
   }
   return d.lambdaVersion && `Lambda v${d.lambdaVersion}`;
+}
+
+/**
+ * What a restored API runs: each backend's live version now ("users live:7"), and when the export
+ * was recorded with another one, which ("recorded with v5").
+ */
+function LiveLambdas({ live, recordedWith }: { live: Record<string, string>; recordedWith?: Record<string, string> }) {
+  return (
+    <div className="stacked">
+      {Object.entries(live).map(([fn, version]) => (
+        <span key={fn}>
+          {backendName(fn)} <span className="live-version">live:{version}</span>
+          {recordedWith?.[fn] && recordedWith[fn] !== version && <span className="muted-text"> · recorded with v{recordedWith[fn]}</span>}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /** s3://<bucket>/api-user-dev/20261007T120000Z/openapi.json -> 20261007T120000Z (the export's folder) */
@@ -172,6 +192,7 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     setRestoring({ apiId: api.id, deployedAt: d.deployedAt });
     setOutcome(undefined);
     const live = data?.recorded?.find((r) => r.current && r.stageName === d.stageName);
+    const liveLambdas = data?.liveLambdaVersions && Object.keys(data.liveLambdaVersions).length ? data.liveLambdaVersions : undefined;
     const ended = await operation.start(`${verb} ${what}`, () => restoreApiDeployment(api.id, d.deployedAt), {
       confirmLabel: verb,
       danger: true,
@@ -181,11 +202,14 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
             ['API', <>{api.name} <span className="muted-text">· stage {d.stageName}</span></>],
             ['Live now', live ? <>{live.deploymentId} <span className="muted-text">· {formatAt(live.deployedAt)}</span></> : '—'],
             [verb === 'Restore' ? 'Restores' : 'Rolls back to', <>{d.deploymentId} <span className="muted-text">· {formatAt(d.deployedAt)} · {recordHint(d)}</span></>],
+            ['OpenAPI export', <span className="spec-file" title={d.spec}>{specFolder(d.spec)}/openapi.json</span>],
+            ...(liveLambdas ? [['Lambdas after', <LiveLambdas live={liveLambdas} recordedWith={d.lambdaVersions} />] as [string, ReactNode]] : []),
           ]} />
           <RouteChanges apiId={api.id} target={d} live={live} />
           <ConfirmNote>
             The rollback service re-imports that deployment's OpenAPI export and redeploys stage {d.stageName}.
-            The Lambda aliases stay on live: the code isn't rolled back.
+            Every route is pointed at its backend's live alias, so the API runs the Lambda versions live serves
+            now, not the ones recorded with that export: the code isn't rolled back.
           </ConfirmNote>
         </>
       ),
@@ -215,16 +239,22 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
     return undefined;
   }
 
-  /** The stage's recorded deployments, newest first; the previous verified one is the usual rollback. */
+  /**
+   * The stage's recorded OpenAPI exports, newest first. Only verified ones that weren't rolled back can
+   * be picked; the previous one of those is the usual rollback.
+   */
   function stageItems(stage: string): MenuItem[] {
     const records = (data?.recorded ?? []).filter((r) => r.stageName === stage);
     const liveAt = records.find((r) => r.current)?.deployedAt ?? '';
     const previous = records.find((r) => !r.current && r.verified && !r.rolledBack && r.deployedAt < liveAt);
     return records.map((d) => ({
       key: d.deployedAt,
-      label: `${d.deploymentId} · ${formatAt(d.deployedAt)}${d === previous ? ' (previous verified)' : ''}`,
-      hint: recordHint(d),
-      disabledReason: d.current ? 'live now' : undefined,
+      label: `${specFolder(d.spec)}/openapi.json · ${d.deploymentId}${d === previous ? ' (previous verified)' : ''}`,
+      hint: `${formatAt(d.deployedAt)} · ${recordHint(d)}`,
+      disabledReason: d.current ? 'live now'
+        : d.rolledBack ? 'rolled back: it failed once already'
+        : !d.verified ? 'not verified: it never passed the integration tests'
+        : undefined,
       onSelect: () => restore(d, 'Roll back'),
     }));
   }

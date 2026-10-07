@@ -1,9 +1,9 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { InvokeCommand, LambdaClient, ListAliasesCommand } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {
-  deploymentsTableFor, isDeployedAt, listRecordedDeployments, restoreRecordedDeployment, rollbackServiceFor,
+  deploymentsTableFor, isDeployedAt, listRecordedDeployments, liveLambdaVersions, restoreRecordedDeployment, rollbackServiceFor,
 } from '../lambda/dashboard-api/api-gateway-deployments.js';
 import { handler } from '../lambda/dashboard-api/handler.js';
 
@@ -131,4 +131,24 @@ test('restores only with POST /api/api-gateways/<id>/restore and a valid body, c
     assert.equal((await handler(request(`/api/api-gateways/${API.id}/restore`, 'POST', body))).statusCode, 400, String(body));
   }
   assert.equal((await handler(request('/api/api-gateways/NOT-AN-ID/restore', 'POST', '{"deployedAt":"2026-10-06T09:00:00.000Z"}'))).statusCode, 400);
+});
+
+test('reads what the live alias of each backend serves now, not what the records say', async () => {
+  const { client } = fakeDynamo();
+  const recorded = (await listRecordedDeployments(client, PROJECT, API.name, API.id))!;
+  const asked: string[] = [];
+  const lambda = {
+    send: async (command: any) => {
+      if (!(command instanceof ListAliasesCommand)) throw new Error(`unexpected ${command.constructor.name}`);
+      const fn = command.input.FunctionName!;
+      asked.push(fn);
+      // users moved on since the record (7 -> 9); messages can't be read (not registered)
+      if (fn.includes('messages')) throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+      return { Aliases: [{ Name: 'integration', FunctionVersion: '10' }, { Name: 'live', FunctionVersion: '9' }] };
+    },
+  } as unknown as LambdaClient;
+  assert.deepEqual(await liveLambdaVersions(lambda, recorded), { 'rollback-factory-demo-api-users-dev': '9' });
+  // the backends named by the newest record that has them
+  assert.deepEqual(asked.sort(), ['rollback-factory-demo-api-messages-dev', 'rollback-factory-demo-api-users-dev']);
+  assert.deepEqual(await liveLambdaVersions(lambda, []), {});
 });

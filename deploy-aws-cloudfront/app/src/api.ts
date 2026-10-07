@@ -33,6 +33,8 @@ export interface ApiGatewayDetails {
   configuration: Array<{ label: string; value: string }>;
   /** the deployments this project recorded, newest first; absent for APIs it doesn't deploy */
   recorded?: RecordedApiDeployment[];
+  /** with recorded: each backend Lambda's live version now (function name -> version), what a restore runs */
+  liveLambdaVersions?: Record<string, string>;
 }
 
 /** Same shape as RecordedApiDeployment in lambda/dashboard-api/api-gateway-deployments.ts. */

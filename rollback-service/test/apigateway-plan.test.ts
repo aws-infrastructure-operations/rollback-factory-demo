@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import type { SNSEvent } from 'aws-lambda';
 import type { DeploymentRecord } from '../lambda/managers/apigateway/deployments.js';
 import {
-  AlarmPair, isRestoreRequest, lambdaArnsFromSpec, lambdaFault, parseAlarms, planRollback, pointToAlias,
+  AlarmPair, frozenLambdas, isRestoreRequest, lambdaArnsFromSpec, lambdaFault, parseAlarms, planRollback, pointToAlias,
 } from '../lambda/managers/apigateway/plan.js';
 
 describe('planRollback', () => {
@@ -141,4 +141,23 @@ test('a restored spec keeps each resource on its own backend\'s stage alias', ()
   for (const backend of ['users', 'messages']) spec = pointToAlias(spec, arn(backend), `${arn(backend)}:\${stageVariables.lambdaAlias}`);
   assert.equal(spec.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${arn('users')}:\${stageVariables.lambdaAlias}`));
   assert.equal(spec.paths['/messages'].post['x-amazon-apigateway-integration'].uri, uri(`${arn('messages')}:\${stageVariables.lambdaAlias}`));
+});
+
+test('after the rewrite, only integrations outside the backends stay frozen: a restore refuses them', () => {
+  const arn = (backend: string) => `arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-api-${backend}-dev`;
+  const uri = (target: string) => `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${target}/invocations`;
+  const op = (target: string) => ({ 'x-amazon-apigateway-integration': { type: 'aws_proxy', uri: uri(target) } });
+  const preSplit = 'arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-handler-dev:5';
+  // a pinned version, a bare function and the stage alias: all go to the stage alias
+  let spec: any = {
+    paths: {
+      '/users': { get: op(`${arn('users')}:5`), post: op(arn('users')) },
+      '/orders': { get: op(`${arn('orders')}:\${stageVariables.lambdaAlias}`) },
+    },
+  };
+  for (const backend of ['users', 'orders']) spec = pointToAlias(spec, arn(backend), `${arn(backend)}:\${stageVariables.lambdaAlias}`);
+  assert.deepEqual(frozenLambdas(spec), []);
+  // a route still on the pre-split handler would run its old code
+  spec.paths['/messages'] = { get: op(preSplit) };
+  assert.deepEqual(frozenLambdas(spec), [preSplit]);
 });
