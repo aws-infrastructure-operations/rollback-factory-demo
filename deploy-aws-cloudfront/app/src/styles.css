@@ -320,3 +320,25 @@ td.date-wrap { white-space: normal; min-width: 90px; }
   background: #fff4e6; color: #b25400; font-weight: 600;
 }
 .demo-label code { font-weight: 500; }
+
+/* Rollbacks: the history of every rollback, filterable by service */
+.service-icon.tint-rollback { background: #d13212; }
+.nav-item .tint-rollback { color: #ff7b5c; }
+.rollback-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.rollback-filter {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+}
+.rollback-filter:hover { border-color: #c4ccd8; }
+.rollback-filter.active { border-color: var(--link); background: var(--row-selected); }
+.rollback-filter-count { font-weight: 700; font-variant-numeric: tabular-nums; }
+.rollback-kind-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; border-radius: 5px; color: #fff;
+}
+.rollback-kind-icon.tint-api, .rollback-kind-icon.tint-cloudfront { background: var(--api); }
+.rollback-kind-icon.tint-lambda { background: var(--lambda); }
+.rollback-change { display: inline-flex; align-items: center; gap: 4px; font: 12px ui-monospace, monospace; color: var(--muted); }
+.rollback-from { color: #b42318; text-decoration: line-through; text-decoration-color: #f5c2bd; }
+.rollback-to { color: var(--ok); font-weight: 600; }
+.rollback-by { max-width: 220px; overflow-wrap: anywhere; font-size: 12px; }

@@ -5,6 +5,7 @@ import type { AppConfig } from './config.js';
 import { ApiGatewaySection } from './components/ApiGateways.js';
 import { LambdaSection } from './components/LambdaFunctions.js';
 import { CloudFrontSection } from './components/CloudFront.js';
+import { RollbacksSection } from './components/Rollbacks.js';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
 
@@ -24,6 +25,7 @@ export function App({ config }: { config: AppConfig }) {
           <ApiGatewaySection />
           <LambdaSection />
           <CloudFrontSection />
+          <RollbacksSection />
         </main>
         <footer className="page-footer">Release <span id="footer-release">{config.releaseId}</span></footer>
       </div>

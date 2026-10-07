@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
@@ -249,6 +250,27 @@ export class ApiUserStack extends cdk.Stack {
       throttlingBurstLimit: 20,
     });
 
+    // --- Custom domain ----------------------------------------------------------------
+    // Both stages on the environment's shared API domain (deploy-aws-dns-api-domains, deployed first):
+    // https://api.dev.rollback…/user/v1/users -> v1's /users, …/user/integration/users -> integration's.
+    // Multi-level keys (user/v1) are API Gateway V2 API mappings; they work for REST APIs on a regional
+    // TLS 1.2 domain. The execute-api URLs keep working: CI and the scripts still use them.
+    const customDomainUrls: { stage?: string; integration?: string } = {};
+    if (config.customDomain) {
+      const { domainName, basePaths } = config.customDomain;
+      for (const [key, stage] of [['stage', this.api.deploymentStage], ['integration', integrationStage]] as const) {
+        const mapping = new apigwv2.CfnApiMapping(this, key === 'stage' ? 'DomainMapping' : 'IntegrationDomainMapping', {
+          domainName,
+          apiId: this.api.restApiId,
+          stage: stage.stageName,
+          apiMappingKey: basePaths[key],
+        });
+        // the stage must exist before it can be mapped
+        mapping.node.addDependency(stage);
+        customDomainUrls[key] = `https://${domainName}/${basePaths[key]}/`;
+      }
+    }
+
     // --- Deployment tracking ----------------------------------------------------
     // One OpenAPI export per deployment, stored under <apiName>/<timestamp>/ (see lambda/shared/deployments.ts).
     this.specBucket = new s3.Bucket(this, 'SpecBucket', {
@@ -355,6 +377,8 @@ export class ApiUserStack extends cdk.Stack {
     out('IntegrationStageName', integrationStage.stageName);
     out('IntegrationApiUrl', integrationStage.urlForPath());
     out('StageName', config.stageName);
+    if (customDomainUrls.stage) out('CustomDomainUrl', customDomainUrls.stage);
+    if (customDomainUrls.integration) out('IntegrationCustomDomainUrl', customDomainUrls.integration);
     out('UserPoolId', this.userPool.userPoolId);
     out('UserPoolClientId', this.userPoolClient.userPoolClientId);
     out('SpecBucketName', this.specBucket.bucketName);
