@@ -3,9 +3,17 @@ import { test } from 'node:test';
 import { resolveRegistry } from '../lambda/managers/lambda/registry.js';
 import rollbackConfig from '../rollback-config.json';
 
-test('the registry resolves <env> and registers the service with its errors alarm', () => {
+test('the registry resolves <env> and registers the service and the API backends with their errors alarms', () => {
   const registry = resolveRegistry(rollbackConfig, 'staging');
-  assert.deepEqual([...registry.keys()], ['service-lambda-staging']);
+  assert.deepEqual([...registry.keys()], [
+    'service-lambda-staging', 'rollback-factory-demo-api-users-staging', 'rollback-factory-demo-api-messages-staging',
+  ]);
+  // the API's backends (deploy-aws-api-gateway), one per resource, each with the errors alarm its stack creates
+  for (const backend of ['users', 'messages']) {
+    const registration = registry.get(`rollback-factory-demo-api-${backend}-staging`)!;
+    assert.equal(registration.alias, 'live');
+    assert.deepEqual([...registration.alarms], [`rollback-factory-demo-lambda-api-${backend}-errors-staging`]);
+  }
   const service = registry.get('service-lambda-staging')!;
   assert.equal(service.alias, 'live');
   // the alarm deploy-aws-lambda creates: rollback-factory-demo-lambda-<name>-<env>, so the router picks the Lambda manager

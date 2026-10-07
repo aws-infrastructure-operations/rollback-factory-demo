@@ -131,3 +131,14 @@ test('points restored specs at the live alias, whatever version they were record
   // the input is not modified
   assert.equal(spec.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${fn}:7`));
 });
+
+test('a restored spec keeps each resource on its own backend\'s stage alias', () => {
+  const arn = (backend: string) => `arn:aws:lambda:eu-west-1:123456789012:function:rollback-factory-demo-api-${backend}-dev`;
+  const uri = (target: string) => `arn:aws:apigateway:eu-west-1:lambda:path/2015-03-31/functions/${target}/invocations`;
+  const op = (target: string) => ({ 'x-amazon-apigateway-integration': { type: 'aws_proxy', uri: uri(target) } });
+  // recorded with pinned versions; the stage variable keeps v1 on live, integration on integration
+  let spec: any = { paths: { '/users': { get: op(`${arn('users')}:4`) }, '/messages': { post: op(`${arn('messages')}:9`) } } };
+  for (const backend of ['users', 'messages']) spec = pointToAlias(spec, arn(backend), `${arn(backend)}:\${stageVariables.lambdaAlias}`);
+  assert.equal(spec.paths['/users'].get['x-amazon-apigateway-integration'].uri, uri(`${arn('users')}:\${stageVariables.lambdaAlias}`));
+  assert.equal(spec.paths['/messages'].post['x-amazon-apigateway-integration'].uri, uri(`${arn('messages')}:\${stageVariables.lambdaAlias}`));
+});

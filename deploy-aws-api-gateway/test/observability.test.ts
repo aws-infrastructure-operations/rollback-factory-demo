@@ -50,16 +50,29 @@ test('saves Logs Insights queries for 5xx by cause and the latest 5xx requests',
   });
 });
 
-test('alarms on Lambda errors without triggering a rollback', () => {
-  t.hasResourceProperties('AWS::CloudWatch::Alarm', {
-    AlarmName: 'rollback-factory-demo-apigateway-api-user-handler-errors-dev',
-    Namespace: 'AWS/Lambda',
-    MetricName: 'Errors',
-    Threshold: 0,
-    ComparisonOperator: 'GreaterThanThreshold',
-  });
-  // the rollback service's API Gateway manager only rolls back on these two (RollbackTarget.alarmNames)
+test('alarms on each backend\'s errors on live and $LATEST, for the rollback service\'s Lambda manager', () => {
+  for (const backend of ['users', 'messages']) {
+    const fn = `rollback-factory-demo-api-${backend}-dev`;
+    t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      // the "lambda" type routes it to the Lambda manager, which rolls fn:live back (rollback-config.json)
+      AlarmName: `rollback-factory-demo-lambda-api-${backend}-errors-dev`,
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      EvaluationPeriods: 1,
+      Metrics: Match.arrayWith([
+        Match.objectLike({ Expression: 'FILL(live, 0) + FILL(unqualified, 0) + FILL(latest, 0)' }),
+        Match.objectLike({
+          Id: 'live',
+          MetricStat: Match.objectLike({ Metric: Match.objectLike({
+            Namespace: 'AWS/Lambda', MetricName: 'Errors',
+            Dimensions: Match.arrayWith([{ Name: 'FunctionName', Value: fn }, { Name: 'Resource', Value: `${fn}:live` }]),
+          }) }),
+        }),
+      ]),
+    });
+  }
+  // the rollback service's API Gateway manager only rolls the API back on the two API rate alarms
   const target = JSON.stringify(t.findOutputs('RollbackTarget').RollbackTarget.Value);
   assert.ok(target.includes('rollback-factory-demo-apigateway-api-user-4xx-rate-dev'));
-  assert.ok(!target.includes('"alarmNames":["rollback-factory-demo-apigateway-api-user-handler-errors-dev'));
+  assert.ok(!target.includes('lambda-api-users-errors'));
 });

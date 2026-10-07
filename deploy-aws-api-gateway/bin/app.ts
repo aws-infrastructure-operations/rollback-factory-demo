@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { getConfig, PROJECT_NAME } from '../lib/config.js';
+import { BACKENDS, getConfig, liveVersionContextKey, PROJECT_NAME } from '../lib/config.js';
 import { ApiUserStack } from '../lib/api-user-stack.js';
 
 const app = new cdk.App();
@@ -10,7 +10,7 @@ const config = getConfig(ctx('env') ?? process.env.API_ENV ?? 'dev', {
   rollbackWindowMinutes: ctx('rollbackWindowMinutes'),
   chaosFailureRate: ctx('chaosFailureRate'),
   liveDeploymentId: ctx('liveDeploymentId'),
-  liveLambdaVersion: ctx('liveLambdaVersion'),
+  ...Object.fromEntries(BACKENDS.map((backend) => [liveVersionContextKey(backend), ctx(liveVersionContextKey(backend))])),
 });
 
 new ApiUserStack(app, config.stackName, {

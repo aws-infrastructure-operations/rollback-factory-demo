@@ -16,6 +16,24 @@ export interface AlarmConfig {
   datapointsToAlarm: number;
 }
 
+/** The API's resources: each is served by its own Lambda function. */
+export const BACKENDS = ['users', 'messages'] as const;
+export type Backend = (typeof BACKENDS)[number];
+
+/** One backend Lambda: what serves /<resource>, and the alarm the rollback service rolls it back on. */
+export interface BackendFunction {
+  /** rollback-factory-demo-api-<resource>-<env>, registered in rollback-service/rollback-config.json */
+  functionName: string;
+  /**
+   * rollback-factory-demo-lambda-api-<resource>-errors-<env>: the "lambda" type routes it to the rollback
+   * service's Lambda manager, which moves the function's live alias back.
+   */
+  errorsAlarmName: string;
+}
+
+/** The CDK context key that pins a backend's live alias, e.g. liveUsersVersion. */
+export const liveVersionContextKey = (backend: Backend) => `live${backend[0].toUpperCase()}${backend.slice(1)}Version`;
+
 export interface EnvConfig {
   envName: EnvName;
   /** The REST API keeps the story's name: api-user-<env>. */
@@ -33,8 +51,8 @@ export interface EnvConfig {
    * produced. While one is in ALARM the rollback service skips the API rollback.
    */
   lambdaAlarmNames: { error4xx: string; error5xx: string };
-  /** Notification only: unhandled errors of the handler. */
-  lambdaErrorsAlarmName: string;
+  /** The backend Lambda of each resource. */
+  backends: Record<Backend, BackendFunction>;
   /** The rollback service's topic in this region (rollback-service), which the alarms publish to. */
   rollbackTopicName: string;
   /** The rollback service's Lambda (rollback-service), invoked by the restore and trigger scripts. */
@@ -45,10 +63,10 @@ export interface EnvConfig {
   /** CI deploys here first and runs the integration tests, then promotes to stageName. */
   integrationStageName: string;
   /**
-   * What stage v1 and the handler's `live` alias serve right now (from scripts/live-context.ts).
+   * What stage v1 and each backend's `live` alias serve right now (from scripts/live-context.ts).
    * When set, `cdk deploy` leaves them there and only updates the integration stage.
    */
-  live?: { deploymentId?: string; lambdaVersion?: string };
+  live?: { deploymentId?: string; lambdaVersions: Partial<Record<Backend, string>> };
   /** Whether stateful resources (user pool, bucket, table) survive stack deletion. */
   retainData: boolean;
   alarms: AlarmConfig;
@@ -64,7 +82,8 @@ export interface ConfigOverrides {
   rollbackWindowMinutes?: string | number;
   chaosFailureRate?: string | number;
   liveDeploymentId?: string;
-  liveLambdaVersion?: string;
+  /** liveUsersVersion, liveMessagesVersion (see liveVersionContextKey) */
+  [liveVersion: `live${string}Version`]: string | undefined;
 }
 
 export const STAGE_NAME = 'v1';
@@ -99,15 +118,16 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
       error4xx: resourceName(`apigateway-${API_NAME}-handler-4xx-rate`),
       error5xx: resourceName(`apigateway-${API_NAME}-handler-5xx-rate`),
     },
-    lambdaErrorsAlarmName: resourceName(`apigateway-${API_NAME}-handler-errors`),
+    backends: Object.fromEntries(BACKENDS.map((backend) => [backend, {
+      functionName: resourceName(`api-${backend}`),
+      errorsAlarmName: resourceName(`lambda-api-${backend}-errors`),
+    }])) as Record<Backend, BackendFunction>,
     rollbackTopicName: resourceName('rollback-notifications'),
     rollbackServiceFunctionName: resourceName('rollback-service'),
     metricsNamespace: `${PROJECT_NAME}/${API_NAME}-${envName}`,
     stageName: STAGE_NAME,
     integrationStageName: INTEGRATION_STAGE_NAME,
-    live: overrides.liveDeploymentId || overrides.liveLambdaVersion
-      ? { deploymentId: overrides.liveDeploymentId || undefined, lambdaVersion: overrides.liveLambdaVersion || undefined }
-      : undefined,
+    live: live(overrides),
     retainData: envName === 'prod',
     alarms: {
       notificationsEnabled: String(overrides.alarmNotifications ?? 'true') !== 'false',
@@ -121,4 +141,13 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     rollbackWindowMinutes: Number(overrides.rollbackWindowMinutes ?? 30),
     chaosFailureRate,
   };
+}
+
+/** The live context CI passes (-c liveDeploymentId / -c live<Backend>Version), if any. */
+function live(overrides: ConfigOverrides): EnvConfig['live'] {
+  const lambdaVersions = Object.fromEntries(BACKENDS
+    .map((backend) => [backend, overrides[liveVersionContextKey(backend) as `live${string}Version`]])
+    .filter(([, version]) => version)) as Partial<Record<Backend, string>>;
+  if (!overrides.liveDeploymentId && Object.keys(lambdaVersions).length === 0) return undefined;
+  return { deploymentId: overrides.liveDeploymentId || undefined, lambdaVersions };
 }

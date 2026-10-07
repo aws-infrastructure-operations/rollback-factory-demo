@@ -41,7 +41,10 @@ export interface RecordedApiDeployment {
   deployedAt: string;
   deploymentId: string;
   stageName: string;
+  /** before the per-resource split: the one backend's live version */
   lambdaVersion?: string;
+  /** each backend Lambda's live version, by function name */
+  lambdaVersions?: Record<string, string>;
   /** s3:// URL of the OpenAPI export a restore re-imports */
   spec: string;
   source: string;

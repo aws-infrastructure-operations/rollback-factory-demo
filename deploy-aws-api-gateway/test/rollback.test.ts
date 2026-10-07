@@ -44,7 +44,8 @@ describe('stack', () => {
       'rollback-factory-demo-apigateway-api-user-5xx-rate-dev',
       'rollback-factory-demo-apigateway-api-user-handler-4xx-rate-dev',
       'rollback-factory-demo-apigateway-api-user-handler-5xx-rate-dev',
-      'rollback-factory-demo-apigateway-api-user-handler-errors-dev',
+      'rollback-factory-demo-lambda-api-messages-errors-dev',
+      'rollback-factory-demo-lambda-api-users-errors-dev',
     ]);
     for (const [name, alarm] of Object.entries(alarms)) assert.ok(publishesToRollbackService(alarm), name);
     t.resourceCountIs('AWS::SNS::Topic', 0);
@@ -67,25 +68,45 @@ describe('stack', () => {
       'rollback-factory-demo/api-user-dev',
       '\\"rollbackWindowMinutes\\":30',
       '\\"stageName\\":\\"v1\\"',
+      'backendFunctionArns',
     ]) assert.ok(output.includes(expected), `RollbackTarget lacks ${expected}`);
+    // both backends, so an API rollback keeps both on their stage alias
+    assert.match(output, /UsersHandler[0-9A-F]{8}/);
+    assert.match(output, /MessagesHandler[0-9A-F]{8}/);
     assert.match(output, /ApiUserApi|Api[A-F0-9]{8}/, 'restApiId is a reference to the API');
     assert.ok(JSON.stringify(synth('dev', { rollbackWindowMinutes: '10' }).findOutputs('RollbackTarget')).includes('\\"rollbackWindowMinutes\\":10'));
   });
 
+  /** The aliases by "<function construct>:<alias>", e.g. "UsersHandler:live". */
   const aliases = (template: Template): Record<string, any> => Object.fromEntries(
-    Object.entries(template.findResources('AWS::Lambda::Alias')).map(([id, r]: [string, any]) => [r.Properties.Name, { id, ...r.Properties }]),
+    Object.entries(template.findResources('AWS::Lambda::Alias')).map(([id, r]: [string, any]) => [
+      `${r.Properties.FunctionName.Ref.replace(/[0-9A-F]{8}$/, '')}:${r.Properties.Name}`, { id, ...r.Properties },
+    ]),
   );
   const stage = (template: Template, name: string) =>
     (Object.values(template.findResources('AWS::ApiGateway::Stage')) as any[]).find((r) => r.Properties.StageName === name)!.Properties;
 
-  test('each stage invokes its own alias of the handler (stage variable lambdaAlias)', () => {
-    const uris = Object.values(t.findResources('AWS::ApiGateway::Method'))
-      .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS') // CORS preflights are mock integrations
-      .map((m: any) => JSON.stringify(m.Properties.Integration.Uri));
-    assert.equal(uris.length, 4);
-    for (const uri of uris) assert.ok(uri.includes(':${stageVariables.lambdaAlias}/invocations'), uri);
+  test('each resource has its own Lambda, and each stage invokes its alias of it (stage variable lambdaAlias)', () => {
+    const functions = Object.entries(t.findResources('AWS::Lambda::Function'))
+      .filter(([, f]: [string, any]) => /api-(users|messages)-dev$/.test(f.Properties.FunctionName))
+      .map(([id, f]: [string, any]) => [f.Properties.FunctionName, id]);
+    assert.deepEqual(functions.map(([name]) => name).sort(), ['rollback-factory-demo-api-messages-dev', 'rollback-factory-demo-api-users-dev']);
 
-    assert.deepEqual(Object.keys(aliases(t)).sort(), ['integration', 'live']);
+    const methods = Object.values(t.findResources('AWS::ApiGateway::Method'))
+      .filter((m: any) => m.Properties.HttpMethod !== 'OPTIONS'); // CORS preflights are mock integrations
+    assert.equal(methods.length, 4);
+    const resources = t.findResources('AWS::ApiGateway::Resource');
+    for (const m of methods as any[]) {
+      const path = resources[m.Properties.ResourceId.Ref].Properties.PathPart;
+      const uri = JSON.stringify(m.Properties.Integration.Uri);
+      assert.ok(uri.includes(':${stageVariables.lambdaAlias}/invocations'), uri);
+      const [, fnId] = functions.find(([name]) => name.endsWith(`api-${path}-dev`))!;
+      assert.ok(uri.includes(`"${fnId}"`), `/${path} invokes its own function: ${uri}`);
+    }
+
+    assert.deepEqual(Object.keys(aliases(t)).sort(), [
+      'MessagesHandler:integration', 'MessagesHandler:live', 'UsersHandler:integration', 'UsersHandler:live',
+    ]);
     assert.deepEqual(stage(t, 'v1').Variables, { lambdaAlias: 'live' });
     assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration' });
     for (const { id } of Object.values(aliases(t))) {
@@ -100,18 +121,24 @@ describe('stack', () => {
   });
 
   test('without live context, a deploy updates v1 and both aliases directly', () => {
-    const { integration, live } = aliases(t);
-    assert.deepEqual(live.FunctionVersion, integration.FunctionVersion);
+    for (const fn of ['UsersHandler', 'MessagesHandler']) {
+      assert.deepEqual(aliases(t)[`${fn}:live`].FunctionVersion, aliases(t)[`${fn}:integration`].FunctionVersion, fn);
+    }
     assert.deepEqual(stage(t, 'v1').DeploymentId, stage(t, 'integration').DeploymentId);
   });
 
   test('with live context (CI), a deploy leaves v1 and the live alias where they are', () => {
-    const pinned = synth('dev', { liveDeploymentId: 'dep123', liveLambdaVersion: '7' });
+    const pinned = synth('dev', { liveDeploymentId: 'dep123', liveUsersVersion: '7', liveMessagesVersion: '3' });
     assert.equal(stage(pinned, 'v1').DeploymentId, 'dep123');
-    assert.equal(aliases(pinned).live.FunctionVersion, '7');
-    // the integration stage and alias still get the new deployment and version
+    assert.equal(aliases(pinned)['UsersHandler:live'].FunctionVersion, '7');
+    assert.equal(aliases(pinned)['MessagesHandler:live'].FunctionVersion, '3');
+    // the integration stage and aliases still get the new deployment and versions
     assert.ok(JSON.stringify(stage(pinned, 'integration').DeploymentId).includes('ApiDeployment'));
-    assert.ok(JSON.stringify(aliases(pinned).integration.FunctionVersion).includes('ApiHandlerCurrentVersion'));
+    assert.ok(JSON.stringify(aliases(pinned)['UsersHandler:integration'].FunctionVersion).includes('UsersHandlerCurrentVersion'));
+    assert.ok(JSON.stringify(aliases(pinned)['MessagesHandler:integration'].FunctionVersion).includes('MessagesHandlerCurrentVersion'));
+    // one backend pinned, the other not deployed yet: that one's live goes to the new version
+    const half = synth('dev', { liveUsersVersion: '7' });
+    assert.ok(JSON.stringify(aliases(half)['MessagesHandler:live'].FunctionVersion).includes('MessagesHandlerCurrentVersion'));
   });
 
   test('pairs each API alarm with an alarm on the errors the Lambda produced', () => {
@@ -136,11 +163,14 @@ describe('stack', () => {
     }
   });
 
-  test('chaosFailureRate reaches the API handler', () => {
-    synth('dev', { chaosFailureRate: '1' }).hasResourceProperties('AWS::Lambda::Function', {
-      FunctionName: 'rollback-factory-demo-handler-dev',
-      Environment: { Variables: Match.objectLike({ CHAOS_FAILURE_RATE: '1' }) },
-    });
+  test('chaosFailureRate reaches both backends', () => {
+    const chaos = synth('dev', { chaosFailureRate: '1' });
+    for (const backend of ['users', 'messages']) {
+      chaos.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: `rollback-factory-demo-api-${backend}-dev`,
+        Environment: { Variables: Match.objectLike({ CHAOS_FAILURE_RATE: '1' }) },
+      });
+    }
     assert.throws(() => getConfig('dev', { chaosFailureRate: '2' }), /between 0 and 1/);
   });
 });

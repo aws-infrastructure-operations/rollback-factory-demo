@@ -40,12 +40,12 @@ LAYOUT (left to right):
           - "Stage v1  (lambdaAlias = live)"
           - "Stage integration  (lambdaAlias = integration)"
         Small text under the API: "GET/POST /users, /messages · Cognito authorizer · request validator"
-      - "AWS Lambda" — label "handler" with two alias chips: "alias: live" and "alias: integration"
+      - Two "AWS Lambda" icons side by side — labels "api-users" (serves /users) and "api-messages" (serves /messages), each with two alias chips: "alias: live" and "alias: integration"
       - "Amazon CloudWatch Logs" — label "access logs"
-      - "Amazon CloudWatch" — a box with 5 alarm chips:
-          "api-user-4xx-rate", "api-user-5xx-rate" (red, these trigger rollback),
-          "handler-4xx-rate", "handler-5xx-rate" (amber, block rollback),
-          "handler-errors" (grey, notify only)
+      - "Amazon CloudWatch" — a box with 6 alarm chips:
+          "api-user-4xx-rate", "api-user-5xx-rate" (red, these trigger the API rollback),
+          "handler-4xx-rate", "handler-5xx-rate" (amber, block the API rollback),
+          "lambda-api-users-errors", "lambda-api-messages-errors" (red, each rolls its own Lambda's live alias back)
       - "Amazon DynamoDB" — label "deployments", caption "current, verified, rolledBackAt"
       - "Amazon S3" — label "OpenAPI specs", caption "one export per deployment"
 
@@ -93,13 +93,16 @@ What the diagram should show, in case the model misses or invents something:
   - stack `deploy-aws-api-gateway-<env>` with:
     - the REST API `api-user-<env>` and its stages `v1` and `integration`
     - the user pool `rollback-factory-demo-users-<env>`
-    - the handler `rollback-factory-demo-handler-<env>` with aliases `live` and `integration`
+    - one backend Lambda per resource, `rollback-factory-demo-api-users-<env>` (`/users`) and
+      `rollback-factory-demo-api-messages-<env>` (`/messages`), each with aliases `live` and `integration`
     - the access log group `rollback-factory-demo-api-access-logs-<env>`
     - the table `rollback-factory-demo-deployments-<env>` and the bucket `rollback-factory-demo-<account>-deployments-<env>`
-  - alarms, all `rollback-factory-demo-apigateway-api-user-…-<env>`:
-    - `4xx-rate` and `5xx-rate`: trigger the rollback
+  - alarms `rollback-factory-demo-apigateway-api-user-…-<env>`:
+    - `4xx-rate` and `5xx-rate`: trigger the API rollback
     - `handler-4xx-rate` and `handler-5xx-rate`: block it while they are in ALARM
-    - `handler-errors`: notification only
+  - alarms `rollback-factory-demo-lambda-api-users-errors-<env>` and `…-api-messages-errors-<env>`: errors
+    of that backend; the rollback service's Lambda manager moves that backend's `live` back (both
+    backends are registered in `rollback-service/rollback-config.json`)
   - stack `rollback-service-<env>` (deployed first, shared with the Lambda and the frontend) with the
     rollback function `rollback-factory-demo-rollback-service-<env>` and the topic
     `rollback-factory-demo-rollback-notifications-<env>`
@@ -107,8 +110,8 @@ What the diagram should show, in case the model misses or invents something:
   the `integration` stage tests the new code while `v1` keeps serving `live`.
 - **What a rollback restores:** the API configuration only. It re-imports the previous verified
   deployment's OpenAPI export into the API and redeploys `v1`; the restored spec still invokes the
-  `live` alias, so the code is never rolled back. If the paired handler alarms show the handler is at
-  fault, it skips the rollback.
+  `live` aliases, so the code is never rolled back. If the paired handler alarms show a backend is at
+  fault, it skips the rollback; that backend's own errors alarm rolls its code back instead.
 - **Rollback window:** only within 30 minutes of the latest deployment.
 - **Manual restores:** the `api-gateway restore` workflow restores a recorded deployment, runs the
   integration tests and marks it verified. The dashboard's API panel lists the recorded deployments

@@ -9,6 +9,22 @@
       "alarms": [
         "rollback-factory-demo-lambda-service-lambda-errors-<env>"
       ]
+    },
+    {
+      "name": "rollback-factory-demo-api-users-<env>",
+      "enabled": true,
+      "alias": "live",
+      "alarms": [
+        "rollback-factory-demo-lambda-api-users-errors-<env>"
+      ]
+    },
+    {
+      "name": "rollback-factory-demo-api-messages-<env>",
+      "enabled": true,
+      "alias": "live",
+      "alarms": [
+        "rollback-factory-demo-lambda-api-messages-errors-<env>"
+      ]
     }
   ]
 }

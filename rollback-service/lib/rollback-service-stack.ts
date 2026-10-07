@@ -180,12 +180,13 @@ export class RollbackServiceStack extends cdk.Stack {
         `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::/restapis/*`,
       ],
     }));
-    const apiHandler = arn('lambda', 'function', name('handler'));
+    // The API's backend Lambdas, one per resource: rollback-factory-demo-api-<resource>-<env>
+    const apiBackends = arn('lambda', 'function', name('api-*'));
     this.service.addToRolePolicy(new iam.PolicyStatement({
       // AddPermission: make sure API Gateway may invoke versions a restored spec points to
-      // GetAlias: record the version the live alias serves
+      // GetAlias: record the versions the live aliases serve
       actions: ['lambda:AddPermission', 'lambda:GetAlias'],
-      resources: [apiHandler, `${apiHandler}:*`],
+      resources: [apiBackends, `${apiBackends}:*`],
     }));
     s3.Bucket.fromBucketName(this, 'ApiSpecBucket', name(`${cdk.Aws.ACCOUNT_ID}-deployments`)).grantReadWrite(this.service);
     dynamodb.TableV2.fromTableName(this, 'ApiDeploymentsTable', name('deployments')).grantReadWriteData(this.service);

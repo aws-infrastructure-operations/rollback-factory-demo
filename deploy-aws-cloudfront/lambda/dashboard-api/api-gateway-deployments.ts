@@ -13,6 +13,7 @@ export interface ApiDeploymentRecord {
   stageName: string;
   deploymentId: string;
   lambdaVersion?: string;
+  lambdaVersions?: Record<string, string>;
   specBucket: string;
   specKey: string;
   source: string;
@@ -32,7 +33,10 @@ export interface RecordedApiDeployment {
   deployedAt: string;
   deploymentId: string;
   stageName: string;
+  /** Before the per-resource split: the one backend's live version */
   lambdaVersion?: string;
+  /** Each backend Lambda's live version (rollback-factory-demo-api-<resource>-<env> -> version) */
+  lambdaVersions?: Record<string, string>;
   /** s3://<bucket>/<apiName>/<timestamp>/openapi.json, the export a restore re-imports */
   spec: string;
   source: string;
@@ -69,6 +73,7 @@ const view = (r: ApiDeploymentRecord): RecordedApiDeployment => ({
   deploymentId: r.deploymentId,
   stageName: r.stageName,
   ...(r.lambdaVersion && { lambdaVersion: r.lambdaVersion }),
+  ...(r.lambdaVersions && { lambdaVersions: r.lambdaVersions }),
   spec: `s3://${r.specBucket}/${r.specKey}`,
   source: r.source,
   ...(r.actor && { actor: r.actor }),

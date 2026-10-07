@@ -25,8 +25,10 @@ export interface DeploymentRecord {
   stageName: string;
   /** API Gateway deployment id the stage pointed to */
   deploymentId: string;
-  /** Backend Lambda version the stage's `live` alias pointed to */
+  /** Before the per-resource split: the one backend Lambda's `live` version (older records only) */
   lambdaVersion?: string;
+  /** Each backend Lambda's `live` alias version when this was recorded, by function name */
+  lambdaVersions?: Record<string, string>;
   specBucket: string;
   specKey: string;
   source: DeploymentSource;
@@ -63,8 +65,8 @@ export interface DeploymentTarget {
   stageName: string;
   specBucket: string;
   table: string;
-  /** Backend Lambda (name or ARN); its `live` alias version is recorded as lambdaVersion */
-  handlerFunction?: string;
+  /** Backend Lambdas (names or ARNs); their `live` alias versions are recorded as lambdaVersions */
+  backendFunctions?: string[];
 }
 
 export interface RecordOptions {
@@ -96,7 +98,7 @@ export function buildRecord(
   target: DeploymentTarget,
   deploymentId: string,
   opts: RecordOptions,
-  lambdaVersion?: string,
+  lambdaVersions?: Record<string, string>,
 ): DeploymentRecord {
   const now = opts.now ?? new Date();
   return {
@@ -105,7 +107,7 @@ export function buildRecord(
     restApiId: target.restApiId,
     stageName: target.stageName,
     deploymentId,
-    lambdaVersion,
+    lambdaVersions,
     specBucket: target.specBucket,
     specKey: specKey(target.apiName, now),
     source: opts.source,
@@ -154,6 +156,16 @@ export async function getStageDeploymentId(restApiId: string, stageName: string)
 }
 
 /** Version a Lambda alias points to, or undefined if the alias doesn't exist. */
+/** "arn:aws:lambda:...:function:<name>[:<qualifier>]" or "<name>" -> "<name>" */
+export const functionNameOf = (nameOrArn: string) => /:function:([^:]+)/.exec(nameOrArn)?.[1] ?? nameOrArn;
+
+/** Each function's `live` alias version by name (sorted, so records compare as JSON); undefined for none. */
+export async function liveVersions(functions: string[]): Promise<Record<string, string> | undefined> {
+  const entries = await Promise.all(functions.map(async (fn) => [functionNameOf(fn), await getAliasVersion(fn, 'live')] as const));
+  const known = entries.filter((e): e is readonly [string, string] => e[1] !== undefined).sort(([a], [b]) => a.localeCompare(b));
+  return known.length ? Object.fromEntries(known) : undefined;
+}
+
 export async function getAliasVersion(functionName: string, alias: string): Promise<string | undefined> {
   try {
     const { FunctionVersion } = await lambda.send(new GetAliasCommand({ FunctionName: functionName, Name: alias }));
@@ -203,11 +215,12 @@ export async function recordDeployment(
   opts: RecordOptions & { force?: boolean },
 ): Promise<DeploymentRecord | undefined> {
   const deploymentId = await getStageDeploymentId(target.restApiId, target.stageName);
-  const lambdaVersion = target.handlerFunction ? await getAliasVersion(target.handlerFunction, 'live') : undefined;
+  const lambdaVersions = await liveVersions(target.backendFunctions ?? []);
   const [latest] = await listDeployments(target.table, target.apiName, 1);
-  if (!opts.force && latest?.deploymentId === deploymentId && latest.lambdaVersion === lambdaVersion) return undefined;
+  const sameVersions = JSON.stringify(latest?.lambdaVersions ?? {}) === JSON.stringify(lambdaVersions ?? {});
+  if (!opts.force && latest?.deploymentId === deploymentId && sameVersions) return undefined;
 
-  const record = buildRecord(target, deploymentId, opts, lambdaVersion);
+  const record = buildRecord(target, deploymentId, opts, lambdaVersions);
   const spec = await exportStageSpec(target.restApiId, target.stageName);
   await s3.send(new PutObjectCommand({
     Bucket: target.specBucket,

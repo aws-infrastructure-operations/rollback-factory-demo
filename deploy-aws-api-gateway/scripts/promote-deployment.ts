@@ -1,8 +1,9 @@
 /**
  * Promotes what the integration stage serves to stage v1, after the integration tests
- * passed against it: moves the handler's `live` alias to the `integration` alias's
+ * passed against it: moves each backend's `live` alias to its `integration` alias's
  * version and points v1 at the integration stage's deployment.
- * Record it afterwards with `npm run deployment:record`.
+ * Record it afterwards with `npm run deployment:record`, and sync the rollback service's
+ * version archive (CI does both).
  *
  * Usage: npx tsx scripts/promote-deployment.ts --env dev
  */
@@ -16,23 +17,24 @@ run(async () => {
   const { config } = parseCli();
   const outputs = await requireStackOutputs(config);
   const restApiId = outputs.ApiId;
-  const handler = config.resourceName('handler');
+  const lambda = new LambdaClient({});
 
-  const [testedDeployment, liveDeployment, testedVersion, liveVersion] = await Promise.all([
+  const [testedDeployment, liveDeployment] = await Promise.all([
     getStageDeploymentId(restApiId, config.integrationStageName),
     getStageDeploymentId(restApiId, config.stageName),
-    getAliasVersion(handler, 'integration'),
-    getAliasVersion(handler, 'live'),
   ]);
-  if (!testedVersion) throw new Error(`${handler} has no "integration" alias - deploy the stack first`);
 
-  if (testedVersion !== liveVersion) {
-    await new LambdaClient({}).send(new UpdateAliasCommand({
-      FunctionName: handler,
-      Name: 'live',
-      FunctionVersion: testedVersion,
-    }));
-    log(`${handler}: alias live ${liveVersion ?? '(none)'} -> version ${testedVersion}`);
+  let changed = false;
+  for (const { functionName } of Object.values(config.backends)) {
+    const [testedVersion, liveVersion] = await Promise.all([
+      getAliasVersion(functionName, 'integration'),
+      getAliasVersion(functionName, 'live'),
+    ]);
+    if (!testedVersion) throw new Error(`${functionName} has no "integration" alias - deploy the stack first`);
+    if (testedVersion === liveVersion) continue;
+    await lambda.send(new UpdateAliasCommand({ FunctionName: functionName, Name: 'live', FunctionVersion: testedVersion }));
+    log(`${functionName}: alias live ${liveVersion ?? '(none)'} -> version ${testedVersion}`);
+    changed = true;
   }
   if (testedDeployment !== liveDeployment) {
     await new APIGatewayClient({}).send(new UpdateStageCommand({
@@ -41,8 +43,7 @@ run(async () => {
       patchOperations: [{ op: 'replace', path: '/deploymentId', value: testedDeployment }],
     }));
     log(`${config.apiName}: stage ${config.stageName} ${liveDeployment} -> deployment ${testedDeployment}`);
+    changed = true;
   }
-  if (testedVersion === liveVersion && testedDeployment === liveDeployment) {
-    log(`${config.apiName}/${config.stageName} already serves what was tested - nothing to promote`);
-  }
+  if (!changed) log(`${config.apiName}/${config.stageName} already serves what was tested - nothing to promote`);
 });

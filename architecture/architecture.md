@@ -35,8 +35,10 @@ The numbered arrows are the request flow, the lettered arrows the rollback, and 
    stage `v1`, with the raw ID token in `Authorization`.
 3. **Authorize and validate.** The Cognito authorizer checks the token. A request validator rejects
    `POST` bodies that aren't `{ "message": "..." }` with a 400 before they reach any code.
-4. **Invoke the handler.** Each stage invokes its own alias of `rollback-factory-demo-handler-<env>`,
-   named by its `lambdaAlias` stage variable.
+4. **Invoke the backend.** Each resource has its own Lambda: `rollback-factory-demo-api-users-<env>`
+   serves `/users`, `rollback-factory-demo-api-messages-<env>` serves `/messages`. Each stage invokes
+   its own alias of them, named by its `lambdaAlias` stage variable. Both are registered for rollback:
+   an errors alarm on one moves only that backend's `live` alias back.
 
    | Stage | `lambdaAlias` | Serves |
    |---|---|---|

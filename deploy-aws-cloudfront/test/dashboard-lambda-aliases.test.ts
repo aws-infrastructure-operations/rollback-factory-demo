@@ -22,7 +22,12 @@ test('resolves a registered function to its environment\'s rollback service and 
 });
 
 test('reads the registered functions from rollback-config.json, enabled ones only', () => {
-  assert.deepEqual(registeredFunctions(), [{ name: 'service-lambda-<env>', alias: 'live' }]);
+  // service-lambda and the API's two backends (deploy-aws-api-gateway)
+  assert.deepEqual(registeredFunctions(), [
+    { name: 'service-lambda-<env>', alias: 'live' },
+    { name: 'rollback-factory-demo-api-users-<env>', alias: 'live' },
+    { name: 'rollback-factory-demo-api-messages-<env>', alias: 'live' },
+  ]);
   assert.deepEqual(parseRegistered(JSON.stringify([...REGISTERED, { name: 'no-placeholder', alias: 'live' }])), REGISTERED);
   assert.deepEqual(parseRegistered(undefined), []);
 });
@@ -33,7 +38,7 @@ test('passes them to the dashboard API', () => {
   const [fn] = Object.values(t.findResources('AWS::Lambda::Function', {
     Properties: { FunctionName: 'rollback-factory-demo-frontend-dashboard-api-dev' },
   })) as any[];
-  assert.deepEqual(JSON.parse(fn.Properties.Environment.Variables.REGISTERED_FUNCTIONS), REGISTERED);
+  assert.deepEqual(JSON.parse(fn.Properties.Environment.Variables.REGISTERED_FUNCTIONS), registeredFunctions());
 });
 
 const fakeLambda = (answer: { FunctionError?: string; Payload?: string }) => {
@@ -122,4 +127,14 @@ test('reads neither the details nor the metrics of a function that is not regist
   // REGISTERED_FUNCTIONS isn't set in the tests: no function is registered, and no AWS call is made
   assert.equal((await get('/api/lambda-functions/rollback-factory-demo-handler-dev')).statusCode, 404);
   assert.equal((await get('/api/lambda-functions/rollback-factory-demo-handler-dev/metrics')).statusCode, 404);
+});
+
+test('the API\'s backends resolve to their environment\'s rollback service', () => {
+  for (const backend of ['users', 'messages']) {
+    assert.deepEqual(registrationFor(`rollback-factory-demo-api-${backend}-prod`, registeredFunctions(), PROJECT), {
+      rollbackService: 'rollback-factory-demo-rollback-service-prod', alias: 'live',
+    });
+  }
+  // the handler from before the split is not registered
+  assert.equal(registrationFor('rollback-factory-demo-handler-dev', registeredFunctions(), PROJECT), undefined);
 });

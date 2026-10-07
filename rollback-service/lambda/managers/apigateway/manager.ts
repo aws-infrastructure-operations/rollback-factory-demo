@@ -25,7 +25,10 @@ export interface ApiRollbackTarget {
   stageName: string;
   specBucket: string;
   table: string;
-  handlerFunctionArn: string;
+  /** The backend Lambdas, one per resource (users, messages) */
+  backendFunctionArns?: string[];
+  /** Before the per-resource split: the one backend Lambda */
+  handlerFunctionArn?: string;
   /** The rate alarms that trigger a rollback; others (paired Lambda alarms) only notify. */
   alarmNames: string[];
   alarmPairs: AlarmPair[];
@@ -46,13 +49,16 @@ const lambda = new LambdaClient({});
 
 const log = (msg: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ manager: 'apigateway', msg, ...data }));
 
+/** The backend Lambdas of the target, also for stacks from before the per-resource split. */
+const backendArns = (t: ApiRollbackTarget) => t.backendFunctionArns ?? (t.handlerFunctionArn ? [t.handlerFunctionArn] : []);
+
 const deploymentTarget = (t: ApiRollbackTarget): DeploymentTarget => ({
   apiName: t.apiName,
   restApiId: t.restApiId,
   stageName: t.stageName,
   specBucket: t.specBucket,
   table: t.table,
-  handlerFunction: t.handlerFunctionArn,
+  backendFunctions: backendArns(t),
 });
 
 /** State of the paired Lambda alarm, and all vs. Lambda-produced errors over the evaluation window. */
@@ -110,8 +116,9 @@ async function ensureInvokePermission(target: ApiRollbackTarget, functionArn: st
  * the API keeps invoking the latest promoted Lambda code.
  */
 async function redeploy(target: ApiRollbackTarget, to: DeploymentRecord, description: string) {
-  const stageAliasArn = `${target.handlerFunctionArn}:\${stageVariables.lambdaAlias}`;
-  const spec = pointToAlias(JSON.parse(await getSpec(to.specBucket, to.specKey)), target.handlerFunctionArn, stageAliasArn);
+  // every backend's integrations go to its stage alias (v1: live), whatever the spec recorded
+  let spec = JSON.parse(await getSpec(to.specBucket, to.specKey));
+  for (const arn of backendArns(target)) spec = pointToAlias(spec, arn, `${arn}:\${stageVariables.lambdaAlias}`);
   // the stage aliases' invoke permissions are managed by the stack
   for (const arn of lambdaArnsFromSpec(spec).filter((a) => !a.includes('${'))) await ensureInvokePermission(target, arn);
 

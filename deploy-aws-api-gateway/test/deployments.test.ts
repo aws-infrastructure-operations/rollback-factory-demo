@@ -52,7 +52,7 @@ test('builds a deployment record', () => {
     restApiId: 'abc123',
     stageName: 'v1',
     deploymentId: 'dep42',
-    lambdaVersion: undefined,
+    lambdaVersions: undefined,
     specBucket: 'bucket',
     specKey: 'api-user-dev/20261006T123005Z/openapi.json',
     source: 'cicd',
@@ -91,4 +91,11 @@ test('a rolled-back deployment is unstable and gets no stableFor(HumanReadable)'
   const previous = record('2026-10-06T10:00:00.000Z', { rolledBackAt: '2026-10-06T10:05:00.000Z' });
   const next = record('2026-10-06T10:05:01.000Z', { source: 'rollback' });
   assert.deepEqual(retirement(previous, next), { current: false, stable: false });
+});
+
+test('names a backend by its function name, from an ARN or a qualified ARN', async () => {
+  const { functionNameOf } = await import('../lambda/shared/deployments.js');
+  assert.equal(functionNameOf('rollback-factory-demo-api-users-dev'), 'rollback-factory-demo-api-users-dev');
+  assert.equal(functionNameOf('arn:aws:lambda:eu-central-1:123:function:rollback-factory-demo-api-users-dev'), 'rollback-factory-demo-api-users-dev');
+  assert.equal(functionNameOf('arn:aws:lambda:eu-central-1:123:function:rollback-factory-demo-api-users-dev:live'), 'rollback-factory-demo-api-users-dev');
 });
