@@ -24,6 +24,8 @@ export function injectedFailure(): APIGatewayProxyResult | undefined {
 export function resourceHandler(resource: string) {
   return async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     const route = `${event.httpMethod} ${event.resource}`;
+    // one line per request: which route, under which API Gateway request id (no caller details)
+    console.log(JSON.stringify({ msg: 'request', route, requestId: event.requestContext.requestId }));
     const failure = injectedFailure();
     if (failure) return failure;
     const caller = callerOf(event);
