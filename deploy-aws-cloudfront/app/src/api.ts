@@ -113,6 +113,8 @@ export interface LambdaFunction {
   runtime: string;
   description?: string;
   aliases: string[];
+  /** the version each alias points to (e.g. live -> "3", or "3 (90%) + 4 (10%)" when weighted) */
+  aliasVersions?: Record<string, string>;
   lastModified?: string;
 }
 

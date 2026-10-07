@@ -306,3 +306,7 @@ td.date-wrap { white-space: normal; min-width: 90px; }
   .modal-actions { flex-wrap: wrap; }
 }
 .operation-eta { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+
+/* the live version in the Lambda list; the OpenAPI export of a recorded API deployment */
+.live-version { font-weight: 600; font-variant-numeric: tabular-nums; }
+.spec-file { font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }

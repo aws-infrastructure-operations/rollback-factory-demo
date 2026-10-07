@@ -18,6 +18,8 @@ export interface LambdaFunctionSummary {
   runtime: string;
   description?: string;
   aliases: string[];
+  /** the version each alias points to, e.g. { live: '3', integration: '4' }; a weighted alias: '3 (90%) + 4 (10%)' */
+  aliasVersions: Record<string, string>;
   /** ISO 8601 */
   lastModified?: string;
 }
@@ -79,16 +81,29 @@ export async function listLambdaFunctions(
     marker = page.NextMarker;
   } while (marker);
 
-  const summaries = await mapLimit(functions, ALIAS_CONCURRENCY, async (fn) => ({
-    name: fn.FunctionName!,
-    arn: fn.FunctionArn!,
-    runtime: runtimeOf(fn),
-    ...(fn.Description && { description: fn.Description }),
-    aliases: (await listAliases(client, fn.FunctionName!)).map((a) => a.Name!).sort(),
-    ...(lambdaDate(fn.LastModified) && { lastModified: lambdaDate(fn.LastModified) }),
-  }));
+  const summaries = await mapLimit(functions, ALIAS_CONCURRENCY, async (fn) => {
+    const aliases = await listAliases(client, fn.FunctionName!);
+    return {
+      name: fn.FunctionName!,
+      arn: fn.FunctionArn!,
+      runtime: runtimeOf(fn),
+      ...(fn.Description && { description: fn.Description }),
+      aliases: aliases.map((a) => a.Name!).sort(),
+      aliasVersions: Object.fromEntries(aliases.map((a) => [a.Name!, aliasTarget(a)])),
+      ...(lambdaDate(fn.LastModified) && { lastModified: lambdaDate(fn.LastModified) }),
+    };
+  });
   // most recently changed first
   return summaries.sort((a, b) => (b.lastModified ?? '').localeCompare(a.lastModified ?? '') || a.name.localeCompare(b.name));
+}
+
+/** "3", or "3 (90%) + 4 (10%)" for an alias that shifts traffic to a second version. */
+export function aliasTarget(alias: AliasConfiguration): string {
+  const extra = Object.entries(alias.RoutingConfig?.AdditionalVersionWeights ?? {});
+  if (!extra.length) return alias.FunctionVersion!;
+  const percent = (weight: number) => `${Math.round(weight * 100)}%`;
+  const main = 1 - extra.reduce((total, [, weight]) => total + weight, 0);
+  return [`${alias.FunctionVersion} (${percent(main)})`, ...extra.map(([v, weight]) => `${v} (${percent(weight)})`)].join(' + ');
 }
 
 async function listAliases(client: LambdaClient, functionName: string) {

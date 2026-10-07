@@ -62,6 +62,13 @@ export function LambdaSection() {
             },
             { header: 'Runtime', cell: (fn) => fn.runtime },
             { header: 'Aliases', cell: (fn) => (fn.aliases.length ? <StageTags stages={fn.aliases} /> : '—') },
+            // what clients run: the version the live alias points to
+            {
+              header: 'Live',
+              cell: (fn) => (fn.aliasVersions?.live
+                ? <span className="live-version" title={`${fn.name}:live`}>v{fn.aliasVersions.live}</span>
+                : <span className="muted-text">—</span>),
+            },
             { header: 'Last Modified', cell: (fn) => <DateCell iso={fn.lastModified} /> },
           ]} />
       </ListPanel>

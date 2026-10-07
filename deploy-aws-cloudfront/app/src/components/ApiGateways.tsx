@@ -67,6 +67,9 @@ function lambdaVersionsHint(d: RecordedApiDeployment) {
   return d.lambdaVersion && `Lambda v${d.lambdaVersion}`;
 }
 
+/** s3://<bucket>/api-user-dev/20261007T120000Z/openapi.json -> 20261007T120000Z (the export's folder) */
+const specFolder = (spec: string) => spec.split('/').slice(-2, -1)[0];
+
 /** One recorded deployment as a menu hint: where it came from and what happened to it. */
 const recordHint = (d: RecordedApiDeployment) => [
   d.source,
@@ -256,6 +259,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                     cell: (d) => (
                       <div className="stacked" title={[d.description, d.spec].filter(Boolean).join('\n')}>
                         <span>{d.deploymentId} <span className="small muted-text">{d.stageName}</span></span>
+                        {/* where it came from: the Source column, folded in to make room for the OpenAPI export */}
+                        <span className="small muted-text">{d.source}{d.commit && ` · ${d.commit.slice(0, 7)}`}</span>
                         {(d.current || d.verified || d.rolledBack) && (
                           <span className="tags">
                             {d.current && <Tag kind="prod">live</Tag>}
@@ -266,11 +271,17 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                       </div>
                     ),
                   },
-                  {
-                    header: 'Source',
-                    cell: (d) => <div className="stacked">{d.source}{d.commit && <span className="small muted-text">{d.commit.slice(0, 7)}</span>}</div>,
-                  },
                   { header: 'Deployed At', cell: (d) => <DateCell iso={d.deployedAt} />, className: 'date-wrap' },
+                  // the OpenAPI JSON of each deployment in S3; the one the stage serves now is marked
+                  {
+                    header: 'OpenAPI export',
+                    cell: (d) => (
+                      <div className="stacked" title={d.spec}>
+                        <span className="spec-file">{specFolder(d.spec)}/<br />openapi.json</span>
+                        {d.current && <Tag kind="prod">deployed</Tag>}
+                      </div>
+                    ),
+                  },
                   {
                     header: 'Actions',
                     cell: (d) => (

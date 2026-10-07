@@ -205,6 +205,8 @@ test('lists Lambda functions with their aliases, never their environment', async
     arn: 'arn:aws:lambda:eu-central-1:123:function:service-lambda-dev:$LATEST',
     runtime: 'nodejs24.x',
     aliases: ['integration', 'live'],
+    // what each alias points to: live sends 10% of its traffic to version 10
+    aliasVersions: { live: '2 (90%) + 10 (10%)', integration: '10' },
     lastModified: '2026-10-06T13:21:00.000Z',
   }]);
 });
