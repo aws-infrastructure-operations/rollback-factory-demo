@@ -212,7 +212,7 @@ the rollback topic. Permissions, the scheduled check and the sync are generated 
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`lambda`](../.github/workflows/lambda.yml) | PRs; pushes to `main` touching `deploy-aws-lambda/**`; manual | PRs: typecheck, unit tests, synth. `main`: deploy dev → testing → staging → prod through [`lambda-deploy`](../.github/workflows/lambda-deploy.yml) (integration → tests → live → sync), then refresh the commit dropdown |
+| [`lambda`](../.github/workflows/lambda.yml) | PRs; pushes to `main` touching `deploy-aws-lambda/**`; manual | PRs: typecheck, unit tests, synth. `main`: deploy dev → testing → staging → prod through [`lambda-deploy`](../.github/actions/lambda-deploy/action.yml) (integration → tests → live → sync), then refresh the commit dropdown |
 | [`lambda rollback by version`](../.github/workflows/lambda-rollback-by-version.yml) | Manual: environment, `target_version`, `dry_run` | See [Manual rollback](#manual-rollback) |
 | [`lambda rollback to commit`](../.github/workflows/lambda-rollback-to-commit.yml) | Manual: environment, `commit`, `dry_run` | Resolves the commit to a version in that environment, then runs rollback by version |
 

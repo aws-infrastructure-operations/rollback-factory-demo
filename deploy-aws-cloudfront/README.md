@@ -267,7 +267,7 @@ exactly as SNS would.
 ## GitHub workflows
 
 Files: [`frontend.yml`](../.github/workflows/frontend.yml), which calls
-[`frontend-deploy.yml`](../.github/workflows/frontend-deploy.yml) once per environment, and
+[`frontend-deploy`](../.github/actions/frontend-deploy/action.yml) once per environment, and
 [`frontend-restore.yml`](../.github/workflows/frontend-restore.yml).
 
 - **Triggers:** pull requests and pushes to `main` that change `deploy-aws-cloudfront/**` or

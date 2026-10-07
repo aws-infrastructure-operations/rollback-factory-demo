@@ -60,5 +60,5 @@ the project READMEs and story files.
 
 [`rollback-service.yml`](../.github/workflows/rollback-service.yml): PR checks (typecheck, unit tests,
 synth); on `main`, dev → testing → staging → prod through
-[`rollback-service-deploy.yml`](../.github/workflows/rollback-service-deploy.yml): deploy → integration
+[`rollback-service-deploy`](../.github/actions/rollback-service-deploy/action.yml): deploy → integration
 tests (routing and skip paths only, safe everywhere) → next environment.
