@@ -41,6 +41,8 @@ dig NS rollback.ionuteliantudor.com +short
 Do this **before** deploying the frontend with its domains: their certificates are validated through
 this zone, and the deploy waits until they are.
 
+Step by step, with the current name servers: [`DELEGATION.md`](DELEGATION.md).
+
 Its `HostedZoneId` (`Z0085229C3Q59CDL7JTH`) is `HOSTED_ZONE` in `deploy-aws-cloudfront/lib/config.ts`.
 
 ## CI
