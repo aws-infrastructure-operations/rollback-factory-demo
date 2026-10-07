@@ -66,7 +66,7 @@ export function LambdaSection() {
             {
               header: 'Live',
               cell: (fn) => (fn.aliasVersions?.live
-                ? <span className="live-version" title={`${fn.name}:live`}>v{fn.aliasVersions.live}</span>
+                ? <span className="live-version" title={`${fn.name}:live`}>live:{fn.aliasVersions.live}</span>
                 : <span className="muted-text">—</span>),
             },
             { header: 'Last Modified', cell: (fn) => <DateCell iso={fn.lastModified} /> },

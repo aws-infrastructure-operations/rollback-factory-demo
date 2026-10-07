@@ -70,6 +70,24 @@ function lambdaVersionsHint(d: RecordedApiDeployment) {
 /** s3://<bucket>/api-user-dev/20261007T120000Z/openapi.json -> 20261007T120000Z (the export's folder) */
 const specFolder = (spec: string) => spec.split('/').slice(-2, -1)[0];
 
+/**
+ * The OpenAPI export a stage serves, from its current recorded deployment. "drift" when the stage was
+ * moved to another deployment outside the tooling (console, CLI), so the record no longer describes it.
+ */
+function StageSpec({ stage, recorded }: { stage: ApiGatewayDetails['stages'][number]; recorded?: RecordedApiDeployment[] }) {
+  if (!recorded) return <span className="muted-text">—</span>;
+  const current = recorded.find((r) => r.current && r.stageName === stage.name);
+  if (!current) return <span className="muted-text">not recorded</span>;
+  return (
+    <div className="stacked" title={current.spec}>
+      <span className="spec-file">{specFolder(current.spec)}/<br />openapi.json</span>
+      {stage.deploymentId && stage.deploymentId !== current.deploymentId && (
+        <span title={`${stage.name} serves ${stage.deploymentId}; the record says ${current.deploymentId}`}><Tag kind="bad">drift</Tag></span>
+      )}
+    </div>
+  );
+}
+
 /** One recorded deployment as a menu hint: where it came from and what happened to it. */
 const recordHint = (d: RecordedApiDeployment) => [
   d.source,
@@ -236,6 +254,8 @@ function ApiGatewayDetailPanel({ api, reloads }: { api: ApiGateway; reloads: num
                 { header: 'Stage Name', cell: (s) => <><span className={`dot ${s.deploymentId ? 'ok' : 'muted'}`} />{s.name}</> },
                 { header: 'Deployment ID', cell: (s) => s.deploymentId ?? '—' },
                 { header: 'Deployed At', cell: (s) => <DateCell iso={s.deployedAt} /> },
+                // the OpenAPI export the stage serves: its current recorded deployment
+                { header: 'OpenAPI spec', cell: (s) => <StageSpec stage={s} recorded={data?.recorded} /> },
                 {
                   header: 'Actions',
                   cell: (s) => (
