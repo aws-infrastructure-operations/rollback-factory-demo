@@ -113,7 +113,8 @@ describe('stack', () => {
     for (const m of methods as any[]) {
       const path = resources[m.Properties.ResourceId.Ref].Properties.PathPart;
       const uri = JSON.stringify(m.Properties.Integration.Uri);
-      assert.ok(uri.includes(':${stageVariables.lambdaAlias}/invocations'), uri);
+      // DEMO BRANCH: the broken integration URI (see api-user-stack.ts)
+      assert.ok(uri.includes(':${stageVariables.backendAlias}/invocations'), uri);
       const [, fnId] = functions.find(([name]) => name.endsWith(`api-${path}-dev`))!;
       assert.ok(uri.includes(`"${fnId}"`), `/${path} invokes its own function: ${uri}`);
     }
@@ -123,7 +124,7 @@ describe('stack', () => {
       'UsersHandler:integration', 'UsersHandler:live',
     ]);
     assert.deepEqual(stage(t, 'v1').Variables, { lambdaAlias: 'live' });
-    assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration' });
+    assert.deepEqual(stage(t, 'integration').Variables, { lambdaAlias: 'integration', backendAlias: 'integration' });
     for (const { id } of Object.values(aliases(t))) {
       t.hasResourceProperties('AWS::Lambda::Permission', {
         FunctionName: { Ref: id },

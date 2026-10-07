@@ -217,7 +217,13 @@ export class ApiUserStack extends cdk.Stack {
         type: apigw.IntegrationType.AWS_PROXY,
         integrationHttpMethod: 'POST',
         uri: `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}:lambda:path/2015-03-31/functions/`
-          + `${fn.functionArn}:\${stageVariables.lambdaAlias}/invocations`,
+          // DEMO BRANCH (demo/break-api-gateway) - DO NOT MERGE.
+          // A bad API config change: the integrations read a new stage variable, backendAlias, that only
+          // the integration stage defines. The integration tests pass there, CI promotes the deployment
+          // to v1, and on v1 every route resolves to "<function>:" (no alias): API Gateway answers 500
+          // without invoking the Lambda. The 5xx alarm fires and, as the Lambda isn't at fault, the
+          // rollback service restores the previous verified deployment's spec.
+          + `${fn.functionArn}:\${stageVariables.backendAlias}/invocations`,
       });
       const resource = this.api.root.addResource(backend);
       resource.addMethod('GET', integration);
@@ -244,7 +250,7 @@ export class ApiUserStack extends cdk.Stack {
     const integrationStage = new apigw.Stage(this, 'IntegrationStage', {
       deployment: this.api.latestDeployment!,
       stageName: config.integrationStageName,
-      variables: { lambdaAlias: 'integration' },
+      variables: { lambdaAlias: 'integration', backendAlias: 'integration' },
       throttlingRateLimit: 10,
       throttlingBurstLimit: 20,
     });
