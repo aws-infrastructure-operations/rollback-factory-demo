@@ -249,5 +249,6 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
   assert.match(JSON.stringify(invoke.Resource), /:function:rollback-factory-demo-rollback-service-\*"\]\]}$/, 'the rollback services only');
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
-  assert.match(JSON.stringify(scoped.Resource), /:function:\*"/, 'aliases and versions of this account and region only');
+  // the functions registered for rollback only (service-lambda-<env>), of this account and region
+  assert.match(JSON.stringify(scoped.Resource), /:function:service-lambda-\*"\]\]}$/, 'aliases and versions of the registered functions only');
 });

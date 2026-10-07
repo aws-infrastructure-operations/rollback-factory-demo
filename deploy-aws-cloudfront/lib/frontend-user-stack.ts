@@ -93,10 +93,15 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['lambda:ListFunctions'],
       resources: ['*'],
     }));
-    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['lambda:ListAliases', 'lambda:ListVersionsByFunction'],
-      resources: [`arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:*`],
-    }));
+    // Only the functions registered for rollback are shown (service-lambda-<env> -> service-lambda-*).
+    const registered = registeredFunctions();
+    if (registered.length > 0) {
+      this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['lambda:ListAliases', 'lambda:ListVersionsByFunction'],
+        resources: registered.map(({ name: fn }) =>
+          `arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${fn.replaceAll('<env>', '*')}`),
+      }));
+    }
     // CloudFront: list the distributions (no resource-level permission), then read one, and its
     // invalidations. Origin custom headers come with GetDistribution and are never sent on.
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({

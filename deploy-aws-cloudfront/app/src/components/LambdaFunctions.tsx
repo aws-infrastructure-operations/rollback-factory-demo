@@ -1,5 +1,6 @@
-// Lambda Functions: the region's functions from the dashboard API, with search and refresh, and
-// the selected function's versions, aliases, configuration and last 24 hours next to them.
+// Lambda Functions: the region's functions registered for rollback (rollback-config.json), from the
+// dashboard API, with search and refresh, and the selected function's versions, aliases, configuration
+// and last 24 hours next to them.
 import { useMemo, useState } from 'react';
 import {
   fetchLambdaFunctionDetails, fetchLambdaFunctionMetrics, fetchLambdaFunctions, pointLambdaAlias,
@@ -31,7 +32,7 @@ export function LambdaSection() {
   const selected = shown.find((fn) => fn.name === selectedName) ?? shown[0];
 
   let message = pendingMessage(list, 'the Lambda functions');
-  if (list.data && !functions.length) message = { text: `No Lambda functions in ${list.data.region}.` };
+  if (list.data && !functions.length) message = { text: `No functions registered for rollback in ${list.data.region}.` };
   else if (list.data && !shown.length) message = { text: `No Lambda functions match “${query.trim()}”.` };
 
   return (
@@ -39,7 +40,7 @@ export function LambdaSection() {
       <ListPanel
         id="lambda-functions" icon="lambda" tint="tint-lambda" title="Lambda Functions" state={loadState(list)}
         count={list.data && (shown.length === functions.length ? `${functions.length}` : `${shown.length} of ${functions.length}`)}
-        description={`The functions${list.data ? ` in ${list.data.region}` : ''}, with their aliases and latest change.`}
+        description={`The functions registered for rollback${list.data ? ` in ${list.data.region}` : ''}, with their aliases and latest change.`}
         searchPlaceholder="Search functions..." search={{ value: query, onChange: setQuery }}
         onRefresh={() => setReloads((n) => n + 1)} refreshing={list.loading}
       >

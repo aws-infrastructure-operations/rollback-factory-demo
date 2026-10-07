@@ -66,12 +66,16 @@ export const lambdaDate = (value?: string) => {
 
 const runtimeOf = (fn: FunctionConfiguration) => fn.Runtime ?? (fn.PackageType === 'Image' ? 'Container image' : 'unknown');
 
-export async function listLambdaFunctions(client: LambdaClient): Promise<LambdaFunctionSummary[]> {
+/** The functions `include` accepts (the ones registered for rollback); the others' aliases are never read. */
+export async function listLambdaFunctions(
+  client: LambdaClient,
+  include: (functionName: string) => boolean = () => true,
+): Promise<LambdaFunctionSummary[]> {
   const functions: FunctionConfiguration[] = [];
   let marker: string | undefined;
   do {
     const page = await client.send(new ListFunctionsCommand({ Marker: marker, MaxItems: 50 }));
-    functions.push(...(page.Functions ?? []));
+    functions.push(...(page.Functions ?? []).filter((fn) => include(fn.FunctionName!)));
     marker = page.NextMarker;
   } while (marker);
 

@@ -91,3 +91,35 @@ test('points aliases only with POST and a valid body, checked before calling AWS
   assert.equal((await send('/api/lambda-functions/arn:aws:lambda:x/point-alias', 'POST', '{"aliasName":"live","version":2}')).statusCode, 400);
   assert.equal((await send('/api/api-gateways/abcdefghij/point-alias', 'POST', '{}')).statusCode, 405);
 });
+
+test('lists the registered functions only, without reading the others\' aliases', async () => {
+  const { ListAliasesCommand, ListFunctionsCommand } = await import('@aws-sdk/client-lambda');
+  const { listLambdaFunctions } = await import('../lambda/dashboard-api/lambda-functions.js');
+  const aliasesRead: string[] = [];
+  const client = {
+    send: async (command: any) => {
+      if (command instanceof ListFunctionsCommand) {
+        return { Functions: ['service-lambda-dev', 'service-lambda-prod', 'rollback-factory-demo-handler-dev', 'other'].map((name) => ({
+          FunctionName: name, FunctionArn: `arn:aws:lambda:eu-central-1:123:function:${name}`, Runtime: 'nodejs24.x',
+        })) };
+      }
+      if (command instanceof ListAliasesCommand) {
+        aliasesRead.push(command.input.FunctionName!);
+        return { Aliases: [{ Name: 'live' }] };
+      }
+      throw new Error(`unexpected ${command.constructor.name}`);
+    },
+  } as unknown as LambdaClient;
+  const isRegistered = (name: string) => registrationFor(name, REGISTERED, PROJECT) !== undefined;
+
+  const functions = await listLambdaFunctions(client, isRegistered);
+  assert.deepEqual(functions.map((fn) => fn.name).sort(), ['service-lambda-dev', 'service-lambda-prod']);
+  assert.deepEqual(aliasesRead.sort(), ['service-lambda-dev', 'service-lambda-prod']);
+});
+
+test('reads neither the details nor the metrics of a function that is not registered', async () => {
+  const get = (path: string) => handler({ rawPath: path, requestContext: { http: { method: 'GET' } } });
+  // REGISTERED_FUNCTIONS isn't set in the tests: no function is registered, and no AWS call is made
+  assert.equal((await get('/api/lambda-functions/rollback-factory-demo-handler-dev')).statusCode, 404);
+  assert.equal((await get('/api/lambda-functions/rollback-factory-demo-handler-dev/metrics')).statusCode, 404);
+});
