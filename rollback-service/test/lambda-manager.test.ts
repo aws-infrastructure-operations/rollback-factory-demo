@@ -76,6 +76,8 @@ class FakeTable {
 class FakeFunction {
   versions = new Map<number, { sha: string; description: string }>();
   live = { version: 1, revision: 'r1' };
+  /** aliases other than live, e.g. integration */
+  others = new Map<string, { version: number; revision: string }>();
   latest = { sha: 'sha-1', lastModified: minutesAgo(60) };
   calls: any[] = [];
 
@@ -101,10 +103,16 @@ class FakeFunction {
         },
       };
     }
-    if (command instanceof GetAliasCommand) return { FunctionVersion: String(this.live.version), RevisionId: this.live.revision };
+    if (command instanceof GetAliasCommand) {
+      const alias = input.Name === 'live' ? this.live : this.others.get(input.Name);
+      if (!alias) throw Object.assign(new Error('Alias not found'), { name: 'ResourceNotFoundException' });
+      return { FunctionVersion: String(alias.version), RevisionId: alias.revision };
+    }
     if (command instanceof UpdateAliasCommand) {
-      if (input.RevisionId !== this.live.revision) throw new Error('PreconditionFailedException');
-      this.live = { version: Number(input.FunctionVersion), revision: `${this.live.revision}+` };
+      const alias = input.Name === 'live' ? this.live : this.others.get(input.Name)!;
+      if (input.RevisionId !== alias.revision) throw new Error('PreconditionFailedException');
+      const moved = { version: Number(input.FunctionVersion), revision: `${alias.revision}+` };
+      if (input.Name === 'live') this.live = moved; else this.others.set(input.Name, moved);
       return {};
     }
     if (command instanceof UpdateFunctionCodeCommand) {
@@ -287,4 +295,69 @@ test('the scheduled check re-handles an alarm still in ALARM', async () => {
   const results = await handle({ type: 'scheduled-check' }) as any[];
   assert.deepEqual(results.map((r) => r.rolledBack), [true]);
   assert.equal(fn.live.version, 1);
+});
+
+// --- Pointing an alias by hand (the dashboard's menus) ---------------------------------------------
+
+const point = (aliasName: string, version: number, extra: Record<string, unknown> = {}) =>
+  ({ type: 'point-alias' as const, functionName: FN, aliasName, version, actor: 'dashboard', ...extra });
+
+test('pointing live back is a manual rollback: alias, $LATEST restored, cooldown, version left marked', async () => {
+  const handle = await deployHistory();
+  const [result] = await handle(point('live', 1)) as any[];
+
+  assert.deepEqual(result, {
+    pointed: true, functionName: FN, aliasName: 'live', from: 3, to: 1, kind: 'rollback',
+    restoredFrom: `s3://${BUCKET}/${FN}/${FN}-1.zip`,
+  });
+  assert.equal(fn.live.version, 1);
+  assert.equal(fn.latest.sha, 'sha-1', '$LATEST restored from the archived zip');
+  const update: any = fn.calls.find((c) => c instanceof UpdateAliasCommand);
+  assert.equal(update.input.RevisionId, 'r3', 'conditional on the alias revision');
+  const current = table.get('CURRENT')!;
+  assert.equal(current.version.N, '1');
+  assert.equal(current.updatedBy.S, 'dashboard');
+  assert.equal(current.rollbackCount.N, '0', 'manual: not counted towards the consecutive-rollback limit');
+  assert.ok(current.lastRollbackAt?.S, 'starts the cooldown');
+  assert.equal(table.get('VERSION#0000000003')!.rolledBackBy.S, 'dashboard');
+});
+
+test('pointing live forward is a promotion: nothing is marked rolled back, the version goes live', async () => {
+  const handle = await deployHistory();
+  await handle(point('live', 1));
+  const [result] = await handle(point('live', 2)) as any[];
+
+  assert.equal(result.kind, 'promotion');
+  assert.equal(fn.live.version, 2);
+  assert.equal(fn.latest.sha, 'sha-2');
+  const current = table.get('CURRENT')!;
+  assert.equal(current.version.N, '2');
+  assert.equal(current.previousVersion.N, '1');
+  assert.equal(current.lastRollbackAt, undefined);
+  assert.equal(table.get('VERSION#0000000001')!.rolledBackAt, undefined);
+  assert.ok(table.get('VERSION#0000000002')!.liveAt?.S, 'v2 never went live before; now it has');
+});
+
+test('another alias just moves: no $LATEST restore, no record', async () => {
+  const handle = await deployHistory();
+  fn.others.set('integration', { version: 3, revision: 'i3' });
+  const before = structuredClone(table.get('CURRENT'));
+  const [result] = await handle(point('integration', 2)) as any[];
+
+  assert.deepEqual(result, { pointed: true, functionName: FN, aliasName: 'integration', from: 3, to: 2, kind: 'alias' });
+  assert.equal(fn.others.get('integration')!.version, 2);
+  assert.equal(fn.live.version, 3, 'live untouched');
+  assert.equal(fn.calls.some((c) => c instanceof UpdateFunctionCodeCommand), false);
+  assert.deepEqual(table.get('CURRENT'), before);
+});
+
+test('refuses unregistered functions, the version already pointed to, and versions that are not archived', async () => {
+  const handle = await deployHistory();
+  assert.match((await handle({ ...point('live', 1), functionName: 'other' }) as any[])[0].reason, /not registered/);
+  assert.match((await handle(point('live', 3)) as any[])[0].reason, /already points to version 3/);
+  assert.match((await handle(point('live', 0)) as any[])[0].reason, /published version number/);
+  // live needs the version's archived zip to restore $LATEST
+  assert.match((await handle(point('live', 42)) as any[])[0].reason, /not archived/);
+  assert.equal(fn.live.version, 3);
+  assert.equal(fn.calls.some((c) => c instanceof UpdateAliasCommand), false);
 });

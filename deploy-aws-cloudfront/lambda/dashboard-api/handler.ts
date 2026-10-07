@@ -11,12 +11,14 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { getApiGatewayDetails, isApiId } from './api-gateway-details.js';
 import { isDeployedAt, listRecordedDeployments, restoreRecordedDeployment } from './api-gateway-deployments.js';
 import { listApiGateways, type ApiType } from './api-gateways.js';
+import { isAliasName, isVersion, pointAlias } from './lambda-aliases.js';
 import {
   getDistributionDetails, getDistributionMetrics, isDistributionId, listDistributions, listInvalidations, restoreRelease,
 } from './cloudfront-distributions.js';
 import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, isFunctionName, listLambdaFunctions,
 } from './lambda-functions.js';
+import { parseRegistered, registrationFor } from './registered-functions.js';
 
 /** The parts of a function URL event this handler reads. */
 export interface FunctionUrlEvent {
@@ -41,6 +43,8 @@ const cloudfront = new CloudFrontClient({});
 // CloudFront metrics only exist in us-east-1
 const edgeCloudwatch = new CloudWatchClient({ region: 'us-east-1' });
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+// the functions whose aliases the dashboard may point, from rollback-service/rollback-config.json
+const registered = parseRegistered(process.env.REGISTERED_FUNCTIONS);
 
 const json = (statusCode: number, body: unknown): FunctionUrlResult => ({
   statusCode,
@@ -60,6 +64,8 @@ const RESOURCE_NAMES: Record<string, string> = {
  *   and for the APIs this project deploys, their recorded deployments.
  * POST /api/api-gateways/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded deployment.
  * POST /api/cloudfront-distributions/<id>/restore {"deployedAt": "...", "reason"?: "..."}: restores a recorded release.
+ * POST /api/lambda-functions/<name>/point-alias {"aliasName": "...", "version": 3}: points an alias of a
+ *   registered function at a version.
  * GET /api/lambda-functions: the region's functions.
  * GET /api/lambda-functions/<name>: one function's versions, aliases and configuration.
  * GET /api/lambda-functions/<name>/metrics: its last 24 hours of metrics.
@@ -70,20 +76,24 @@ const RESOURCE_NAMES: Record<string, string> = {
  */
 export async function handler(event: FunctionUrlEvent): Promise<FunctionUrlResult> {
   const { method } = event.requestContext.http;
-  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore))?)?$/.exec(event.rawPath);
+  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
   const restore = sub === 'restore' && (resource === 'api-gateways' || resource === 'cloudfront-distributions');
-  if (restore ? method !== 'POST' : method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
+  const point = sub === 'point-alias' && resource === 'lambda-functions';
+  const write = restore || point;
+  if (write ? method !== 'POST' : method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
   try {
     if (restore && resource === 'api-gateways') return await restoreApiDeployment(id!, event);
     if (restore) return await restoreDistributionRelease(id!, event);
+    if (point) return await pointLambdaAlias(id!, event);
     if (resource === 'api-gateways') return await apiGateways(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
     if (resource === 'lambda-functions') return await lambdaFunctions(id, sub);
     return await distributions(id, sub);
   } catch (err) {
     // details stay in the logs; the page only needs to know the data isn't available
-    console.error(`${restore ? 'Restoring' : 'Reading'} ${event.rawPath} failed`, err);
+    console.error(`${write ? 'Changing' : 'Reading'} ${event.rawPath} failed`, err);
+    if (point) return json(502, { message: 'Could not point the alias' });
     return json(502, { message: restore ? `Could not restore the ${resource === 'api-gateways' ? 'deployment' : 'release'}` : `Could not read the ${RESOURCE_NAMES[resource]}` });
   }
 }
@@ -142,7 +152,23 @@ async function lambdaFunctions(name: string | undefined, sub: string | undefined
   if (sub && sub !== 'metrics') return json(404, { message: 'Not found' });
   if (sub === 'metrics') return json(200, await getLambdaFunctionMetrics(cloudwatch, name));
   const details = await getLambdaFunctionDetails(lambda, name);
-  return details ? json(200, details) : json(404, { message: `No function ${name}` });
+  if (!details) return json(404, { message: `No function ${name}` });
+  const registration = registrationFor(name, registered, process.env.PROJECT_NAME!);
+  return json(200, registration ? { ...details, managedAlias: registration.alias } : details);
+}
+
+async function pointLambdaAlias(name: string, event: FunctionUrlEvent) {
+  let body: { aliasName?: unknown; version?: unknown } | undefined;
+  try {
+    body = JSON.parse(event.isBase64Encoded ? Buffer.from(event.body ?? '', 'base64').toString('utf8') : event.body ?? '');
+  } catch { /* answered below */ }
+  if (!isFunctionName(name) || !isAliasName(body?.aliasName) || !isVersion(body?.version)) {
+    return json(400, { message: 'Expected a function name and {"aliasName": "<alias>", "version": <published version number>}' });
+  }
+  const outcome = await pointAlias(lambda, registered, process.env.PROJECT_NAME!, name, {
+    aliasName: body!.aliasName as string, version: body!.version as number,
+  });
+  return outcome.ok ? json(200, outcome.result) : json(outcome.status, { message: outcome.message });
 }
 
 async function distributions(id: string | undefined, sub: string | undefined) {

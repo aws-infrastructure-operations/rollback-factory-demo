@@ -30,6 +30,11 @@ export interface LambdaFunctionDetails {
   versions: Array<{ version: string; description?: string; publishedAt?: string; aliases: string[] }>;
   aliases: Array<{ name: string; version: string; description?: string; additionalVersions?: Record<string, number> }>;
   configuration: Array<{ label: string; value: string }>;
+  /**
+   * Functions registered for rollback only: the alias the rollback service watches. Their aliases can be
+   * pointed at a version from the dashboard (POST .../point-alias); others are read-only.
+   */
+  managedAlias?: string;
 }
 
 /** What GET /api/lambda-functions/<name>/metrics returns: totals over the last 24 hours. */

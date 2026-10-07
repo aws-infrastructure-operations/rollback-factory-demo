@@ -2,15 +2,16 @@
 // the selected function's versions, aliases, configuration and last 24 hours next to them.
 import { useMemo, useState } from 'react';
 import {
-  fetchLambdaFunctionDetails, fetchLambdaFunctionMetrics, fetchLambdaFunctions,
+  fetchLambdaFunctionDetails, fetchLambdaFunctionMetrics, fetchLambdaFunctions, pointLambdaAlias,
   type LambdaFunction, type LambdaFunctionDetails, type LambdaFunctionList, type LambdaFunctionMetrics,
 } from '../api.js';
 import { DateCell, loadState, pendingMessage, useLoad } from './loading.js';
 import { DetailPanel, ListPanel } from './Panels.js';
-import { DataTable, RollbackButton, StageTags } from './ui.js';
+import { MenuButton, type MenuItem } from './Menu.js';
+import { DataTable, StageTags } from './ui.js';
 
-/** Until the dashboard has sign-in, nobody should be able to roll back a function from a public page. */
-const ROLLBACK_DISABLED = 'Rolling back from the dashboard comes with sign-in. Use the lambda rollback-by-version workflow for now.';
+/** Only functions registered for rollback can be changed, through the rollback service. */
+const NOT_REGISTERED = 'Only functions registered for rollback (rollback-service/rollback-config.json) can be changed here.';
 
 const matches = (fn: LambdaFunction, query: string) =>
   [fn.name, fn.runtime, fn.description ?? '', ...fn.aliases].some((value) => value.toLowerCase().includes(query));
@@ -79,11 +80,67 @@ function aliasTarget({ version, additionalVersions }: LambdaFunctionDetails['ali
   return [`${version} (${percent(rest)})`, ...extra.map(([v, weight]) => `${v} (${percent(weight)})`)].join(' + ');
 }
 
+type Alias = LambdaFunctionDetails['aliases'][number];
+
+/** What pointing `alias` at `target` does, for the confirm dialog. */
+function pointEffect(fnName: string, alias: Alias, target: number, managedAlias: string | undefined) {
+  const from = Number(alias.version);
+  const head = `Point ${fnName}:${alias.name} to version ${target}? It points to version ${from} now.`;
+  if (alias.name !== managedAlias) return `${head}\n\nOnly the alias moves.`;
+  return target < from
+    ? `${head}\n\nGoing back is a manual rollback: $LATEST is restored from version ${target}'s archived package, and version ${from} is marked as rolled back from.`
+    : `${head}\n\n$LATEST is restored from version ${target}'s archived package, and version ${target} counts as live.`;
+}
+
 function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: number }) {
-  // refreshing the list reloads the selected function too
-  const details = useLoad<LambdaFunctionDetails>(`${fn.name}#${reloads}`, (signal) => fetchLambdaFunctionDetails(fn.name, signal));
+  // refreshing the list reloads the selected function too, and so does pointing an alias
+  const [changes, setChanges] = useState(0);
+  const details = useLoad<LambdaFunctionDetails>(`${fn.name}#${reloads}.${changes}`, (signal) => fetchLambdaFunctionDetails(fn.name, signal));
   const data = details.data;
   const message = pendingMessage(details, fn.name);
+  // the alias being pointed, and the last change's outcome, for the function they belong to
+  const [pointing, setPointing] = useState<{ fn: string; alias: string }>();
+  const [outcome, setOutcome] = useState<{ fn: string; text: string; error?: boolean }>();
+  const busy = pointing?.fn === fn.name;
+  const managed = data?.managedAlias;
+  const disabledReason = !managed ? NOT_REGISTERED : busy ? 'A change is running.' : undefined;
+
+  async function point(alias: Alias, target: number) {
+    if (!window.confirm(pointEffect(fn.name, alias, target, managed))) return;
+    setPointing({ fn: fn.name, alias: alias.name });
+    setOutcome(undefined);
+    try {
+      await pointLambdaAlias(fn.name, alias.name, target);
+      setOutcome({ fn: fn.name, text: `${alias.name} now points to version ${target}.` });
+    } catch (err) {
+      setOutcome({ fn: fn.name, text: `Could not point ${alias.name} to version ${target}: ${(err as Error).message}`, error: true });
+    } finally {
+      setPointing(undefined);
+      setChanges((n) => n + 1);
+    }
+  }
+
+  /** Versions menu: one item per alias, to point it at `version`. */
+  const aliasItems = (version: string): MenuItem[] => (data?.aliases ?? []).map((a) => ({
+    key: a.name,
+    label: a.name,
+    hint: a.name === managed ? `on version ${a.version} · restores $LATEST` : `on version ${a.version}`,
+    disabledReason: a.version === version ? `${a.name} already points to this version` : undefined,
+    onSelect: () => point(a, Number(version)),
+  }));
+
+  /** Aliases menu: one item per published version, to point `alias` at it. */
+  const versionItems = (alias: Alias): MenuItem[] => (data?.versions ?? []).map((v) => ({
+    key: v.version,
+    label: `Version ${v.version}`,
+    hint: v.description,
+    disabledReason: v.version === alias.version ? `${alias.name} points to this version` : undefined,
+    onSelect: () => point(alias, Number(v.version)),
+  }));
+
+  const outcomeLine = outcome?.fn === fn.name && (
+    <p className={outcome.error ? 'refresh-error' : 'restore-done'} role={outcome.error ? 'alert' : 'status'}>{outcome.text}</p>
+  );
 
   return (
     <DetailPanel
@@ -96,6 +153,8 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
       {(tab) => {
         if (tab === 'Versions') {
           return (
+            <>
+            {outcomeLine}
             <DataTable rows={data?.versions ?? []} rowKey={(v) => v.version}
               message={message ?? (data!.versions.length ? undefined : { text: 'No published versions: only $LATEST.' })}
               columns={[
@@ -103,19 +162,38 @@ function LambdaDetailPanel({ fn, reloads }: { fn: LambdaFunction; reloads: numbe
                 { header: 'Version', cell: (v) => <div className="stacked">{v.version}{v.aliases.length > 0 && <StageTags stages={v.aliases} />}</div> },
                 { header: 'Description', cell: (v) => v.description || '—', className: 'wrap' },
                 { header: 'Published At', cell: (v) => <DateCell iso={v.publishedAt} />, className: 'date-wrap' },
-                { header: 'Actions', cell: () => <RollbackButton disabledReason={ROLLBACK_DISABLED} /> },
+                {
+                  header: 'Actions',
+                  cell: (v) => (
+                    <MenuButton label="Point alias" heading={`Point an alias to version ${v.version}`} items={aliasItems(v.version)}
+                      disabledReason={disabledReason ?? (data?.aliases.length ? undefined : 'This function has no aliases.')}
+                      busy={busy} />
+                  ),
+                },
               ]} />
+            </>
           );
         }
         if (tab === 'Aliases') {
           return (
+            <>
+            {outcomeLine}
             <DataTable rows={data?.aliases ?? []} rowKey={(a) => a.name}
               message={message ?? (data!.aliases.length ? undefined : { text: 'No aliases.' })}
               columns={[
                 { header: 'Alias', cell: (a) => <StageTags stages={[a.name]} /> },
                 { header: 'Version', cell: aliasTarget },
                 { header: 'Description', cell: (a) => a.description || '—', className: 'wrap' },
+                {
+                  header: 'Actions',
+                  cell: (a) => (
+                    <MenuButton label="Point to version" heading={`Point ${a.name} to…`} items={versionItems(a)}
+                      disabledReason={disabledReason ?? (data?.versions.length ? undefined : 'No published versions.')}
+                      busy={busy && pointing!.alias === a.name} />
+                  ),
+                },
               ]} />
+            </>
           );
         }
         if (tab === 'Monitoring') return <LambdaMetrics name={fn.name} reloads={reloads} />;

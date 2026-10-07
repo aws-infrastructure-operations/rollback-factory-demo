@@ -11,11 +11,15 @@ on:
     branches: [main]
     paths:
       - deploy-aws-cloudfront/**
+      # the dashboard reads the functions registered for rollback (frontend-user-stack.ts)
+      - rollback-service/rollback-config.json
       - .github/workflows/frontend*.yml
       - "!**/*.md"
   pull_request:
     paths:
       - deploy-aws-cloudfront/**
+      # the dashboard reads the functions registered for rollback (frontend-user-stack.ts)
+      - rollback-service/rollback-config.json
       - .github/workflows/frontend*.yml
       - "!**/*.md"
   workflow_dispatch:

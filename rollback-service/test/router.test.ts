@@ -118,3 +118,11 @@ test('reads a stack RollbackTarget once per invocation', async () => {
   const empty = createTargetReader({ send: async () => ({ Stacks: [{ Outputs: [] }] }) } as any);
   await assert.rejects(empty.get('deploy-aws-cloudfront-dev'), /has no RollbackTarget output/);
 });
+
+test('sends alias moves to the Lambda manager and answers with its one result', async () => {
+  const { calls, managers } = recordingManagers();
+  const route = createRouter('dev', managers);
+  const event = { type: 'point-alias' as const, functionName: 'service-lambda-dev', aliasName: 'live', version: 2, actor: 'dashboard' };
+  assert.equal(await route(event), 'fn');
+  assert.deepEqual(calls, [['lambda', event]]);
+});

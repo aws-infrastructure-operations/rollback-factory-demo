@@ -34,6 +34,7 @@ Lambda project's deploy invokes it to sync. `-c alarmEmail=...` subscribes an e-
 | `{ "type": "sync", "functionName": "<fn>" }` | `deploy-aws-lambda` after promotion, manual Lambda rollbacks | Lambda manager |
 | `{ "type": "restore", "manager": "apigateway", "deployedAt": "…" }` | `deploy-aws-api-gateway`: `deployment:restore`, the dashboard | API Gateway manager |
 | `{ "type": "restore", "manager": "cloudfront", "deployedAt": "…" }` | the dashboard's CloudFront Restore button | CloudFront manager: switches to that record's release and records a `restore` |
+| `{ "type": "point-alias", "functionName": "<fn>", "aliasName": "live", "version": 3 }` | the dashboard's Lambda alias/version menus | Lambda manager: registered functions only. The registered alias moves like a manual rollback by version (alias, `$LATEST` restored, archive updated; a promotion when going forward); any other alias just moves |
 
 ## Layout
 
