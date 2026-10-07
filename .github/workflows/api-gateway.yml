@@ -1,6 +1,10 @@
 name: api-gateway
 
-# PRs: typecheck, unit tests, synth, collection check.
+# PRs: typecheck, unit tests, synth, collection check. Then the PR's own environment, pr-<number>:
+# deploy-aws-api-gateway-pr-<n> is deployed (and updated on each push), and the integration tests run
+# on it, also reachable on https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/integration/.
+# The job deletes the stack once the tests are done; closing the PR (merged or not) deletes it too,
+# and pr-environments-cleanup.yml catches any left behind.
 # main / manual, per environment (dev, then prod): deploy to the "integration" stage ->
 # integration tests -> promote to stage v1. Failed tests stop the run with v1 untouched.
 # Alarms after a deploy are handled in AWS (4xx/5xx alarm -> SNS -> rollback Lambda), not by the workflow.
@@ -14,6 +18,8 @@ on:
       - .github/actions/api-gateway-deploy/**
       - "!**/*.md"
   pull_request:
+    # closed: deletes the PR's environment
+    types: [opened, synchronize, reopened, closed]
     paths:
       - deploy-aws-api-gateway/**
       - .github/workflows/api-gateway*.yml
@@ -30,10 +36,11 @@ on:
         type: string
         default: "0"
 
-# One run of this workflow at a time; a new run waits for the running one. Pull request checks
-# have their own group, so they never wait for (or replace) a waiting deploy from main.
+# One run of this workflow at a time; a new run waits for the running one. Each pull request has its
+# own group (its environment is deployed, and deleted on close, one run at a time), so PRs never wait
+# for each other or for (or replace) a waiting deploy from main.
 concurrency:
-  group: api-gateway-${{ github.event_name == 'pull_request' && 'checks' || 'deploy' }}
+  group: api-gateway-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'deploy' }}
   cancel-in-progress: false
 
 permissions:
@@ -41,6 +48,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,6 +78,106 @@ jobs:
             echo "::error::Bruno requests are out of date - run 'npm run collection:sync' and commit"
             exit 1
           fi
+
+  # The PR's own copy of the stack, tested like dev's integration stage but without promotion, alarm
+  # actions or deployment records. Not for PRs from forks: they get no secrets.
+  pr-environment:
+    name: pr environment
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: test
+    runs-on: ubuntu-latest
+    # dev's credentials and region: the same account, and dev's API domain serves the PR's path
+    environment: dev
+    # deploy, tests and the delete (the user pool, bucket and table take a few minutes to go)
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: deploy-aws-api-gateway
+    env:
+      API_ENV: pr-${{ github.event.pull_request.number }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CUSTOM_URL: https://api.dev.rollback.ionuteliantudor.com/user-pr-${{ github.event.pull_request.number }}/integration/users
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-api-gateway/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy deploy-aws-api-gateway-${{ env.API_ENV }}
+        run: npx cdk deploy -c env="$API_ENV" -c deployId="$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" --require-approval never
+
+      - name: Integration tests (stage integration)
+        id: integration
+        env:
+          API_STAGE: integration
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      # Not a gate: without a token the API answers 401, which proves the PR's mapping reaches it.
+      - name: Check the custom domain
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$CUSTOM_URL" || true)
+          if [[ "$status" == 401 ]]; then
+            echo "$CUSTOM_URL -> 401 without a token, as expected"
+          else
+            echo "::warning::$CUSTOM_URL answered '$status', expected 401"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            if [[ "${{ steps.integration.outcome }}" == success ]]; then
+              echo "### :white_check_mark: api-user-$API_ENV: integration tests passed"
+            elif [[ "${{ steps.integration.outcome }}" == failure ]]; then
+              echo "### :x: api-user-$API_ENV: integration tests failed"
+              echo '<details open><summary>Test output (last 100 lines)</summary>'
+              echo
+              echo '```'
+              tail -n 100 integration-tests.log
+              echo '```'
+              echo '</details>'
+            else
+              echo "### api-user-$API_ENV: not deployed"
+            fi
+            echo
+            echo "This PR's API was \`$CUSTOM_URL\` (and \`…/user-$API_ENV/v1/\`). It is deleted now that the tests are done."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The tests are done: remove the PR's stack right away, passed or failed, so nothing is left
+      # running. The next push deploys it again; closing the PR and the nightly
+      # pr-environments-cleanup.yml delete it too if this step could not.
+      - name: Delete the PR environment
+        if: always()
+        uses: ./.github/actions/pr-environment-delete
+        with:
+          stack-name: deploy-aws-api-gateway-pr-${{ github.event.pull_request.number }}
+
+  pr-environment-delete:
+    name: delete pr environment
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: dev
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: ./.github/actions/pr-environment-delete
+        with:
+          stack-name: deploy-aws-api-gateway-pr-${{ github.event.pull_request.number }}
 
   deploy-dev:
     name: deploy dev
