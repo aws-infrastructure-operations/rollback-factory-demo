@@ -74,6 +74,11 @@ export interface EnvConfig {
   rollbackWindowMinutes: number;
   /** 0..1 share of API requests the backend fails with a 500 - for demoing rollbacks. */
   chaosFailureRate: number;
+  /**
+   * Identifies the deploy (CI: <run id>.<attempt>). Set into each backend's configuration, so every
+   * deploy publishes a new version of both, even when their code didn't change.
+   */
+  deployId?: string;
 }
 
 /** Optional overrides, e.g. from `cdk deploy -c chaosFailureRate=1`. */
@@ -81,6 +86,7 @@ export interface ConfigOverrides {
   alarmNotifications?: string | boolean;
   rollbackWindowMinutes?: string | number;
   chaosFailureRate?: string | number;
+  deployId?: string;
   liveDeploymentId?: string;
   /** liveUsersVersion, liveMessagesVersion (see liveVersionContextKey) */
   [liveVersion: `live${string}Version`]: string | undefined;
@@ -140,6 +146,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     },
     rollbackWindowMinutes: Number(overrides.rollbackWindowMinutes ?? 30),
     chaosFailureRate,
+    deployId: overrides.deployId ? String(overrides.deployId) : undefined,
   };
 }
 

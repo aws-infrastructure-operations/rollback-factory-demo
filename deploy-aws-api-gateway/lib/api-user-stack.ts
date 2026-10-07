@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
@@ -19,6 +20,22 @@ interface BackendResources {
   fn: NodejsFunction;
   live: lambda.Alias;
   integration: lambda.Alias;
+}
+
+const BACKEND_DIR = path.join(__dirname, '..', 'lambda', 'api');
+
+/**
+ * Describes a published backend version: the deploy that published it, and the last commit that
+ * touched the backends' code (like deploy-aws-lambda's), e.g. "deploy 123.1 · 4f46d40 Split ...".
+ */
+export function versionDescription(deployId?: string, dir = BACKEND_DIR): string {
+  let commit: string;
+  try {
+    commit = execSync(`git log -1 --format="%h %s" -- "${dir}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || 'uncommitted';
+  } catch {
+    commit = 'unknown (no git)';
+  }
+  return (deployId ? `deploy ${deployId} · ${commit}` : commit).slice(0, 256);
 }
 
 export interface ApiUserStackProps extends cdk.StackProps {
@@ -211,7 +228,8 @@ export class ApiUserStack extends cdk.Stack {
       for (const alias of [live, integrationAlias]) {
         alias.addPermission('ApiGatewayInvoke', {
           principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
-          sourceArn: this.api.arnForExecuteApi('*', `/*/${backend}`, '*'),
+          // <api>/<stage>/<method>/<backend>: any stage and method, this resource only
+          sourceArn: this.api.arnForExecuteApi('*', `/${backend}`, '*'),
         });
       }
     }
@@ -391,6 +409,8 @@ export class ApiUserStack extends cdk.Stack {
       environment: {
         API_NAME: config.apiName,
         CHAOS_FAILURE_RATE: String(config.chaosFailureRate),
+        // a new value on every deploy changes the configuration, so a new version is published
+        ...(config.deployId && { DEPLOY_ID: config.deployId }),
       },
       logGroup: new logs.LogGroup(this, `${id}HandlerLogs`, {
         retention: logs.RetentionDays.TWO_WEEKS,
@@ -398,7 +418,10 @@ export class ApiUserStack extends cdk.Stack {
       }),
       bundling: { minify: true, sourceMap: true },
       // Keep every published version: the rollback service rolls live back to older ones.
-      currentVersionOptions: { removalPolicy: cdk.RemovalPolicy.RETAIN },
+      currentVersionOptions: {
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        description: versionDescription(config.deployId),
+      },
     });
     const liveVersion = config.live?.lambdaVersions[backend];
     return {

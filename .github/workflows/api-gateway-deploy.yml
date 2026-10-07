@@ -66,9 +66,11 @@ jobs:
       - name: Deploy to the integration stage (v1 and its Lambda alias stay as they are)
         env:
           LIVE_CONTEXT: ${{ steps.live.outputs.context }}
-        # LIVE_CONTEXT is unquoted on purpose: it holds several -c arguments
+        # LIVE_CONTEXT is unquoted on purpose: it holds several -c arguments.
+        # deployId: every deploy publishes a new version of both backends, even without code changes.
         run: >-
           npx cdk deploy -c env="$API_ENV" -c chaosFailureRate="$CHAOS_FAILURE_RATE"
+          -c deployId="$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
           $LIVE_CONTEXT
           --require-approval never
 
