@@ -3,7 +3,8 @@ name: api-gateway
 # PRs: typecheck, unit tests, synth, collection check. Then the PR's own environment, pr-<number>:
 # deploy-aws-api-gateway-pr-<n> is deployed (and updated on each push), and the integration tests run
 # on it, also reachable on https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/integration/.
-# Closing the PR (merged or not) deletes the stack; pr-environments-cleanup.yml catches any left behind.
+# The job deletes the stack once the tests are done; closing the PR (merged or not) deletes it too,
+# and pr-environments-cleanup.yml catches any left behind.
 # main / manual, per environment (dev, then prod): deploy to the "integration" stage ->
 # integration tests -> promote to stage v1. Failed tests stop the run with v1 untouched.
 # Alarms after a deploy are handled in AWS (4xx/5xx alarm -> SNS -> rollback Lambda), not by the workflow.
@@ -87,7 +88,8 @@ jobs:
     runs-on: ubuntu-latest
     # dev's credentials and region: the same account, and dev's API domain serves the PR's path
     environment: dev
-    timeout-minutes: 30
+    # deploy, tests and the delete (the user pool, bucket and table take a few minutes to go)
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: deploy-aws-api-gateway
@@ -148,8 +150,17 @@ jobs:
               echo "### api-user-$API_ENV: not deployed"
             fi
             echo
-            echo "This PR's API (deleted when the PR is closed): \`$CUSTOM_URL\` (and \`…/user-$API_ENV/v1/\`)"
+            echo "This PR's API was \`$CUSTOM_URL\` (and \`…/user-$API_ENV/v1/\`). It is deleted now that the tests are done."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The tests are done: remove the PR's stack right away, passed or failed, so nothing is left
+      # running. The next push deploys it again; closing the PR and the nightly
+      # pr-environments-cleanup.yml delete it too if this step could not.
+      - name: Delete the PR environment
+        if: always()
+        uses: ./.github/actions/pr-environment-delete
+        with:
+          stack-name: deploy-aws-api-gateway-pr-${{ github.event.pull_request.number }}
 
   pr-environment-delete:
     name: delete pr environment

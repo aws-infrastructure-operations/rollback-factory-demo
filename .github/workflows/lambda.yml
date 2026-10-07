@@ -2,8 +2,8 @@ name: lambda
 
 # PRs: typecheck, unit tests, synth. Then the PR's own environment, pr-<number>: deploy-aws-lambda-pr-<n>
 # (service-lambda-pr-<n>) is deployed (and updated on each push), and the integration tests run on its
-# integration alias. Closing the PR (merged or not) deletes the stack; pr-environments-cleanup.yml
-# catches any left behind.
+# integration alias. The job deletes the stack once the tests are done; closing the PR (merged or not)
+# deletes it too, and pr-environments-cleanup.yml catches any left behind.
 # main / manual, per environment (dev -> prod): deploy to the integration
 # alias -> integration tests -> promote live. Failed tests stop the run with live untouched.
 # Alarms after a deploy are handled in AWS (errors alarm -> SNS -> rollback function), not here.
@@ -82,7 +82,8 @@ jobs:
     runs-on: ubuntu-latest
     # dev's credentials and region (same account)
     environment: dev
-    timeout-minutes: 30
+    # deploy, tests and the delete
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: deploy-aws-lambda
@@ -146,8 +147,17 @@ jobs:
               echo "### $FUNCTION_NAME: not deployed"
             fi
             echo
-            echo "Deleted when the PR is closed."
+            echo "The stack is deleted now that the tests are done."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The tests are done: remove the PR's stack right away, passed or failed, so nothing is left
+      # running. The next push deploys it again; closing the PR and the nightly
+      # pr-environments-cleanup.yml delete it too if this step could not.
+      - name: Delete the PR environment
+        if: always()
+        uses: ./.github/actions/pr-environment-delete
+        with:
+          stack-name: deploy-aws-lambda-pr-${{ github.event.pull_request.number }}
 
   pr-environment-delete:
     name: delete pr environment

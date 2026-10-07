@@ -103,8 +103,8 @@ Where the drawing is behind the code:
   API and the Lambda, the PR then gets **its own environment**, `pr-<number>`: a copy of the stack
   (`deploy-aws-api-gateway-pr-<n>`, `deploy-aws-lambda-pr-<n>`) that is deployed on every push, and
   the integration tests run on it. The PR's API is also on
-  `https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/v1/`. Closing the PR deletes the stacks,
-  and the nightly [`pr-environments-cleanup`](.github/workflows/pr-environments-cleanup.yml) deletes
+  `https://api.dev.rollback.ionuteliantudor.com/user-pr-<n>/v1/` while they run. Once the tests are
+  done, the job deletes the stacks. Closing the PR deletes them too, and the nightly [`pr-environments-cleanup`](.github/workflows/pr-environments-cleanup.yml) deletes
   any left behind.
 - **`main` (or a manual run):** it deploys dev, then prod. One environment at a time, a job:
   1. deploys to the integration target;

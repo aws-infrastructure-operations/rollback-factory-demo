@@ -220,7 +220,8 @@ the rollback topic. Permissions, the scheduled check and the sync are generated 
 stack, environment `pr-<number>`: `deploy-aws-lambda-pr-<n>` with `service-lambda-pr-<n>`. The
 `pr environment` job deploys it on every push and runs the integration tests on its `integration`
 alias. Nothing is promoted or archived, its errors alarm notifies nobody, and the function is not in
-the rollback service's `rollback-config.json`. Closing the PR deletes the stack; the nightly
+the rollback service's `rollback-config.json`. Once the tests are done, passed or failed, the job
+deletes the stack (the next push deploys it again). Closing the PR deletes it too, and the nightly
 [`pr-environments-cleanup`](../.github/workflows/pr-environments-cleanup.yml) workflow deletes any
 left behind. PRs from forks get no environment. The jobs use the `dev` GitHub environment.
 
