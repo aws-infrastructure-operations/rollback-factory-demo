@@ -48,22 +48,25 @@ export class FrontendUserStack extends cdk.Stack {
     });
 
     // --- Dashboard API ------------------------------------------------------------
-    // Read-only data for the dashboard (lambda/dashboard-api), served by both distributions at
-    // /api/*. The function URL takes IAM auth: only CloudFront, signing through OAC, can call it.
+    // Data for the dashboard (lambda/dashboard-api), served by both distributions at /api/*. Read-only
+    // but for restoring a recorded API deployment, which it hands to the rollback service.
+    // The function URL takes IAM auth: only CloudFront, signing through OAC, can call it.
     this.dashboardApi = new NodejsFunction(this, 'DashboardApi', {
       functionName: name('frontend-dashboard-api'),
-      description: `Read-only data for the ${config.frontendName} dashboard: API Gateways, Lambda functions, CloudFront distributions`,
+      description: `Data for the ${config.frontendName} dashboard: API Gateways, Lambda functions, CloudFront distributions; API restores`,
       entry: path.join(__dirname, '..', 'lambda', 'dashboard-api', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
-      timeout: cdk.Duration.seconds(20),
+      // a restore waits for the rollback service to redeploy the API
+      timeout: cdk.Duration.seconds(55),
       memorySize: 256,
       logGroup: new logs.LogGroup(this, 'DashboardApiLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
       bundling: { minify: true, sourceMap: true },
-      // finds the deployments table of each frontend-user-<env> distribution (cloudfront-distributions.ts)
+      // finds the deployments table of each frontend-user-<env> distribution and api-user-<env> API,
+      // and the rollback service of each environment
       environment: { PROJECT_NAME },
     });
     // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
@@ -99,11 +102,18 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['cloudfront:GetDistribution', 'cloudfront:ListInvalidations', 'cloudfront:GetInvalidation'],
       resources: [`arn:${cdk.Aws.PARTITION}:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`],
     }));
-    // The release history of every environment's frontend-user distribution: Query only, so the
-    // dashboard of any environment shows it (tables of environments not deployed just don't exist)
+    // The deployment history of every environment's frontend-user distribution and api-user API:
+    // Query only, so the dashboard of any environment shows it (tables of environments not deployed
+    // just don't exist)
+    const table = (prefix: string) => `arn:${cdk.Aws.PARTITION}:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${PROJECT_NAME}-${prefix}-*`;
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'],
-      resources: [`arn:${cdk.Aws.PARTITION}:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${PROJECT_NAME}-frontend-deployments-*`],
+      resources: [table('frontend-deployments'), table('deployments')],
+    }));
+    // Restoring a recorded API deployment: the rollback service re-imports its spec and redeploys
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['lambda:InvokeFunction'],
+      resources: [`arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${PROJECT_NAME}-rollback-service-*`],
     }));
     // CloudWatch: the Monitoring tabs' metrics (CloudFront's are read in us-east-1) (GetMetricData has no resource-level permission)
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
@@ -135,11 +145,12 @@ export class FrontendUserStack extends cdk.Stack {
         },
         additionalBehaviors: {
           // the dashboard API: never cached, and the query string and headers reach the Lambda
-          // (all but Host, which has to be the function URL's for the signature)
+          // (all but Host, which has to be the function URL's for the signature). POST is for
+          // restores (the handler answers 405 to the other methods), and those take a while.
           '/api/*': {
-            origin: origins.FunctionUrlOrigin.withOriginAccessControl(dashboardApiUrl),
+            origin: origins.FunctionUrlOrigin.withOriginAccessControl(dashboardApiUrl, { readTimeout: cdk.Duration.seconds(60) }),
             viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
-            allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
             cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
             originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             responseHeadersPolicy: cloudfront.ResponseHeadersPolicy.SECURITY_HEADERS,

@@ -176,7 +176,7 @@ test('never exports a name the api-user stack in the same region could use', () 
   }
 });
 
-test('serves the dashboard API at /api/* on both distributions, uncached and signed with OAC', () => {
+test('serves the dashboard API at /api/* on both distributions, uncached, signed with OAC, POST allowed for restores', () => {
   const t = synth('dev');
   for (const id of ['Distribution', 'IntegrationDistribution']) {
     const config = distributionConfig(t, id);
@@ -188,7 +188,8 @@ test('serves the dashboard API at /api/* on both distributions, uncached and sig
     assert.equal(behavior.PathPattern, '/api/*');
     assert.equal(behavior.TargetOriginId, api.Id);
     assert.equal(behavior.ViewerProtocolPolicy, 'https-only');
-    assert.deepEqual(behavior.AllowedMethods, ['GET', 'HEAD']);
+    assert.deepEqual([...behavior.AllowedMethods].sort(), ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT']);
+    assert.equal(api.CustomOriginConfig.OriginReadTimeout, 60, 'a restore waits for the redeploy');
     // the managed CachingDisabled policy
     assert.equal(behavior.CachePolicyId, '4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
   }
@@ -229,7 +230,7 @@ test('gives the dashboard API read access to the APIs, their stages and deployme
   assert.doesNotMatch(resources, /\*/,'no wildcard that crosses into deeper paths');
 });
 
-test('lets the dashboard API only list and read: API Gateway, Lambda, CloudFront, release history, metrics', () => {
+test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, deployment history, metrics) and invoke the rollback service only', () => {
   const t = synth('dev');
   const [roleId] = Object.keys(t.findResources('AWS::IAM::Role')).filter((id) => id.startsWith('DashboardApi'));
   const statements = Object.values(t.findResources('AWS::IAM::Policy'))
@@ -239,10 +240,14 @@ test('lets the dashboard API only list and read: API Gateway, Lambda, CloudFront
   assert.deepEqual(actions, [
     'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
     'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query',
-    'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
+    'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction',
   ]);
   const query = statements.find((s: any) => s.Action === 'dynamodb:Query');
-  assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-frontend-deployments-\*"/, 'the frontend deployments tables only');
+  assert.equal(query.Resource.length, 2);
+  assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-frontend-deployments-\*"/, 'the frontend deployments tables');
+  assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-deployments-\*"/, 'the API deployments tables');
+  const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
+  assert.match(JSON.stringify(invoke.Resource), /:function:rollback-factory-demo-rollback-service-\*"\]\]}$/, 'the rollback services only');
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
   assert.match(JSON.stringify(scoped.Resource), /:function:\*"/, 'aliases and versions of this account and region only');
 });
