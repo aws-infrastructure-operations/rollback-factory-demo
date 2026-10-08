@@ -33,6 +33,20 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     assert.equal(sha256(await res.arrayBuffer()), index.sha256, `/ is not index.html of release ${site.releaseId}`);
   });
 
+  test('the dashboard API needs a signed-in user; only the sign-in settings are public', async () => {
+    const settings = await fetch(`${site.siteUrl}/api/auth/config`);
+    assert.equal(settings.status, 200);
+    assert.deepEqual(await settings.json(), {
+      region: site.region,
+      userPoolId: site.outputs.DashboardUserPoolId,
+      clientId: site.outputs.DashboardUserPoolClientId,
+    });
+    // one intentional 401 (it counts toward the 4xx alarm on the live distribution)
+    const data = await fetch(`${site.siteUrl}/api/api-gateways`);
+    assert.equal(data.status, 401);
+    assert.deepEqual(await data.json(), { message: 'Sign in required' });
+  });
+
   test('redirects HTTP to HTTPS', async () => {
     const res = await fetch(`${site.siteUrl.replace(/^https:/, 'http:')}/`, { redirect: 'manual' });
     assert.equal(res.status, 301);

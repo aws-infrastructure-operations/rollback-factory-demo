@@ -20,13 +20,14 @@ export async function pointAlias(
   registered: RegisteredFunction[],
   project: string,
   functionName: string,
-  req: { aliasName: string; version: number },
+  /** actor: who asked, dashboard:<email> (default dashboard) */
+  req: { aliasName: string; version: number; actor?: string },
 ): Promise<PointAliasResult> {
   const registration = registrationFor(functionName, registered, project);
   if (!registration) {
     return { ok: false, status: 400, message: `${functionName} isn't registered for rollback (rollback-config.json): its aliases can't be changed here` };
   }
   // the page follows the run in a popup (GET /api/operations/<id>)
-  const operationId = await startOperation(lambda, registration.rollbackService, 'lambda-point-alias', { type: 'point-alias', functionName, aliasName: req.aliasName, version: req.version, actor: 'dashboard' });
+  const operationId = await startOperation(lambda, registration.rollbackService, 'lambda-point-alias', { type: 'point-alias', functionName, aliasName: req.aliasName, version: req.version, actor: req.actor ?? 'dashboard' });
   return { ok: true, operationId };
 }
