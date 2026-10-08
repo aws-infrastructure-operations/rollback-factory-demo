@@ -2,6 +2,7 @@
 // `npm run app:dev` proxies /api to DASHBOARD_API_URL when it is set (see vite.config.ts).
 // Every call carries the signed-in user's ID token (auth.ts).
 import { AUTH_HEADER_NAME, idToken, signOut } from './auth.js';
+import { withRegion } from './region.js';
 
 /**
  * fetch() for /api/*, with the user's ID token in x-auth-token (Authorization is taken: CloudFront
@@ -37,10 +38,20 @@ export interface ApiGatewayList {
 }
 
 export async function fetchApiGateways(signal?: AbortSignal): Promise<ApiGatewayList> {
-  const response = await apiFetch('/api/api-gateways', { signal, headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`GET /api/api-gateways answered ${response.status}`);
+  const url = withRegion('/api/api-gateways');
+  const response = await apiFetch(url, { signal, headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   return response.json();
 }
+
+/** Same shape as RegionList in lambda/dashboard-api/regions.ts: what the region picker offers. */
+export interface RegionList {
+  /** the dashboard's own region: the default, and the only one with recorded deployments */
+  home: string;
+  regions: Array<{ code: string; name: string }>;
+}
+
+export const fetchRegions = (signal?: AbortSignal) => getJson<RegionList>('/api/regions', signal);
 
 /** Same shape as ApiGatewayDetails in lambda/dashboard-api/api-gateway-details.ts. */
 export interface ApiGatewayDetails {
@@ -80,7 +91,7 @@ export interface RecordedApiDeployment {
 }
 
 export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'>, signal?: AbortSignal): Promise<ApiGatewayDetails> {
-  const url = `/api/api-gateways/${encodeURIComponent(api.id)}?type=${api.type}`;
+  const url = withRegion(`/api/api-gateways/${encodeURIComponent(api.id)}?type=${api.type}`);
   const response = await apiFetch(url, { signal, headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   return response.json();
@@ -120,7 +131,7 @@ export interface ApiSpecSummary {
 
 /** The routes a recorded deployment serves, from its OpenAPI export in S3. */
 export const fetchApiSpec = (apiId: string, deployedAt: string, signal?: AbortSignal) =>
-  getJson<ApiSpecSummary>(`/api/api-gateways/${encodeURIComponent(apiId)}/spec?deployedAt=${encodeURIComponent(deployedAt)}`, signal);
+  getJson<ApiSpecSummary>(withRegion(`/api/api-gateways/${encodeURIComponent(apiId)}/spec?deployedAt=${encodeURIComponent(deployedAt)}`), signal);
 
 /** Restores the API's stage to a recorded deployment. */
 export const restoreApiDeployment = (apiId: string, deployedAt: string, reason?: string) =>
@@ -188,13 +199,13 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return response.json();
 }
 
-export const fetchLambdaFunctions = (signal?: AbortSignal) => getJson<LambdaFunctionList>('/api/lambda-functions', signal);
+export const fetchLambdaFunctions = (signal?: AbortSignal) => getJson<LambdaFunctionList>(withRegion('/api/lambda-functions'), signal);
 
 export const fetchLambdaFunctionDetails = (name: string, signal?: AbortSignal) =>
-  getJson<LambdaFunctionDetails>(`/api/lambda-functions/${encodeURIComponent(name)}`, signal);
+  getJson<LambdaFunctionDetails>(withRegion(`/api/lambda-functions/${encodeURIComponent(name)}`), signal);
 
 export const fetchLambdaFunctionMetrics = (name: string, signal?: AbortSignal) =>
-  getJson<LambdaFunctionMetrics>(`/api/lambda-functions/${encodeURIComponent(name)}/metrics`, signal);
+  getJson<LambdaFunctionMetrics>(withRegion(`/api/lambda-functions/${encodeURIComponent(name)}/metrics`), signal);
 
 /** Points an alias of a registered function at a published version (the rollback service does it). */
 export const pointLambdaAlias = (name: string, aliasName: string, version: number) =>
