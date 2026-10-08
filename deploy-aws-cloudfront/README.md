@@ -11,7 +11,7 @@ the work is split into tickets in [docs/](docs/README.md).
 | Stack | Region | Holds |
 |---|---|---|
 | `deploy-aws-cloudfront-certificate-<env>` | `us-east-1` | the TLS certificate of the two sites' domains (CloudFront only takes us-east-1 certificates) |
-| `deploy-aws-cloudfront-<env>` | `CDK_DEFAULT_REGION` (the API's region) | site bucket, distribution `frontend-user-<env>`, deployments bucket + table, the sites' DNS records |
+| `deploy-aws-cloudfront-<env>` | `CDK_DEFAULT_REGION` (the API's region) | site bucket, distribution `frontend-user-<env>`, deployments bucket + table, the sites' DNS records, the dashboard's user pool |
 | `deploy-aws-cloudfront-alarms-<env>` | `us-east-1` | the CloudFront 4xx / 5xx alarms |
 
 `cdk deploy --all` creates them in that order; `cdk destroy --all` removes them in reverse.
@@ -153,16 +153,46 @@ The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"
 - the release id again in the footer, so an activation or a rollback is visible
 
-**Sign-in and the API page are out of scope for now.** The earlier version signed in with the API's
-Cognito user pool and called `GET`/`POST` on `/users` and `/messages`. It's in git history
-(PR #23) for when they come back.
+### Sign-in (invite only)
+
+Only invited users can use the dashboard. Each environment has its own Cognito user pool,
+`rollback-factory-demo-dashboard-users-<env>`, with **no sign-up**: an administrator adds each user, and
+Cognito emails them a temporary password (valid 7 days). Their first sign-in asks them to choose their own
+(12+ characters, upper and lower case, a digit, a symbol).
+
+```sh
+npm run users -- --env dev --action invite --email jane@example.com   # emails the invitation
+npm run users -- --env dev --action list
+npm run users -- --env dev --action resend --email jane@example.com   # new temporary password, if it expired
+npm run users -- --env dev --action remove --email jane@example.com   # signs them out everywhere, deletes them
+```
+
+(Or Cognito console → the pool → Users → Create user, with "Send an email invitation".)
+
+How it works:
+- **The page** asks `GET /api/auth/config` (the only call that needs no sign-in) which pool and client to use,
+  so one release works on both distributions. Signed out, it shows only the sign-in form. It signs in
+  straight with Cognito over HTTPS (`InitiateAuth`, `USER_PASSWORD_AUTH`), keeps the tokens in
+  `localStorage`, refreshes the ID token before it expires (1 hour), and stays signed in for up to 12 hours.
+  **Sign out** (the account menu, top right) also revokes the refresh token.
+- **The dashboard API** ([`lambda/dashboard-api/auth.ts`](lambda/dashboard-api/auth.ts)) answers 401 to every
+  other call unless it carries a valid ID token of that pool and client in **`x-auth-token`**: signature
+  (the pool's keys), issuer, audience, token use and expiry, checked with `aws-jwt-verify`. Not
+  `Authorization`: CloudFront signs each request to the function URL (OAC) and puts its signature there.
+- **Who did what:** restores and alias moves started from the dashboard are recorded as
+  `dashboard:<email>`, so the Rollbacks page shows who ran them.
+- The static files (the page itself) stay public: they hold no data. Everything the dashboard shows or
+  changes goes through `/api/*`.
+- **The 4xx alarm:** a 401 counts as a 4xx on the live distribution. The page refreshes tokens before
+  they expire, so a signed-in user rarely gets one; a flood of unauthenticated `/api/*` calls would.
 
 - **Config:** read at build time from `VITE_ENV`, `VITE_RELEASE_ID` and `VITE_BUILT_AT`
   (`release:build` sets them). Without them the page shows `local`.
 - **No API dependency:** the frontend doesn't need the api-user stack to build or deploy; the
   dashboard lists whatever APIs the region has.
 
-Local run (`/api` only works with `DASHBOARD_API_URL` set to a deployed site, which it is proxied to):
+Local run (`/api` only works with `DASHBOARD_API_URL` set to a deployed site, which it is proxied to;
+you sign in with a user of that site's environment):
 
 ```sh
 DASHBOARD_API_URL=https://dxxxxxxxxxxxxx.cloudfront.net npm run app:dev
@@ -330,15 +360,19 @@ alarm. It only rolls back if the latest deployment is within the rollback window
   - every manifest file loads through CloudFront with its sha256, content type and `Cache-Control`
   - an unknown path is a 403/404, not `index.html`
   - a direct S3 request is refused
+  - `/api/auth/config` is public and names the stack's user pool; `/api/api-gateways` without a sign-in is a 401
 - **End to end** ([`integration/e2e.integration.test.ts`](integration/e2e.integration.test.ts),
   headless Chromium with Playwright):
-  - the page loads with its scripts and styles
-  - it shows the environment and the release the distribution serves
+  - the page loads with its scripts and styles, shows only the sign-in form, and a throw-away user
+    (created for the run with a permanent password, deleted afterwards) signs in through it
+  - it shows the environment and the release the distribution serves, and the panels load from `/api/*`
+  - the account menu names the user, and **Sign out** brings the form back
   - any console error, failed request or HTTP error fails the test
 - **Needs:**
-  - AWS credentials that can read the stack, the distributions and the deployments bucket
+  - AWS credentials that can read the stack, the distributions and the deployments bucket, and
+    administer the dashboard's user pool (`AdminCreateUser`, `AdminSetUserPassword`, `AdminDeleteUser`)
   - Chromium for Playwright: `npx playwright install chromium`; in CI, `--with-deps`
-- **4xx alarm:** a run makes one intentional 4xx through CloudFront (the unknown path). On the
+- **4xx alarm:** a run makes two intentional 4xx through CloudFront (the unknown path, and the 401). On the
   integration distribution it can't count toward anything, since that distribution has no alarms.
   The app has a favicon, so browsers don't add a 403 for `/favicon.ico` on every page view.
 
@@ -369,6 +403,7 @@ rollback in us-east-1.
 | `npm run deployment:restore -- --env <env> --release <id> [--wait]` | activate any release with a manifest and record a `restore` |
 | `npm run rollback:trigger -- --env <env> [--alarm 4xx\|5xx]` | invoke the rollback service as SNS would (demo) |
 | `npm run demo:traffic -- --env <env> [--minutes 10] [--preflight]` | load the site like a browser and report status codes + the live release (demo) |
+| `npm run users -- --env <env> --action list\|invite\|resend\|remove [--email <address>]` | manage who may sign in to the dashboard (invite only) |
 
 ## Context options
 

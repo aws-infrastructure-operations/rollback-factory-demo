@@ -1,20 +1,24 @@
 /**
  * End-to-end test in a headless Chromium against the deployed site of FRONTEND_ENV (on the
- * FRONTEND_TARGET distribution): the page loads with its scripts and styles and shows the
- * environment and the release the distribution serves, and the API Gateways, Lambda Functions and
- * CloudFront Distributions panels load from the dashboard API (/api/*). Fails on any browser console error or failed request.
+ * FRONTEND_TARGET distribution): a throw-away user signs in through the sign-in form, then the page
+ * shows the environment and the release the distribution serves, and the API Gateways, Lambda
+ * Functions and CloudFront Distributions panels load from the dashboard API (/api/*); signing out
+ * shows the form again. Fails on any browser console error or failed request.
  *
- * Needs AWS credentials that can read the stack and the distribution, and Chromium for
- * Playwright (npx playwright install chromium). FRONTEND_RELEASE as in smoke.
+ * Needs AWS credentials that can read the stack and the distribution and administer the dashboard's
+ * user pool (the test user is created and deleted), and Chromium for Playwright
+ * (npx playwright install chromium). FRONTEND_RELEASE as in smoke.
  */
 import { strict as assert } from 'node:assert';
 import { after, before, describe, test } from 'node:test';
 import { Browser, chromium, Page } from 'playwright';
 import { config, LiveSite, liveSite, target } from './lib/site.js';
+import { AUTH_HEADER, createTestUser, TestUser } from './lib/user.js';
 
 const TIMEOUT_MS = 20_000;
 
 let site: LiveSite;
+let user: TestUser;
 let browser: Browser;
 let page: Page;
 /** Console errors, failed requests and HTTP errors the page ran into. */
@@ -22,6 +26,7 @@ const problems: string[] = [];
 
 before(async () => {
   site = await liveSite();
+  user = await createTestUser(site.outputs);
   browser = await chromium.launch();
   page = await browser.newPage();
   page.setDefaultTimeout(TIMEOUT_MS);
@@ -37,11 +42,21 @@ before(async () => {
 
 after(async () => {
   await browser?.close();
+  await user?.remove();
 });
 
+/** GET on the dashboard API through the distribution, signed in as the test user. */
+const api = (path: string) => page.request.get(`${site.siteUrl}${path}`, { headers: { [AUTH_HEADER]: user.idToken } });
+
 describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''} end to end`, () => {
-  test('loads the page with its scripts and styles, without errors', async () => {
+  test('loads the page with its scripts and styles, and signs in through the form, without errors', async () => {
     await page.goto(`${site.siteUrl}/`);
+    // signed out, the page shows only the sign-in form: no dashboard, no call to the API's data
+    await page.locator('#login').waitFor();
+    assert.equal(await page.locator('.layout').count(), 0);
+    await page.locator('#login-email').fill(user.email);
+    await page.locator('#login-password').fill(user.password);
+    await page.locator('#login-submit').click();
     // React rendered the dashboard, and the API Gateways panel loaded (or failed) from /api
     await page.getByRole('heading', { name: 'API Gateways' }).waitFor();
     await page.locator('#api-gateways:not([data-state="loading"])').waitFor();
@@ -59,7 +74,7 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
   });
 
   test('serves the dashboard API through the distribution', async () => {
-    const response = await page.request.get(`${site.siteUrl}/api/api-gateways`);
+    const response = await api('/api/api-gateways');
     assert.equal(response.status(), 200);
     assert.equal(response.headers()['cache-control'], 'no-store');
     const body = await response.json();
@@ -71,10 +86,10 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
   });
 
   test('shows the selected API\'s stages from the dashboard API', async (t) => {
-    const { apis } = await (await page.request.get(`${site.siteUrl}/api/api-gateways`)).json();
+    const { apis } = await (await api('/api/api-gateways')).json();
     if (!apis.length) return t.skip('no API Gateway in the region');
     const [first] = apis;
-    const response = await page.request.get(`${site.siteUrl}/api/api-gateways/${first.id}?type=${first.type}`);
+    const response = await api(`/api/api-gateways/${first.id}?type=${first.type}`);
     assert.equal(response.status(), 200);
     const details = await response.json();
     assert.equal(details.id, first.id);
@@ -89,13 +104,13 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
   test('lists the Lambda functions and shows the selected one, without environment variables', async (t) => {
     await page.locator('#lambda-functions:not([data-state="loading"])').waitFor();
     assert.equal(await page.locator('#lambda-functions').getAttribute('data-state'), 'ready');
-    const response = await page.request.get(`${site.siteUrl}/api/lambda-functions`);
+    const response = await api('/api/lambda-functions');
     assert.equal(response.status(), 200);
     const { functions } = await response.json();
     assert.equal(await page.locator('#lambda-functions tbody tr:not(:has(td.state))').count(), functions.length);
     if (!functions.length) return t.skip('no Lambda function in the region');
 
-    const details = await page.request.get(`${site.siteUrl}/api/lambda-functions/${functions[0].name}`);
+    const details = await api(`/api/lambda-functions/${functions[0].name}`);
     assert.equal(details.status(), 200);
     const body = await details.text();
     assert.doesNotMatch(body, /"Environment"|"Variables"/, 'environment variables are never sent');
@@ -107,14 +122,14 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
   test('lists this distribution with the release it serves, and its history for the live one', async () => {
     await page.locator('#cloudfront-distributions:not([data-state="loading"])').waitFor();
     assert.equal(await page.locator('#cloudfront-distributions').getAttribute('data-state'), 'ready');
-    const response = await page.request.get(`${site.siteUrl}/api/cloudfront-distributions`);
+    const response = await api('/api/cloudfront-distributions');
     assert.equal(response.status(), 200);
     const { distributions } = await response.json();
     const self = distributions.find((d: { name: string }) => d.name === site.name);
     assert.ok(self, `${site.name} is listed`);
     assert.equal(self.releaseId, site.releaseId);
 
-    const details = await page.request.get(`${site.siteUrl}/api/cloudfront-distributions/${self.id}`);
+    const details = await api(`/api/cloudfront-distributions/${self.id}`);
     assert.equal(details.status(), 200);
     const body = await details.json();
     // only the distribution clients use has a release history (the integration one has none)
@@ -122,6 +137,17 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     assert.doesNotMatch(JSON.stringify(body), /CustomHeaders|HeaderValue/, 'origin headers are never sent');
     await page.locator('#cloudfront-distribution-details:not([data-state="loading"])').waitFor();
     assert.equal(await page.locator('#cloudfront-distribution-details').getAttribute('data-state'), 'ready');
+    assert.deepEqual(problems.splice(0), []);
+  });
+
+  test('shows who is signed in, and signing out returns to the sign-in form', async () => {
+    await page.locator('#account-menu').click();
+    assert.equal(await page.locator('#signed-in-as').textContent(), user.email);
+    await page.locator('#sign-out').click();
+    await page.locator('#login').waitFor();
+    assert.equal(await page.locator('.layout').count(), 0);
+    // nothing of the session is left in the browser
+    assert.equal(await page.evaluate(() => (globalThis as any).localStorage.getItem('rollback-dashboard-session')), null);
     assert.deepEqual(problems.splice(0), []);
   });
 });

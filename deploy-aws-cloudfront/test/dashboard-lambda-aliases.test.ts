@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 import { isAliasName, isVersion, pointAlias } from '../lambda/dashboard-api/lambda-aliases.js';
 import { parseRegistered, registrationFor } from '../lambda/dashboard-api/registered-functions.js';
 import { getConfig } from '../lib/config.js';
