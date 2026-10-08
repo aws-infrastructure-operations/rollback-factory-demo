@@ -227,7 +227,8 @@ test('gives the dashboard API read access to the APIs, their stages and deployme
     [list, `${list}/??????????`, `${list}/??????????/stages`, `${list}/??????????/deployments`]);
   for (const path of expected) assert.ok(resources.includes(`::${path}"`), path);
   assert.equal(statements[0].Resource.length, expected.length);
-  assert.doesNotMatch(resources, /\*/,'no wildcard that crosses into deeper paths');
+  // any region (the page's region picker), but no wildcard in the path, which would cross into deeper paths
+  assert.doesNotMatch(resources, /::[^"]*\*/, 'no wildcard that crosses into deeper paths');
 });
 
 test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, deployment history, metrics) and invoke the rollback service only', () => {
