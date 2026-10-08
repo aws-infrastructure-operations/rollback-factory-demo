@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -37,6 +38,8 @@ export class FrontendUserStack extends cdk.Stack {
   readonly integrationDistribution: cloudfront.Distribution;
   readonly deploymentsBucket: s3.Bucket;
   readonly deploymentsTable: dynamodb.TableV2;
+  readonly userPool: cognito.UserPool;
+  readonly userPoolClient: cognito.UserPoolClient;
   readonly dashboardApi: NodejsFunction;
 
   constructor(scope: Construct, id: string, props: FrontendUserStackProps) {
@@ -55,6 +58,42 @@ export class FrontendUserStack extends cdk.Stack {
       enforceSSL: true,
       removalPolicy,
       autoDeleteObjects: !config.retainData,
+    });
+
+    // --- Sign-in ------------------------------------------------------------------
+    // Who may use the dashboard: invite only. There is no sign-up; an admin adds each user
+    // (npm run user:invite, or the Cognito console), and Cognito emails them a temporary password,
+    // which they replace on their first sign-in. The page signs in with USER_PASSWORD_AUTH (over
+    // HTTPS, straight to Cognito) and sends the ID token with each /api/* call (lambda/dashboard-api/auth.ts).
+    const siteUrl = `https://${props.certificate ? config.domains.site : '<the dashboard>'}`;
+    this.userPool = new cognito.UserPool(this, 'DashboardUserPool', {
+      userPoolName: name('dashboard-users'),
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      signInCaseSensitive: false,
+      autoVerify: { email: true },
+      passwordPolicy: { minLength: 12, requireLowercase: true, requireUppercase: true, requireDigits: true, requireSymbols: true, tempPasswordValidity: cdk.Duration.days(7) },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      userInvitation: {
+        emailSubject: `Your ${PROJECT_NAME} dashboard account (${config.envName})`,
+        emailBody: `You were invited to the ${PROJECT_NAME} dashboard (${config.envName}): ${siteUrl}<br><br>`
+          + 'Sign in with {username} and the temporary password {####}, then choose your own password. '
+          + 'The temporary password expires in 7 days.',
+      },
+      removalPolicy,
+    });
+    this.userPoolClient = this.userPool.addClient('DashboardClient', {
+      userPoolClientName: name('dashboard-client'),
+      // a browser app: no secret it could keep
+      generateSecret: false,
+      authFlows: { userPassword: true },
+      // "user not found" and "wrong password" look the same, so the form can't be used to find accounts
+      preventUserExistenceErrors: true,
+      idTokenValidity: cdk.Duration.hours(1),
+      accessTokenValidity: cdk.Duration.hours(1),
+      // how long a user stays signed in without typing their password again
+      refreshTokenValidity: cdk.Duration.hours(12),
+      enableTokenRevocation: true,
     });
 
     // --- Dashboard API ------------------------------------------------------------
@@ -81,6 +120,9 @@ export class FrontendUserStack extends cdk.Stack {
         PROJECT_NAME,
         // the functions whose aliases the Lambda panel may point (registered-functions.ts)
         REGISTERED_FUNCTIONS: JSON.stringify(registeredFunctions()),
+        // whose ID tokens it accepts (auth.ts), and what GET /api/auth/config tells the page
+        USER_POOL_ID: this.userPool.userPoolId,
+        USER_POOL_CLIENT_ID: this.userPoolClient.userPoolClientId,
       },
     });
     // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
@@ -283,6 +325,8 @@ export class FrontendUserStack extends cdk.Stack {
     out('SiteBucketName', this.siteBucket.bucketName);
     out('DeploymentsBucketName', this.deploymentsBucket.bucketName);
     out('DeploymentsTableName', this.deploymentsTable.tableName);
+    out('DashboardUserPoolId', this.userPool.userPoolId);
+    out('DashboardUserPoolClientId', this.userPoolClient.userPoolClientId);
     // What the rollback service's CloudFront manager needs, as one JSON output it reads at runtime
     // (rollback-service/lambda/managers/cloudfront/manager.ts: CloudFrontRollbackTarget). Only the
     // distribution clients use: the integration distribution is never rolled back.

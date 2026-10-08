@@ -8,7 +8,7 @@ import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {
   deploymentsTableFor, getDistributionDetails, getDistributionMetrics, listDistributions, listInvalidations,
 } from '../lambda/dashboard-api/cloudfront-distributions.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 
 const date = (iso: string) => new Date(iso);
 

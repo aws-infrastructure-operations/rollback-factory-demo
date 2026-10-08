@@ -280,7 +280,8 @@ export async function restoreRelease(
   lambda: LambdaClient,
   project: string,
   distributionId: string,
-  req: { deployedAt: string; reason?: string },
+  /** actor: who asked, dashboard:<email> (default dashboard) */
+  req: { deployedAt: string; reason?: string; actor?: string },
 ): Promise<ReleaseRestoreResult> {
   let distribution;
   try {
@@ -303,6 +304,6 @@ export async function restoreRelease(
   if (record.releaseId === live) return { ok: false, status: 409, message: `${comment} already serves release ${record.releaseId}` };
 
   // the page follows the run in a popup (GET /api/operations/<id>)
-  const operationId = await startOperation(lambda, service, 'cloudfront-restore', { type: 'restore', manager: 'cloudfront', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason });
+  const operationId = await startOperation(lambda, service, 'cloudfront-restore', { type: 'restore', manager: 'cloudfront', deployedAt: record.deployedAt, actor: req.actor ?? 'dashboard', reason: req.reason });
   return { ok: true, operationId };
 }
