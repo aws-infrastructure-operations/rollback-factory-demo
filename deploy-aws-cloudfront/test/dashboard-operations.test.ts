@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { CloudWatchLogsClient, FilterLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
 import { clearEstimates, DEFAULT_ESTIMATE_MS, estimateFor, getOperation, parseOperationId } from '../lambda/dashboard-api/operations.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 
 const PROJECT = 'rollback-factory-demo';
 const STARTED = Date.parse('2026-10-07T10:00:00.000Z');

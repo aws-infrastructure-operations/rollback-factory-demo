@@ -12,6 +12,9 @@ export interface FrontendOutputs {
   SiteBucketName: string;
   DeploymentsBucketName: string;
   DeploymentsTableName: string;
+  /** The dashboard's sign-in: invite-only user pool and its browser client */
+  DashboardUserPoolId: string;
+  DashboardUserPoolClientId: string;
 }
 
 const cfn = new CloudFormationClient({});

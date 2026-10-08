@@ -5,7 +5,7 @@ import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import {
   deploymentsTableFor, isDeployedAt, listRecordedDeployments, liveLambdaVersions, restoreRecordedDeployment, rollbackServiceFor,
 } from '../lambda/dashboard-api/api-gateway-deployments.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 
 const PROJECT = 'rollback-factory-demo';
 const API = { id: 'r1xyz98uvw', name: 'api-user-dev' };

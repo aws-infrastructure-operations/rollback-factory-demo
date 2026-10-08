@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 import { listRollbacks, MAX_ROLLBACKS } from '../lambda/dashboard-api/rollbacks.js';
 
 const PROJECT = 'rollback-factory-demo';

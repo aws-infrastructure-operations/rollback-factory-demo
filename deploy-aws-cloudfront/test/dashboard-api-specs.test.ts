@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { getRecordedSpec, routesOf } from '../lambda/dashboard-api/api-gateway-specs.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 
 const PROJECT = 'rollback-factory-demo';
 const API = { id: 'r1xyz98uvw', name: 'api-user-dev' };
