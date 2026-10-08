@@ -140,6 +140,24 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     assert.deepEqual(problems.splice(0), []);
   });
 
+  test('the region picker starts on the dashboard region and switches the API Gateways panel', async () => {
+    assert.equal(await page.getByText('AWS Account').count(), 0, 'no account picker');
+    const picker = page.locator('#region-picker');
+    await picker.locator('option').nth(1).waitFor({ state: 'attached' });
+    assert.equal(await picker.inputValue(), site.region);
+    const other = site.region === 'us-east-1' ? 'eu-west-1' : 'us-east-1';
+    const ready = '#api-gateways:not([data-state="loading"])';
+    await picker.selectOption(other);
+    await page.locator(ready).waitFor();
+    assert.equal(await page.locator('#api-gateways').getAttribute('data-state'), 'ready');
+    assert.match((await page.locator('#api-gateways').textContent()) ?? '', new RegExp(`in ${other}`));
+    // back to the dashboard's own region, where the deployments are recorded
+    await picker.selectOption(site.region);
+    await page.locator(ready).waitFor();
+    assert.match((await page.locator('#api-gateways').textContent()) ?? '', new RegExp(`in ${site.region}`));
+    assert.deepEqual(problems.splice(0), []);
+  });
+
   test('shows who is signed in, and signing out returns to the sign-in form', async () => {
     await page.locator('#account-menu').click();
     assert.equal(await page.locator('#signed-in-as').textContent(), user.email);

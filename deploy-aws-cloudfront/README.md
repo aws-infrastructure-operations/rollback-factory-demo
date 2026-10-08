@@ -149,6 +149,14 @@ Vite + React in [`app/`](app). **One static page** (`index.html`): the AWS Contr
   Each recorded release has a **Restore** button (after a confirm; the live release can't be restored). It
   counts as verified once the integration tests pass again; CloudFront takes a few minutes to deploy it.
 
+**Region picker** (top of the page): which region the **API Gateways** and **Lambda Functions** panels
+read, from the regions every account has enabled (`GET /api/regions`, `lambda/dashboard-api/regions.ts`).
+The default is the dashboard's own region, marked "this dashboard"; the choice is remembered per browser.
+Their reads take `?region=<code>`, and the dashboard API may read API Gateway and the registered
+functions in any region. The recorded deployments, restores and alias moves only exist in the
+dashboard's own region, so other regions show what is there, read-only. CloudFront is global, and the
+Rollbacks page always shows every environment.
+
 The page also shows which environment and release it is:
 - the name (`frontend-user-<env>`), the environment and the release id in the sidebar, the build time as "Last updated"
 - the release id again in the footer, so an activation or a rollback is visible
@@ -366,6 +374,7 @@ alarm. It only rolls back if the latest deployment is within the rollback window
   - the page loads with its scripts and styles, shows only the sign-in form, and a throw-away user
     (created for the run with a permanent password, deleted afterwards) signs in through it
   - it shows the environment and the release the distribution serves, and the panels load from `/api/*`
+  - the region picker starts on the site's region, and picking another reloads the API Gateways panel for it
   - the account menu names the user, and **Sign out** brings the form back
   - any console error, failed request or HTTP error fails the test
 - **Needs:**

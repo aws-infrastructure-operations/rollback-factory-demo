@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { fetchRegions, type RegionList } from '../api.js';
 import { currentUser, signOut } from '../auth.js';
+import { setRegion, useRegion } from '../region.js';
 import { Icon } from './Icon.js';
 
 /** "jane.doe@example.com" -> "JD", "jane@example.com" -> "JA" */
@@ -8,7 +10,44 @@ export function initialsOf(email: string): string {
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? parts[0]?.[1] ?? '')).toUpperCase() || '?';
 }
 
-/** Account and region pickers (visual only for now), refresh, and the signed-in user's menu. */
+/**
+ * The region the API Gateway and Lambda panels read. The dashboard's own region is the default, and
+ * the only one with recorded deployments to restore; CloudFront is global and the rollbacks stay as they are.
+ */
+function RegionPicker() {
+  const picked = useRegion();
+  const [list, setList] = useState<RegionList>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRegions(controller.signal).then(
+      (regions) => {
+        setList(regions);
+        // a remembered region the dashboard no longer offers: back to its own
+        if (picked && !regions.regions.some((r) => r.code === picked)) setRegion(undefined);
+      },
+      () => { if (!controller.signal.aborted) setFailed(true); },
+    );
+    return () => controller.abort();
+  }, []);
+
+  const value = picked ?? list?.home ?? '';
+  return (
+    <label className="picker">
+      <span>Region</span>
+      <select id="region-picker" value={value} disabled={!list}
+        onChange={(e) => setRegion(e.target.value === list?.home ? undefined : e.target.value)}>
+        {!list && <option value={value}>{failed ? 'Regions unavailable' : 'Loading regions…'}</option>}
+        {list?.regions.map(({ code, name }) => (
+          <option key={code} value={code}>{`${code} (${name})${code === list.home ? ' · this dashboard' : ''}`}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** The region picker, refresh, and the signed-in user's menu. */
 export function TopBar({ lastUpdated }: { lastUpdated: string }) {
   const email = currentUser() ?? '';
   const [open, setOpen] = useState(false);
@@ -29,14 +68,7 @@ export function TopBar({ lastUpdated }: { lastUpdated: string }) {
 
   return (
     <header className="topbar">
-      <label className="picker">
-        <span>AWS Account</span>
-        <select disabled><option>Production (123456789012)</option></select>
-      </label>
-      <label className="picker">
-        <span>Region</span>
-        <select disabled><option>eu-west-1 (Ireland)</option></select>
-      </label>
+      <RegionPicker />
       <div className="topbar-end">
         <button type="button" className="icon-button" aria-label="Refresh"><Icon name="refresh" size={16} /></button>
         <div className="updated"><span>Last updated</span><span id="built">{lastUpdated}</span></div>
