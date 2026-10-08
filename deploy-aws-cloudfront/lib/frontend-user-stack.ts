@@ -127,7 +127,8 @@ export class FrontendUserStack extends cdk.Stack {
     });
     // apigateway:GET on the API lists, each API, its stages and its deployments, nothing else.
     // API ids are 10 characters: '??????????' matches one id, where '*' would also match
-    // deeper paths (IAM wildcards cross '/'), such as stage exports.
+    // deeper paths (IAM wildcards cross '/'), such as stage exports. Any region: the page's
+    // region picker chooses which one the API Gateway panel reads (lambda/dashboard-api/regions.ts).
     const apiId = '??????????';
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['apigateway:GET'],
@@ -135,7 +136,7 @@ export class FrontendUserStack extends cdk.Stack {
         '/restapis', `/restapis/${apiId}`, `/restapis/${apiId}/stages`, `/restapis/${apiId}/deployments`,
         '/apis', `/apis/${apiId}`, `/apis/${apiId}/stages`, `/apis/${apiId}/deployments`,
       ].map(
-        (resource) => `arn:${cdk.Aws.PARTITION}:apigateway:${cdk.Aws.REGION}::${resource}`,
+        (resource) => `arn:${cdk.Aws.PARTITION}:apigateway:*::${resource}`,
       ),
     }));
     // Lambda: list the functions (no resource-level permission), then each one's aliases and
@@ -144,13 +145,14 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['lambda:ListFunctions'],
       resources: ['*'],
     }));
-    // Only the functions registered for rollback are shown (service-lambda-<env> -> service-lambda-*).
+    // Only the functions registered for rollback are shown (service-lambda-<env> -> service-lambda-*),
+    // in whichever region the page's region picker chooses.
     const registered = registeredFunctions();
     if (registered.length > 0) {
       this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
         actions: ['lambda:ListAliases', 'lambda:ListVersionsByFunction'],
         resources: registered.map(({ name: fn }) =>
-          `arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${fn.replaceAll('<env>', '*')}`),
+          `arn:${cdk.Aws.PARTITION}:lambda:*:${cdk.Aws.ACCOUNT_ID}:function:${fn.replaceAll('<env>', '*')}`),
       }));
       // The rollback service's version archive (rollback-service: <project>-lambda-archive-<env>): which
       // versions are archived in S3 and marked stable. Query only, and only those functions' items.
