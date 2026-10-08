@@ -26,6 +26,7 @@ import { getOperation } from './operations.js';
 import { listArchivedVersions } from './lambda-archive.js';
 import { listRollbacks } from './rollbacks.js';
 import { authConfig, authenticate, cognitoVerifier, type User, type VerifyIdToken } from './auth.js';
+import { perRegion, regionList, regionOf } from './regions.js';
 import { parseRegistered, registrationFor } from './registered-functions.js';
 
 /** The parts of a function URL event this handler reads. */
@@ -46,9 +47,16 @@ export interface FunctionUrlResult {
 }
 
 const rest = new APIGatewayClient({});
-const v2 = new ApiGatewayV2Client({});
 const lambda = new LambdaClient({});
-const cloudwatch = new CloudWatchClient({});
+// the API Gateway and Lambda panels read the region picked at the top of the page (regions.ts)
+// ('' is the SDK's default region, i.e. AWS_REGION)
+const inRegion = (region: string) => (region ? { region } : {});
+const restIn = perRegion((region) => new APIGatewayClient(inRegion(region)));
+const v2In = perRegion((region) => new ApiGatewayV2Client(inRegion(region)));
+const lambdaIn = perRegion((region) => new LambdaClient(inRegion(region)));
+const cloudwatchIn = perRegion((region) => new CloudWatchClient(inRegion(region)));
+/** The dashboard's own region: deployment records, rollbacks and the rollback services are here. */
+const home = () => process.env.AWS_REGION ?? '';
 const cloudfront = new CloudFrontClient({});
 // CloudFront metrics only exist in us-east-1
 const edgeCloudwatch = new CloudWatchClient({ region: 'us-east-1' });
@@ -93,6 +101,9 @@ export const handler = createHandler(() => (verifier ??= cognitoVerifier(authCon
 /**
  * The routes, for a signed-in user (`actor` of the restores and alias moves they start: dashboard:<email>).
  *
+ * GET /api/regions: the regions the page's region picker offers, and the dashboard's own (the default).
+ * The API Gateway and Lambda reads take ?region=<code> (default: the dashboard's own region); the
+ * recorded deployments, restores and alias moves only exist there.
  * GET /api/api-gateways: the region's APIs.
  * GET /api/api-gateways/<id>?type=REST|HTTP|WEBSOCKET: one API's stages, deployments and configuration,
  *   and for the APIs this project deploys, their recorded deployments and what each backend's live alias serves now.
@@ -117,6 +128,9 @@ export async function route(event: FunctionUrlEvent, user?: User): Promise<Funct
   const actor = user ? `dashboard:${user.email}` : 'dashboard';
   if (event.rawPath.startsWith('/api/operations/')) return await operation(event, method);
   if (event.rawPath === '/api/rollbacks') return await rollbacks(method);
+  if (event.rawPath === '/api/regions') {
+    return method === 'GET' || method === 'HEAD' ? json(200, regionList(home())) : json(405, { message: 'Method not allowed' });
+  }
   const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
@@ -129,7 +143,7 @@ export async function route(event: FunctionUrlEvent, user?: User): Promise<Funct
     if (restore) return await restoreDistributionRelease(id!, event, actor);
     if (point) return await pointLambdaAlias(id!, event, actor);
     if (resource === 'api-gateways') return await apiGateways(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
-    if (resource === 'lambda-functions') return await lambdaFunctions(id, sub);
+    if (resource === 'lambda-functions') return await lambdaFunctions(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
     return await distributions(id, sub);
   } catch (err) {
     // details stay in the logs; the page only needs to know the data isn't available
@@ -151,25 +165,28 @@ async function rollbacks(method: string) {
 }
 
 async function apiGateways(id: string | undefined, sub: string | undefined, query: URLSearchParams) {
-  const region = process.env.AWS_REGION!;
-  if (sub === 'spec') return apiSpec(id!, query.get('deployedAt'));
+  const region = regionOf(query, home());
+  if (region === undefined) return json(400, { message: 'Unknown ?region (GET /api/regions lists them)' });
+  if (sub === 'spec') return apiSpec(id!, query.get('deployedAt'), region);
   if (sub) return json(404, { message: 'Not found' });
-  if (!id) return json(200, { region, apis: await listApiGateways(rest, v2) });
+  if (!id) return json(200, { region, apis: await listApiGateways(restIn(region), v2In(region)) });
   const type = query.get('type') as ApiType;
   if (!isApiId(id) || !API_TYPES.includes(type)) return json(400, { message: 'Expected an API id and ?type=REST|HTTP|WEBSOCKET' });
-  const details = await getApiGatewayDetails(rest, v2, id, type, region);
+  const details = await getApiGatewayDetails(restIn(region), v2In(region), id, type, region);
   if (!details) return json(404, { message: `No ${type} API ${id}` });
-  const recorded = type === 'REST' ? await listRecordedDeployments(dynamo, process.env.PROJECT_NAME!, details.name, id) : undefined;
+  // the deployments this project records (and can restore) are of APIs in its own region only
+  const recorded = type === 'REST' && region === home()
+    ? await listRecordedDeployments(dynamo, process.env.PROJECT_NAME!, details.name, id) : undefined;
   if (!recorded) return json(200, details);
   return json(200, { ...details, recorded, liveLambdaVersions: await liveLambdaVersions(lambda, recorded) });
 }
 
 /** The routes a recorded deployment of a REST API serves, from its OpenAPI export in S3. */
-async function apiSpec(id: string, deployedAt: string | null) {
+async function apiSpec(id: string, deployedAt: string | null, region: string) {
   if (!isApiId(id) || !isDeployedAt(deployedAt)) return json(400, { message: 'Expected a REST API id and ?deployedAt=<ISO 8601>' });
   let name: string;
   try {
-    name = (await rest.send(new GetRestApiCommand({ restApiId: id }))).name ?? id;
+    name = (await restIn(region).send(new GetRestApiCommand({ restApiId: id }))).name ?? id;
   } catch (err) {
     if ((err as Error).name === 'NotFoundException') return json(404, { message: `No REST API ${id}` });
     throw err;
@@ -228,17 +245,19 @@ async function restoreDistributionRelease(id: string, event: FunctionUrlEvent, a
 }
 
 // Only the functions registered for rollback (rollback-config.json): listed, read and changed.
-async function lambdaFunctions(name: string | undefined, sub: string | undefined) {
+async function lambdaFunctions(name: string | undefined, sub: string | undefined, query: URLSearchParams) {
+  const region = regionOf(query, home());
+  if (region === undefined) return json(400, { message: 'Unknown ?region (GET /api/regions lists them)' });
   const project = process.env.PROJECT_NAME!;
   const isRegistered = (fn: string) => registrationFor(fn, registered, project) !== undefined;
-  if (!name) return json(200, { region: process.env.AWS_REGION!, functions: await listLambdaFunctions(lambda, isRegistered) });
+  if (!name) return json(200, { region, functions: await listLambdaFunctions(lambdaIn(region), isRegistered) });
   if (!isFunctionName(name)) return json(400, { message: 'Expected a function name' });
   if (sub && sub !== 'metrics') return json(404, { message: 'Not found' });
   const registration = registrationFor(name, registered, project);
   if (!registration) return json(404, { message: `${name} isn't registered for rollback (rollback-config.json)` });
-  if (sub === 'metrics') return json(200, await getLambdaFunctionMetrics(cloudwatch, name));
+  if (sub === 'metrics') return json(200, await getLambdaFunctionMetrics(cloudwatchIn(region), name));
   const [details, archive] = await Promise.all([
-    getLambdaFunctionDetails(lambda, name),
+    getLambdaFunctionDetails(lambdaIn(region), name),
     listArchivedVersions(dynamo, registration.archiveTable, name),
   ]);
   if (!details) return json(404, { message: `No function ${name}` });
