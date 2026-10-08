@@ -13,7 +13,7 @@ import {
 } from '@aws-sdk/client-lambda';
 import { getApiGatewayDetails } from '../lambda/dashboard-api/api-gateway-details.js';
 import { listApiGateways } from '../lambda/dashboard-api/api-gateways.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, lambdaDate, listLambdaFunctions,
 } from '../lambda/dashboard-api/lambda-functions.js';

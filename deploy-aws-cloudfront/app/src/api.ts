@@ -1,5 +1,25 @@
 // The dashboard API, served by the same distribution at /api/* (lambda/dashboard-api).
 // `npm run app:dev` proxies /api to DASHBOARD_API_URL when it is set (see vite.config.ts).
+// Every call carries the signed-in user's ID token (auth.ts).
+import { AUTH_HEADER_NAME, idToken, signOut } from './auth.js';
+
+/**
+ * fetch() for /api/*, with the user's ID token in x-auth-token (Authorization is taken: CloudFront
+ * signs the request to the function URL with it). A 401 gets one retry with a refreshed token; if
+ * that fails too, the user is signed out and the page shows the sign-in form.
+ */
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const send = async (token: string | undefined) => {
+    if (!token) throw new Error('Signed out');
+    return fetch(url, { ...init, headers: { ...init.headers as Record<string, string>, [AUTH_HEADER_NAME]: token } });
+  };
+  let response = await send(await idToken());
+  if (response.status === 401) {
+    response = await send(await idToken(true));
+    if (response.status === 401) await signOut();
+  }
+  return response;
+}
 
 /** Same shape as ApiGatewaySummary in lambda/dashboard-api/api-gateways.ts. */
 export interface ApiGateway {
@@ -17,7 +37,7 @@ export interface ApiGatewayList {
 }
 
 export async function fetchApiGateways(signal?: AbortSignal): Promise<ApiGatewayList> {
-  const response = await fetch('/api/api-gateways', { signal, headers: { accept: 'application/json' } });
+  const response = await apiFetch('/api/api-gateways', { signal, headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET /api/api-gateways answered ${response.status}`);
   return response.json();
 }
@@ -61,7 +81,7 @@ export interface RecordedApiDeployment {
 
 export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'>, signal?: AbortSignal): Promise<ApiGatewayDetails> {
   const url = `/api/api-gateways/${encodeURIComponent(api.id)}?type=${api.type}`;
-  const response = await fetch(url, { signal, headers: { accept: 'application/json' } });
+  const response = await apiFetch(url, { signal, headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   return response.json();
 }
@@ -73,7 +93,7 @@ export async function fetchApiGatewayDetails(api: Pick<ApiGateway, 'id' | 'type'
 async function postJson<T>(url: string, data: unknown): Promise<T> {
   const body = JSON.stringify(data);
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     body,
     headers: {
@@ -163,7 +183,7 @@ export interface LambdaFunctionMetrics {
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal, headers: { accept: 'application/json' } });
+  const response = await apiFetch(url, { signal, headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`GET ${url} answered ${response.status}`);
   return response.json();
 }

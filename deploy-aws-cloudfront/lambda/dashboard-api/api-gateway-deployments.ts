@@ -165,7 +165,8 @@ export async function restoreRecordedDeployment(
   lambda: LambdaClient,
   project: string,
   api: { id: string; name: string },
-  req: { deployedAt: string; reason?: string },
+  /** actor: who asked, dashboard:<email> (default dashboard) */
+  req: { deployedAt: string; reason?: string; actor?: string },
 ): Promise<RestoreResult> {
   const table = deploymentsTableFor(api.name, project);
   const service = rollbackServiceFor(api.name, project);
@@ -178,6 +179,6 @@ export async function restoreRecordedDeployment(
   if (record.current) return { ok: false, status: 409, message: `${api.name} already serves the deployment recorded at ${req.deployedAt}` };
 
   // the page follows the run in a popup (GET /api/operations/<id>)
-  const operationId = await startOperation(lambda, service, 'apigateway-restore', { type: 'restore', manager: 'apigateway', deployedAt: record.deployedAt, actor: 'dashboard', reason: req.reason });
+  const operationId = await startOperation(lambda, service, 'apigateway-restore', { type: 'restore', manager: 'apigateway', deployedAt: record.deployedAt, actor: req.actor ?? 'dashboard', reason: req.reason });
   return { ok: true, operationId };
 }

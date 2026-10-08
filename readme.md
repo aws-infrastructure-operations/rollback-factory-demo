@@ -124,7 +124,11 @@ Where the drawing is behind the code:
 
 ## The dashboard
 
-`frontend-user-<env>` is a React dashboard with three widgets:
+`frontend-user-<env>` is a React dashboard with three widgets. **Sign-in is invite only**: each
+environment has its own Cognito user pool with no sign-up, and an administrator invites each user
+(`npm run users -- --env <env> --action invite --email <address>` in `deploy-aws-cloudfront`). Signed out,
+the page shows only the sign-in form, and the dashboard API answers 401. See
+[Sign-in](deploy-aws-cloudfront/README.md#sign-in-invite-only).
 
 - **API Gateways:**
   - the stages, with the OpenAPI export each one serves;

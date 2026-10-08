@@ -4,7 +4,7 @@ import { CloudFrontClient, GetDistributionCommand } from '@aws-sdk/client-cloudf
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { restoreRelease, rollbackServiceForDistribution } from '../lambda/dashboard-api/cloudfront-distributions.js';
-import { handler } from '../lambda/dashboard-api/handler.js';
+import { route as handler } from '../lambda/dashboard-api/handler.js';
 
 const PROJECT = 'rollback-factory-demo';
 const LIVE = '20261007T101500Z';
