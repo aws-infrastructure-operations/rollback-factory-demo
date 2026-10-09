@@ -357,20 +357,20 @@ export const fetchOperation = (id: string, signal?: AbortSignal) =>
 
 /** One rollback (lambda/dashboard-api/rollbacks.ts has the same shape). */
 export interface RollbackEntry {
-  kind: 'api' | 'lambda' | 'frontend';
+  kind: 'api' | 'lambda' | 'frontend' | 'stack';
   env: string;
-  /** api-user-dev, service-lambda-dev, frontend-user-dev, ... */
+  /** api-user-dev, service-lambda-dev, frontend-user-dev, deploy-aws-lambda-dev, ... */
   target: string;
   at: string;
-  /** an alarm fired, or someone restored / pointed back by hand */
-  trigger: 'alarm' | 'manual';
+  /** an alarm fired, integration tests failed (a stack rolled back by deploy-test-rollback), or someone restored / pointed back by hand */
+  trigger: 'alarm' | 'tests' | 'manual';
   /** the alarm's name, or who did it */
   by: string;
-  /** what was replaced, and what it went back to: deployment ids, release ids or vN */
+  /** what was replaced, and what it went back to: deployment ids, release ids, vN or template hashes */
   from?: string;
   to?: string;
   reason?: string;
 }
 
-/** Every rollback of the APIs, Lambda functions and sites (dev and prod), newest first. Read-only. */
+/** Every rollback of the APIs, Lambda functions, sites and stacks (dev and prod), newest first. Read-only. */
 export const fetchRollbacks = (signal?: AbortSignal) => getJson<{ rollbacks: RollbackEntry[] }>('/api/rollbacks', signal);

@@ -230,7 +230,7 @@ export class RollbackServiceStack extends cdk.Stack {
     const restorable = restorableStacks(env)
       .map((stackName) => this.formatArn({ service: 'cloudformation', resource: 'stack', resourceName: `${stackName}/*` }));
     this.service.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['cloudformation:DescribeStacks', 'cloudformation:UpdateStack'],
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:GetTemplate', 'cloudformation:UpdateStack'],
       resources: restorable,
     }));
     // The update runs as the stack's own service role, the CDK execution role (it changes the stack's
