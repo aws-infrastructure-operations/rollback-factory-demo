@@ -19,6 +19,15 @@ export const handler = async (event: unknown, context: Context) => {
   }));
   coldStart = false;
 
+  // DEMO BRANCH (demo/pr-environment-fails) - DO NOT MERGE.
+  // Shows the pull request environment stopping a bad change before it can be merged: the service
+  // now needs a pricing table, but nobody added PRICING_TABLE to the stack. The unit tests don't
+  // call the handler, so the PR's "test" job passes; its "pr environment" job deploys
+  // service-lambda-pr-<n>, every call to it throws, the integration tests fail, and the stack is
+  // deleted again. With "pr environment" as a required check, the PR can't be merged.
+  const pricingTable = process.env.PRICING_TABLE;
+  if (!pricingTable) throw new Error('PRICING_TABLE is not configured');
+
   const result = { version: context.functionVersion };
   console.log(JSON.stringify({ msg: 'done', version: context.functionVersion, durationMs: Date.now() - started }));
   return result;
