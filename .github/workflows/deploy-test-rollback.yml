@@ -1,0 +1,488 @@
+name: deploy test rollback
+
+# Manual: deploys one component of an environment straight to what clients use, runs the integration
+# tests there, and if they fail rolls back to the latest STABLE version (never just "the previous one"):
+#
+#   api-gateway                 cdk deploy: stage v1 gets the new API config at once (each backend's
+#                               `live` alias stays) -> record it (OpenAPI spec -> S3, record -> DynamoDB)
+#                               -> integration tests on v1
+#                               failed: the rollback service re-imports the newest stable OpenAPI spec
+#                               from S3, its routes pointed at the `live` alias, and redeploys v1
+#   lambda                      cdk deploy: `live` and `integration` get the new version at once ->
+#                               archive it (zip -> S3, metadata -> DynamoDB) -> integration tests on live
+#                               failed: `live` and `integration` go back to the newest stable version in
+#                               the DynamoDB archive, and $LATEST is restored from that version's zip in S3
+#   cloudformation-api-gateway  the whole stack deploy-aws-<project>-<env>: cdk deploy (v1 / live included)
+#   cloudformation-lambda       -> archive the template (S3 + DynamoDB) -> integration tests
+#                               failed: the stack is updated back to the newest stable template
+#
+# Stable means:
+#   API Gateway     verified (the tests passed on it), never rolled back, and replaced by a newer
+#                   deployment without an alarm (deploy-aws-api-gateway/scripts/lib/stable.ts)
+#   Lambda          marked stable by the rollback service (live for a while with all alarms OK), never
+#                   rolled back from (deploy-aws-lambda/scripts/lib/stable.ts)
+#   CloudFormation  the tests passed on it here; the first time, the template the stack already runs is
+#                   tested and archived as the baseline (.github/scripts/stack-templates.sh)
+# After a rollback the tests run again on what was restored. The run still ends red: the deploy failed.
+#
+# Unlike api-gateway.yml and lambda.yml (integration target first, live untouched when tests fail),
+# clients get the change before it is tested here, until the rollback. Each job takes the same lock as
+# those deploys, so the two never race. The CloudFormation template archive is in rollback-service-<env>:
+# deploy that first.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, prod]
+        default: dev
+      component:
+        description: What to deploy, test and roll back on failure
+        type: choice
+        options: [api-gateway, lambda, cloudformation-api-gateway, cloudformation-lambda]
+        default: api-gateway
+
+permissions:
+  contents: read
+
+jobs:
+  api-gateway:
+    name: api-gateway ${{ inputs.environment }}
+    if: inputs.component == 'api-gateway'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    # Shared with api-gateway.yml, its restore and the break-api demo
+    concurrency:
+      group: api-gateway-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy-aws-api-gateway
+    env:
+      API_ENV: ${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      # prod has no prefix (deploy-aws-dns-api-domains)
+      API_DOMAIN: ${{ inputs.environment == 'prod' && 'api.rollback.ionuteliantudor.com' || format('api.{0}.rollback.ionuteliantudor.com', inputs.environment) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-api-gateway/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK bootstrap (no-op when up to date)
+        run: npx cdk bootstrap -c env="$API_ENV"
+
+      - name: Check the API domain exists (deploy-aws-dns-api-domains)
+        working-directory: .
+        run: |
+          aws apigateway get-domain-name --domain-name "$API_DOMAIN" >/dev/null \
+            || { echo "::error::API domain $API_DOMAIN not found: run the dns workflow first"; exit 1; }
+
+      - name: Create / update Bruno collection
+        run: npm run collection:sync -- --env "$API_ENV"
+
+      - name: Read the backends' live versions (v1 itself is not kept)
+        id: live
+        run: echo "context=$(npm run -s live:context -- --env "$API_ENV" --aliases-only)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to stage v1 (the backends' live aliases stay where they are)
+        id: deploy
+        env:
+          LIVE_CONTEXT: ${{ steps.live.outputs.context }}
+        # LIVE_CONTEXT is unquoted on purpose: it holds several -c arguments.
+        run: >-
+          npx cdk deploy -c env="$API_ENV" -c deployId="$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+          $LIVE_CONTEXT --require-approval never
+
+      - name: Record the deployment (OpenAPI spec -> S3, record -> DynamoDB)
+        id: record
+        run: |
+          set -o pipefail
+          npm run -s deployment:record -- --env "$API_ENV" --force \
+            --description "deploy-test-rollback run $GITHUB_RUN_ID ($GITHUB_REF_NAME)" | tee record.json
+          deployed_at=$(tail -n 1 record.json | jq -r '.deployedAt')
+          echo "deployed_at=$deployed_at" >> "$GITHUB_OUTPUT"
+
+      - name: Integration tests on stage v1
+        id: integration
+        env:
+          API_STAGE: v1
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      - name: Mark the deployment verified
+        run: npm run -s deployment:verify -- --env "$API_ENV"
+
+      # --- Tests failed: back to the latest stable OpenAPI spec ---------------------------------
+      - name: Roll v1 back to the latest stable deployment (spec from S3, routes on the live alias)
+        id: rollback
+        if: failure() && steps.integration.outcome == 'failure'
+        env:
+          FAILED: ${{ steps.record.outputs.deployed_at }}
+        run: |
+          set -o pipefail
+          npm run -s deployment:rollback-to-stable -- --env "$API_ENV" --failed "$FAILED" \
+            --reason "integration tests failed in deploy-test-rollback run $GITHUB_RUN_ID" | tee rollback.json
+          echo "to=$(tail -n 1 rollback.json | jq -r '.to')" >> "$GITHUB_OUTPUT"
+
+      - name: Integration tests on the restored stage v1
+        id: retest
+        if: failure() && steps.rollback.outcome == 'success'
+        env:
+          API_STAGE: v1
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee retest.log
+
+      - name: Mark the restored deployment verified
+        if: failure() && steps.retest.outcome == 'success'
+        run: npm run -s deployment:verify -- --env "$API_ENV"
+
+      # The backends got new versions on their integration aliases: archive them for the rollback service.
+      - name: Sync the rollback service's version archive (users, messages and orders backends)
+        if: always() && steps.deploy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          for backend in users messages orders; do
+            fn="rollback-factory-demo-api-$backend-$API_ENV"
+            FUNCTION_ERROR=$(aws lambda invoke --function-name "rollback-factory-demo-rollback-service-$API_ENV" \
+              --cli-binary-format raw-in-base64-out --cli-read-timeout 150 \
+              --payload "{\"type\":\"sync\",\"functionName\":\"$fn\"}" \
+              --query 'FunctionError' --output text "$RUNNER_TEMP/sync-$backend.json")
+            if [[ "$FUNCTION_ERROR" != "None" ]] || jq -e 'any(.[]; .synced != true)' "$RUNNER_TEMP/sync-$backend.json" >/dev/null; then
+              echo "::error::Sync of $fn failed: $(cat "$RUNNER_TEMP/sync-$backend.json")"
+              exit 1
+            fi
+          done
+
+      - name: Summary
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
+          ROLLED_BACK_TO: ${{ steps.rollback.outputs.to }}
+        run: |
+          {
+            case "${{ steps.integration.outcome }}" in
+              success) echo "### :white_check_mark: api-user-$API_ENV: deployed to v1 and verified ($DEPLOYED_AT)" ;;
+              failure)
+                echo "### :x: api-user-$API_ENV: integration tests failed on v1 ($DEPLOYED_AT)"
+                if [[ "${{ steps.rollback.outcome }}" == success ]]; then
+                  echo "Rolled back to the latest stable deployment, **$ROLLED_BACK_TO** (spec re-imported from S3, routes on the \`live\` alias)."
+                  [[ "${{ steps.retest.outcome }}" == success ]] && echo "The tests pass on the restored v1." \
+                    || echo ":warning: The tests **fail on the restored v1 too**: look at the backends' \`live\` versions."
+                else
+                  echo ":warning: **The rollback failed**: v1 still serves the failed deployment. See the step log."
+                fi
+                echo '<details><summary>Test output (last 100 lines)</summary>'
+                echo; echo '```'; tail -n 100 integration-tests.log; echo '```'; echo '</details>'
+                ;;
+              *) echo "### api-user-$API_ENV: not tested (the deploy or record step failed)" ;;
+            esac
+            echo; echo '```'
+            npm run -s deployment:list -- --env "$API_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lambda:
+    name: lambda ${{ inputs.environment }}
+    if: inputs.component == 'lambda'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    # Shared with lambda.yml and the manual Lambda rollbacks
+    concurrency:
+      group: lambda-release-${{ inputs.environment }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy-aws-lambda
+    env:
+      LAMBDA_ENV: ${{ inputs.environment }}
+      FUNCTION_NAME: service-lambda-${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: each version's description is the last commit that touched the service code.
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-lambda/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK bootstrap (no-op when up to date)
+        run: npx cdk bootstrap -c env="$LAMBDA_ENV"
+
+      # Without -c liveLambdaVersion, live (and integration) move to the version this deploy publishes.
+      - name: Deploy (live and integration get the new version)
+        id: deploy
+        run: npx cdk deploy -c env="$LAMBDA_ENV" --require-approval never
+
+      - name: Read the version live serves
+        id: version
+        run: |
+          version="$(aws lambda get-alias --function-name "$FUNCTION_NAME" --name live --query FunctionVersion --output text)"
+          echo "Testing $FUNCTION_NAME version $version on the live alias"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Sync (archive the version's zip to S3 and its metadata to DynamoDB, record the deploy)
+        run: npm run -s deployment:sync -- --env "$LAMBDA_ENV"
+
+      - name: Integration tests on the live alias
+        id: integration
+        env:
+          LAMBDA_ALIAS: live
+          LAMBDA_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      # --- Tests failed: back to the latest stable version ------------------------------------
+      - name: Roll live and integration back to the latest stable version ($LATEST from its zip in S3)
+        id: rollback
+        if: failure() && steps.integration.outcome == 'failure'
+        env:
+          FAILED: ${{ steps.version.outputs.version }}
+        run: |
+          set -o pipefail
+          npm run -s deployment:rollback-to-stable -- --env "$LAMBDA_ENV" --failed-version "$FAILED" \
+            --reason "integration tests failed in deploy-test-rollback run $GITHUB_RUN_ID" | tee rollback.json
+          echo "to=$(tail -n 1 rollback.json | jq -r '.to')" >> "$GITHUB_OUTPUT"
+          echo "restored_from=$(tail -n 1 rollback.json | jq -r '.restoredFrom')" >> "$GITHUB_OUTPUT"
+
+      - name: Integration tests on the restored live alias
+        id: retest
+        if: failure() && steps.rollback.outcome == 'success'
+        env:
+          LAMBDA_ALIAS: live
+          LAMBDA_VERSION: ${{ steps.rollback.outputs.to }}
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee retest.log
+
+      - name: Summary
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ROLLED_BACK_TO: ${{ steps.rollback.outputs.to }}
+          RESTORED_FROM: ${{ steps.rollback.outputs.restored_from }}
+        run: |
+          {
+            case "${{ steps.integration.outcome }}" in
+              success) echo "### :white_check_mark: $FUNCTION_NAME: version $VERSION is live and passed the tests" ;;
+              failure)
+                echo "### :x: $FUNCTION_NAME: integration tests failed on version $VERSION (live)"
+                if [[ "${{ steps.rollback.outcome }}" == success ]]; then
+                  echo "Rolled back to the latest stable version, **$ROLLED_BACK_TO**: \`live\` and \`integration\` point at it, and \`\$LATEST\` was restored from \`$RESTORED_FROM\`."
+                  [[ "${{ steps.retest.outcome }}" == success ]] && echo "The tests pass on the restored version." \
+                    || echo ":warning: The tests **fail on the restored version too**."
+                else
+                  echo ":warning: **The rollback failed**: \`live\` may still serve version $VERSION. See the step log."
+                fi
+                echo '<details><summary>Test output (last 100 lines)</summary>'
+                echo; echo '```'; tail -n 100 integration-tests.log; echo '```'; echo '</details>'
+                ;;
+              *) echo "### $FUNCTION_NAME: not tested (the deploy or sync failed)" ;;
+            esac
+            echo; echo '```'
+            npm run -s versions:list -- --env "$LAMBDA_ENV" --limit 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cloudformation:
+    name: cloudformation ${{ inputs.component == 'cloudformation-lambda' && 'lambda' || 'api-gateway' }} ${{ inputs.environment }}
+    if: startsWith(inputs.component, 'cloudformation-')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # a stack update (deploy or rollback) each, and the tests up to three times
+    timeout-minutes: 90
+    # The same lock as the project's own deploys
+    concurrency:
+      group: ${{ inputs.component == 'cloudformation-lambda' && format('lambda-release-{0}', inputs.environment) || format('api-gateway-deploy-{0}', inputs.environment) }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: deploy-aws-${{ inputs.component == 'cloudformation-lambda' && 'lambda' || 'api-gateway' }}
+    env:
+      PROJECT: ${{ inputs.component == 'cloudformation-lambda' && 'lambda' || 'api-gateway' }}
+      ENV_NAME: ${{ inputs.environment }}
+      STACK_NAME: deploy-aws-${{ inputs.component == 'cloudformation-lambda' && 'lambda' || 'api-gateway' }}-${{ inputs.environment }}
+      TEMPLATES_TABLE: rollback-factory-demo-stack-templates-${{ inputs.environment }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      STACK_TEMPLATES: ${{ github.workspace }}/.github/scripts/stack-templates.sh
+      # what each project's integration tests read: the API's stage v1, the Lambda's live alias
+      API_ENV: ${{ inputs.environment }}
+      API_STAGE: v1
+      LAMBDA_ENV: ${{ inputs.environment }}
+      LAMBDA_ALIAS: live
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy-aws-${{ env.PROJECT }}/package-lock.json
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Find the template archive (rollback-service-${{ inputs.environment }})
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "TEMPLATES_BUCKET=rollback-factory-demo-$account-stack-templates-$ENV_NAME" >> "$GITHUB_ENV"
+          aws dynamodb describe-table --table-name "$TEMPLATES_TABLE" >/dev/null \
+            || { echo "::error::$TEMPLATES_TABLE not found: deploy rollback-service ($ENV_NAME) first"; exit 1; }
+
+      - name: CDK bootstrap (no-op when up to date)
+        run: npx cdk bootstrap -c env="$ENV_NAME"
+
+      # The first time (or after another workflow deployed the stack), the template the stack runs now
+      # is not archived yet: test it, and archive it as the baseline, stable if the tests pass.
+      - name: Is the running template archived?
+        id: baseline
+        run: echo "needed=$(bash "$STACK_TEMPLATES" baseline-needed)" >> "$GITHUB_OUTPUT"
+
+      - name: Integration tests on the running stack (baseline)
+        id: baseline_tests
+        if: steps.baseline.outputs.needed == 'true'
+        continue-on-error: true
+        run: npm run test:integration
+
+      - name: Archive the running template as the baseline
+        if: steps.baseline.outputs.needed == 'true'
+        run: bash "$STACK_TEMPLATES" archive baseline "${{ steps.baseline_tests.outcome == 'success' }}"
+
+      # No live context: the whole stack is deployed as it is in this commit, v1 / live included.
+      - name: Deploy ${{ env.STACK_NAME }}
+        id: deploy
+        run: |
+          if [[ "$PROJECT" == api-gateway ]]; then
+            npm run collection:sync -- --env "$ENV_NAME"
+            npx cdk deploy -c env="$ENV_NAME" -c deployId="$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" --require-approval never
+          else
+            npx cdk deploy -c env="$ENV_NAME" --require-approval never
+          fi
+
+      - name: Archive the deployed template (S3 + DynamoDB)
+        id: archive
+        run: echo "deployed_at=$(bash "$STACK_TEMPLATES" archive cicd false)" >> "$GITHUB_OUTPUT"
+
+      # What the project's own rollbacks need: the API's deployment record, the Lambda's version archive.
+      - name: Record the deployment for the rollback service
+        run: |
+          if [[ "$PROJECT" == api-gateway ]]; then
+            npm run -s deployment:record -- --env "$ENV_NAME" --force --description "deploy-test-rollback run $GITHUB_RUN_ID (stack)"
+          else
+            npm run -s deployment:sync -- --env "$ENV_NAME"
+          fi
+
+      - name: Integration tests
+        id: integration
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee integration-tests.log
+
+      - name: Mark the template stable
+        env:
+          DEPLOYED_AT: ${{ steps.archive.outputs.deployed_at }}
+        run: |
+          bash "$STACK_TEMPLATES" mark-stable "$DEPLOYED_AT"
+          if [[ "$PROJECT" == api-gateway ]]; then npm run -s deployment:verify -- --env "$ENV_NAME"; fi
+
+      # --- Tests failed: back to the latest stable template --------------------------------------
+      - name: Roll the stack back to the latest stable template
+        id: rollback
+        if: failure() && steps.integration.outcome == 'failure'
+        env:
+          FAILED: ${{ steps.archive.outputs.deployed_at }}
+        run: |
+          set -euo pipefail
+          bash "$STACK_TEMPLATES" mark-rolled-back "$FAILED"
+          target=$(bash "$STACK_TEMPLATES" latest-stable "$FAILED")
+          if [[ -z "$target" ]]; then
+            echo "::error::$STACK_NAME has no stable template before $FAILED to roll back to"
+            exit 1
+          fi
+          echo "Latest stable template: $target"
+          to=$(jq -r '.deployedAt' <<<"$target")
+          bash "$STACK_TEMPLATES" restore "$to"
+          echo "to=$to" >> "$GITHUB_OUTPUT"
+          echo "commit=$(jq -r '.commitSha // ""' <<<"$target")" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(bash "$STACK_TEMPLATES" archive rollback false "$FAILED")" >> "$GITHUB_OUTPUT"
+          if [[ "$PROJECT" == api-gateway ]]; then
+            npm run -s deployment:record -- --env "$ENV_NAME" --force --description "stack rolled back to the template of $to"
+          else
+            npm run -s deployment:sync -- --env "$ENV_NAME"
+          fi
+
+      - name: Integration tests on the restored stack
+        id: retest
+        if: failure() && steps.rollback.outcome == 'success'
+        run: |
+          set -o pipefail
+          npm run test:integration 2>&1 | tee retest.log
+
+      - name: Mark the restored template stable
+        if: failure() && steps.retest.outcome == 'success'
+        env:
+          DEPLOYED_AT: ${{ steps.rollback.outputs.deployed_at }}
+        run: |
+          bash "$STACK_TEMPLATES" mark-stable "$DEPLOYED_AT"
+          if [[ "$PROJECT" == api-gateway ]]; then npm run -s deployment:verify -- --env "$ENV_NAME"; fi
+
+      - name: Summary
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          DEPLOYED_AT: ${{ steps.archive.outputs.deployed_at }}
+          ROLLED_BACK_TO: ${{ steps.rollback.outputs.to }}
+          ROLLED_BACK_COMMIT: ${{ steps.rollback.outputs.commit }}
+        run: |
+          {
+            case "${{ steps.integration.outcome }}" in
+              success) echo "### :white_check_mark: $STACK_NAME: deployed and passed the tests (template $DEPLOYED_AT is stable)" ;;
+              failure)
+                echo "### :x: $STACK_NAME: integration tests failed (template $DEPLOYED_AT)"
+                if [[ "${{ steps.rollback.outcome }}" == success ]]; then
+                  echo "The stack was updated back to the latest stable template, **$ROLLED_BACK_TO** (commit \`${ROLLED_BACK_COMMIT:0:7}\`)."
+                  [[ "${{ steps.retest.outcome }}" == success ]] && echo "The tests pass on the restored stack." \
+                    || echo ":warning: The tests **fail on the restored stack too**."
+                else
+                  echo ":warning: **The rollback failed**: the stack still runs the failed template. See the step log."
+                fi
+                echo '<details><summary>Test output (last 100 lines)</summary>'
+                echo; echo '```'; tail -n 100 integration-tests.log; echo '```'; echo '</details>'
+                ;;
+              *) echo "### $STACK_NAME: not tested (the deploy or archive step failed)" ;;
+            esac
+            echo
+            echo "| Archived at | Source | Stable | Rolled back | Commit |"
+            echo "|---|---|---|---|---|"
+            aws dynamodb query --table-name "$TEMPLATES_TABLE" --no-scan-index-forward --max-items 5 \
+              --key-condition-expression 'stackName = :s' \
+              --expression-attribute-values "$(jq -n --arg s "$STACK_NAME" '{":s": {S: $s}}')" --output json \
+              | jq -r '.Items[] | "| \(.deployedAt.S) | \(.source.S) | \(.stable.BOOL) | \(.rolledBackAt.S // "") | `\((.commitSha.S // "")[0:7])` |"'
+          } >> "$GITHUB_STEP_SUMMARY"

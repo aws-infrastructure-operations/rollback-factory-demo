@@ -15,6 +15,7 @@
     "live:context": "tsx scripts/live-context.ts",
     "deployment:promote": "tsx scripts/promote.ts",
     "deployment:sync": "tsx scripts/sync.ts",
+    "deployment:rollback-to-stable": "tsx scripts/rollback-to-stable.ts",
     "versions:list": "tsx scripts/list-versions.ts"
   },
   "dependencies": {

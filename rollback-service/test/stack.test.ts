@@ -98,6 +98,20 @@ test('owns the Lambda version archive, kept in prod only', () => {
   }
 });
 
+test('owns the CloudFormation template archive, kept in prod only', () => {
+  for (const [envName, policy] of [['dev', 'Delete'], ['prod', 'Retain']]) {
+    const { main } = synth(envName);
+    main.hasResource('AWS::DynamoDB::GlobalTable', {
+      DeletionPolicy: policy,
+      Properties: Match.objectLike({
+        TableName: `rollback-factory-demo-stack-templates-${envName}`,
+        KeySchema: [{ AttributeName: 'stackName', KeyType: 'HASH' }, { AttributeName: 'deployedAt', KeyType: 'RANGE' }],
+      }),
+    });
+    main.hasOutput('StackTemplatesBucketName', Match.anyValue());
+  }
+});
+
 test('runs the scheduled check every 5 minutes', () => {
   synth().main.hasResourceProperties('AWS::Events::Rule', {
     Name: 'rollback-factory-demo-rollback-service-check-dev',

@@ -99,6 +99,28 @@ export class RollbackServiceStack extends cdk.Stack {
       autoDeleteObjects: !config.retainData,
     });
 
+    // --- CloudFormation template archive -------------------------------------------------
+    // Not used by the rollback Lambda: .github/workflows/deploy-test-rollback.yml archives each template
+    // it deploys here (<stack>/<timestamp>/template.json) and records it, and when the integration tests
+    // fail it updates the stack back to the newest template that passed them (stable).
+    // stackName = deploy-aws-<project>-<env>, deployedAt = ISO 8601
+    const stackTemplatesTable = new dynamodb.TableV2(this, 'StackTemplatesTable', {
+      tableName: config.stackTemplatesTableName,
+      partitionKey: { name: 'stackName', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'deployedAt', type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: config.retainData },
+      removalPolicy,
+    });
+    const stackTemplatesBucket = new s3.Bucket(this, 'StackTemplatesBucket', {
+      bucketName: name(`${cdk.Aws.ACCOUNT_ID}-stack-templates`),
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy,
+      autoDeleteObjects: !config.retainData,
+    });
+
     // --- The rollback Lambda ----------------------------------------------------------
     this.service = new NodejsFunction(this, 'RollbackService', {
       functionName: config.functionName,
@@ -236,5 +258,7 @@ export class RollbackServiceStack extends cdk.Stack {
     out('FunctionName', this.service.functionName);
     out('VersionsTableName', versionsTable.tableName);
     out('ArtifactsBucketName', artifactsBucket.bucketName);
+    out('StackTemplatesTableName', stackTemplatesTable.tableName);
+    out('StackTemplatesBucketName', stackTemplatesBucket.bucketName);
   }
 }

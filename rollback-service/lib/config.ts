@@ -48,6 +48,12 @@ export interface EnvConfig {
    * that table, which prod keeps after the old stack resources are removed.
    */
   versionsTableName: string;
+  /**
+   * rollback-factory-demo-stack-templates-<env>: every CloudFormation template deploy-test-rollback.yml
+   * deployed (stackName + deployedAt), with whether it passed the tests (stable). The templates themselves
+   * go to the bucket rollback-factory-demo-<account>-stack-templates-<env>.
+   */
+  stackTemplatesTableName: string;
   /** rollback-factory-demo-rollback-service-logs-<env>: the dashboard follows its restores here */
   logGroupName: string;
   /** Optional e-mail subscribed to both topics (-c alarmEmail=...). */
@@ -72,6 +78,7 @@ export function getConfig(envName: string | undefined, overrides: ConfigOverride
     functionName: resourceName('rollback-service'),
     topicName: resourceName('rollback-notifications'),
     versionsTableName: resourceName('lambda-archive'),
+    stackTemplatesTableName: resourceName('stack-templates'),
     logGroupName: resourceName('rollback-service-logs'),
     alarmEmail: overrides.alarmEmail || undefined,
     retainData: envName === 'prod',
