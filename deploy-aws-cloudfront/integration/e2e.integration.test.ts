@@ -34,7 +34,12 @@ before(async () => {
     if (msg.type() === 'error') problems.push(`console: ${msg.text()}`);
   });
   page.on('pageerror', (err) => problems.push(`page error: ${err.message}`));
-  page.on('requestfailed', (req) => problems.push(`request failed: ${req.method()} ${req.url()} (${req.failure()?.errorText})`));
+  page.on('requestfailed', (req) => {
+    // net::ERR_ABORTED is a request the page cancelled itself: a panel that reloads or unmounts (another
+    // region picked, signing out) aborts what it was still loading. Any real failure has another error.
+    if (req.failure()?.errorText === 'net::ERR_ABORTED') return;
+    problems.push(`request failed: ${req.method()} ${req.url()} (${req.failure()?.errorText})`);
+  });
   page.on('response', (res) => {
     if (res.status() >= 400) problems.push(`HTTP ${res.status()}: ${res.request().method()} ${res.url()}`);
   });
