@@ -23,6 +23,7 @@
     "deployment:verify": "tsx scripts/verify-deployment.ts",
     "deployment:restore": "tsx scripts/restore-deployment.ts",
     "deployment:promote": "tsx scripts/promote-deployment.ts",
+    "deployment:rollback-to-stable": "tsx scripts/rollback-to-stable.ts",
     "live:context": "tsx scripts/live-context.ts"
   },
   "dependencies": {

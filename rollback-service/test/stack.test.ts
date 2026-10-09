@@ -24,8 +24,9 @@ test('one rollback Lambda per environment', () => {
   main.hasResourceProperties('AWS::Lambda::Function', {
     FunctionName: 'rollback-factory-demo-rollback-service-staging',
     Runtime: 'nodejs24.x',
-    Timeout: 120,
-    Environment: { Variables: Match.objectLike({ ENV_NAME: 'staging', VERSIONS_TABLE_NAME: Match.anyValue() }) },
+    // a stack restore waits for CloudFormation's update
+    Timeout: 600,
+    Environment: { Variables: Match.objectLike({ ENV_NAME: 'staging', VERSIONS_TABLE_NAME: Match.anyValue(), STACK_TEMPLATES_TABLE_NAME: Match.anyValue() }) },
   });
 });
 
@@ -96,6 +97,31 @@ test('owns the Lambda version archive, kept in prod only', () => {
     });
     main.hasResource('AWS::S3::Bucket', { DeletionPolicy: policy });
   }
+});
+
+test('owns the CloudFormation template archive, kept in prod only', () => {
+  for (const [envName, policy] of [['dev', 'Delete'], ['prod', 'Retain']]) {
+    const { main } = synth(envName);
+    main.hasResource('AWS::DynamoDB::GlobalTable', {
+      DeletionPolicy: policy,
+      Properties: Match.objectLike({
+        TableName: `rollback-factory-demo-stack-templates-${envName}`,
+        KeySchema: [{ AttributeName: 'stackName', KeyType: 'HASH' }, { AttributeName: 'deployedAt', KeyType: 'RANGE' }],
+      }),
+    });
+    main.hasOutput('StackTemplatesBucketName', Match.anyValue());
+  }
+});
+
+test('may update only the stacks it restores, passing them only the CDK execution role', () => {
+  const { main } = synth();
+  const update = statements(main).find((s) => actions(s).includes('cloudformation:UpdateStack'));
+  assert.match(JSON.stringify(update.Resource), /stack\/deploy-aws-api-gateway-dev\/\*/);
+  assert.match(JSON.stringify(update.Resource), /stack\/deploy-aws-lambda-dev\/\*/);
+  assert.doesNotMatch(JSON.stringify(update.Resource), /rollback-service|cloudfront/);
+  const passRole = statements(main).find((s) => actions(s).includes('iam:PassRole'));
+  assert.match(JSON.stringify(passRole.Resource), /role\/cdk-\*-cfn-exec-role-/);
+  assert.deepEqual(passRole.Condition, { StringEquals: { 'iam:PassedToService': 'cloudformation.amazonaws.com' } });
 });
 
 test('runs the scheduled check every 5 minutes', () => {

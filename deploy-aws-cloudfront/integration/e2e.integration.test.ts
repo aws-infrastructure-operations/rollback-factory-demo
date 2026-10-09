@@ -140,6 +140,20 @@ describe(`${config.frontendName}${target === 'integration' ? '-integration' : ''
     assert.deepEqual(problems.splice(0), []);
   });
 
+  test('lists the stacks whose templates are archived, read only', async () => {
+    await page.locator('#cloudformation-stacks:not([data-state="loading"])').waitFor();
+    assert.equal(await page.locator('#cloudformation-stacks').getAttribute('data-state'), 'ready');
+    const response = await api('/api/cloudformation-stacks');
+    assert.equal(response.status(), 200);
+    const { stacks } = await response.json();
+    assert.deepEqual(stacks.map((s: { name: string }) => s.name).sort(), [
+      'deploy-aws-api-gateway-dev', 'deploy-aws-api-gateway-prod', 'deploy-aws-lambda-dev', 'deploy-aws-lambda-prod',
+    ]);
+    // never a stack whose templates aren't archived
+    assert.equal((await api('/api/cloudformation-stacks/rollback-service-dev')).status(), 400);
+    assert.deepEqual(problems.splice(0), []);
+  });
+
   test('the region picker starts on the dashboard region and switches the API Gateways panel', async () => {
     assert.equal(await page.getByText('AWS Account').count(), 0, 'no account picker');
     const picker = page.locator('#region-picker');

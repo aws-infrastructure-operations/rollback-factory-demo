@@ -1,13 +1,16 @@
 import { parseArgs } from 'node:util';
 import { EnvConfig, getConfig } from '../../lib/config.js';
 
-/** Parses `--env <dev|testing|staging|prod>` (default: API_ENV or dev) plus any extra string options. */
-export function parseCli<T extends string>(extra: readonly T[] = []) {
-  const options = Object.fromEntries([
-    ['env', { type: 'string' }],
-    ...extra.map((name) => [name, { type: 'string' }]),
-  ]) as Record<'env' | T, { type: 'string' }>;
-  const values = parseArgs({ options, strict: true }).values as Partial<Record<'env' | T, string>>;
+/** Parses `--env <dev|testing|staging|prod>` (default: API_ENV or dev) plus extra string / boolean options. */
+export function parseCli<S extends string = never, B extends string = never>(
+  strings: readonly S[] = [],
+  booleans: readonly B[] = [],
+) {
+  const options: Record<string, { type: 'string' } | { type: 'boolean'; default: false }> = { env: { type: 'string' } };
+  for (const name of strings) options[name] = { type: 'string' };
+  for (const name of booleans) options[name] = { type: 'boolean', default: false };
+  const values = parseArgs({ options, strict: true }).values as
+    Partial<Record<'env' | S, string>> & Record<B, boolean>;
   const config: EnvConfig = getConfig(values.env ?? process.env.API_ENV ?? 'dev');
   return { config, values };
 }

@@ -172,13 +172,20 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['cloudfront:GetDistribution', 'cloudfront:ListInvalidations', 'cloudfront:GetInvalidation'],
       resources: [`arn:${cdk.Aws.PARTITION}:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`],
     }));
-    // The deployment history of every environment's frontend-user distribution and api-user API:
-    // Query only, so the dashboard of any environment shows it (tables of environments not deployed
-    // just don't exist)
+    // The deployment history of every environment's frontend-user distribution and api-user API, and the
+    // CloudFormation template archive (rollback-service): Query only, so the dashboard of any environment
+    // shows it (tables of environments not deployed just don't exist)
     const table = (prefix: string) => `arn:${cdk.Aws.PARTITION}:dynamodb:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:table/${PROJECT_NAME}-${prefix}-*`;
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['dynamodb:Query'],
-      resources: [table('frontend-deployments'), table('deployments')],
+      resources: [table('frontend-deployments'), table('deployments'), table('stack-templates')],
+    }));
+    // The CloudFormation stacks whose templates deploy-test-rollback.yml archives (cloudformation-stacks.ts):
+    // their status, outputs and running template (hashed to find it in the archive, see below)
+    this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:GetTemplate'],
+      resources: ['dev', 'prod'].flatMap((env) => ['api-gateway', 'lambda'].map((project) =>
+        `arn:${cdk.Aws.PARTITION}:cloudformation:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stack/deploy-aws-${project}-${env}/*`)),
     }));
     // The OpenAPI export of each recorded api-user-<env> deployment, to show what a rollback changes
     // (api-gateway-specs.ts): GetObject on those exports only, in every environment's bucket
@@ -193,7 +200,7 @@ export class FrontendUserStack extends cdk.Stack {
       actions: ['logs:FilterLogEvents'],
       resources: [rollbackLogs, `${rollbackLogs}:*`],
     }));
-    // Restoring a recorded API deployment: the rollback service re-imports its spec and redeploys
+    // Restores and alias moves: the rollback service of the environment carries them out
     this.dashboardApi.addToRolePolicy(new iam.PolicyStatement({
       actions: ['lambda:InvokeFunction'],
       resources: [`arn:${cdk.Aws.PARTITION}:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:${PROJECT_NAME}-rollback-service-*`],

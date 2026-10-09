@@ -10,6 +10,8 @@
 //   { type: 'point-alias', functionName, ... }      the dashboard's alias/version menus: Lambda manager
 //   { type: 'restore', manager: 'apigateway', ... } deploy-aws-api-gateway: deployment:restore, the dashboard
 //   { type: 'restore', manager: 'cloudfront', ... } the dashboard's Restore button (deploy-aws-cloudfront)
+//   { type: 'restore', manager: 'cloudformation', stackName, deployedAt, ... }
+//                                                   the dashboard's stack Restore: an archived template
 import type { EnvName } from '../lib/config.js';
 import { parseAlarmName } from '../lib/config.js';
 
@@ -36,6 +38,7 @@ export type ServiceEvent =
   | { type: 'sync'; functionName?: string }
   | PointAliasEvent
   | { type: 'restore'; manager: 'apigateway' | 'cloudfront'; deployedAt: string; reason?: string; actor?: string }
+  | { type: 'restore'; manager: 'cloudformation'; stackName: string; deployedAt: string; reason?: string; actor?: string }
   | { Records: SnsRecord[] };
 
 export interface Managers {
@@ -43,6 +46,7 @@ export interface Managers {
   apigatewayRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
   cloudfront: (alarm: AlarmNotification, env: EnvName) => Promise<unknown>;
   cloudfrontRestore: (req: { deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
+  cloudformationRestore: (req: { stackName: string; deployedAt: string; reason?: string; actor?: string }, env: EnvName) => Promise<unknown>;
   /** The Lambda manager takes the raw event: SNS records, sync, scheduled checks and alias moves. */
   lambda: (event: { type: 'scheduled-check' } | { type: 'sync'; functionName?: string } | PointAliasEvent | { Records: SnsRecord[] }) => Promise<unknown[]>;
 }
@@ -102,7 +106,8 @@ export function createRouter(envName: EnvName, managers: Managers) {
       case 'restore':
         if (event.manager === 'apigateway') return managers.apigatewayRestore(event, envName);
         if (event.manager === 'cloudfront') return managers.cloudfrontRestore(event, envName);
-        throw new Error(`Restore is only supported for apigateway and cloudfront, got ${(event as { manager: string }).manager}`);
+        if (event.manager === 'cloudformation') return managers.cloudformationRestore(event, envName);
+        throw new Error(`Restore is only supported for apigateway, cloudfront and cloudformation, got ${(event as { manager: string }).manager}`);
       default:
         throw new Error(`Unknown event: ${JSON.stringify(event)}`);
     }

@@ -121,6 +121,14 @@ Where the drawing is behind the code:
 
   The diagrams still call them reusable workflows (`*-deploy.yml`); they became actions after the diagrams were drawn.
 - **No workflow rolls back on an alarm.** That happens only in AWS: alarm → SNS → rollback service.
+- **[`deploy-test-rollback`](.github/workflows/deploy-test-rollback.yml) (manual):** it deploys one component straight to
+  clients, tests it there, and rolls back to the **latest stable** version if the tests fail:
+  - **API Gateway:** stage `v1` gets the new config. On a failure, the newest stable verified OpenAPI spec is re-imported from S3, still calling the `live` aliases.
+  - **Lambda:** `live` gets the new version. On a failure, `live` and `integration` go back to the newest version marked
+    `stable` in the DynamoDB archive, and `$LATEST` is restored from its zip in S3.
+  - **CloudFormation:** this covers the whole `deploy-aws-api-gateway-<env>` or `deploy-aws-lambda-<env>` stack. Each
+    deployed template is archived in `rollback-service`'s `stack-templates` bucket and table, and a failure updates the stack back to the newest
+    template that passed the tests.
 
 ## The dashboard
 

@@ -5,7 +5,7 @@
 import { CloudWatchLogsClient, FilterLogEventsCommand, type FilteredLogEvent } from '@aws-sdk/client-cloudwatch-logs';
 import { InvokeCommand, type LambdaClient } from '@aws-sdk/client-lambda';
 
-export type OperationKind = 'apigateway-restore' | 'cloudfront-restore' | 'lambda-point-alias';
+export type OperationKind = 'apigateway-restore' | 'cloudfront-restore' | 'lambda-point-alias' | 'cloudformation-restore';
 
 /** What each kind goes through, in order, and the log line that marks each step done. */
 export const STEPS: Record<OperationKind, Array<{ label: string; marker: string }>> = {
@@ -30,10 +30,17 @@ export const STEPS: Record<OperationKind, Array<{ label: string; marker: string 
     { label: 'Restored $LATEST from the archived package', marker: '"step":"latest-restored"' },
     { label: 'Recorded the change', marker: '"step":"recorded"' },
   ],
+  'cloudformation-restore': [
+    { label: 'Rollback service started', marker: 'START RequestId' },
+    { label: 'Read the archived template', marker: '"msg":"restoring"' },
+    { label: 'Started the stack update', marker: '"step":"update-started"' },
+    { label: 'CloudFormation updated the stack', marker: '"step":"stack-updated"' },
+    { label: 'Recorded the restore', marker: '"msg":"restore complete"' },
+  ],
 };
 
 const KINDS = Object.keys(STEPS) as OperationKind[];
-const OPERATION_ID = /^([a-z0-9]+)\.(apigateway-restore|cloudfront-restore|lambda-point-alias)\.(\d{13})\.([0-9a-f]{8})$/;
+const OPERATION_ID = /^([a-z0-9]+)\.(apigateway-restore|cloudfront-restore|lambda-point-alias|cloudformation-restore)\.(\d{13})\.([0-9a-f]{8})$/;
 
 /** <env>.<kind>.<start ms>.<random>: all the page needs to follow the run. */
 export function parseOperationId(id: string) {
@@ -100,6 +107,8 @@ export const DEFAULT_ESTIMATE_MS: Record<OperationKind, number> = {
   'cloudfront-restore': 8_000,
   // syncs the archive and restores $LATEST from S3
   'lambda-point-alias': 25_000,
+  // CloudFormation updates every resource that differs
+  'cloudformation-restore': 180_000,
 };
 /** Starting the run asynchronously and delivering its lines takes a little on top of its own duration. */
 const OVERHEAD_MS = 2_500;
@@ -139,7 +148,7 @@ export async function estimateFor(logs: CloudWatchLogsClient, logGroupName: stri
 export const clearEstimates = () => estimates.clear();
 
 const REQUEST_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
-/** A run is never longer than the service's timeout (2 min): stop looking after that. */
+/** A run that never logged anything by now is lost (the service's own timeout is 10 min, but it logs at once). */
 const GIVE_UP_AFTER_MS = 5 * 60 * 1000;
 
 async function filter(logs: CloudWatchLogsClient, logGroupName: string, pattern: string, startTime: number) {
