@@ -13,6 +13,7 @@ import * as snsSubs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
 import rollbackConfig from '../rollback-config.json';
 import { resolveRegistry } from '../lambda/managers/lambda/registry.js';
+import { restorableStacks } from '../lambda/managers/cloudformation/manager.js';
 import { ALARM_TYPES, EDGE_REGION, EnvConfig, LAMBDA_ROLLBACK_SETTINGS, PROJECT_NAME } from './config.js';
 
 /**
@@ -100,9 +101,10 @@ export class RollbackServiceStack extends cdk.Stack {
     });
 
     // --- CloudFormation template archive -------------------------------------------------
-    // Not used by the rollback Lambda: .github/workflows/deploy-test-rollback.yml archives each template
-    // it deploys here (<stack>/<timestamp>/template.json) and records it, and when the integration tests
-    // fail it updates the stack back to the newest template that passed them (stable).
+    // .github/workflows/deploy-test-rollback.yml archives each template it deploys here
+    // (<stack>/<timestamp>/template.json) and records it, and when the integration tests fail it updates
+    // the stack back to the newest template that passed them (stable). The CloudFormation manager
+    // restores one chosen on the dashboard.
     // stackName = deploy-aws-<project>-<env>, deployedAt = ISO 8601
     const stackTemplatesTable = new dynamodb.TableV2(this, 'StackTemplatesTable', {
       tableName: config.stackTemplatesTableName,
@@ -128,8 +130,9 @@ export class RollbackServiceStack extends cdk.Stack {
       entry: path.join(__dirname, '..', 'lambda', 'handler.ts'),
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
-      // archiving Lambda packages, restoring $LATEST, re-importing an API spec
-      timeout: cdk.Duration.minutes(2),
+      // archiving Lambda packages, restoring $LATEST, re-importing an API spec: seconds; restoring a
+      // stack's template waits for CloudFormation's update: minutes
+      timeout: cdk.Duration.minutes(10),
       // Lambda packages are held in memory while being copied to S3
       memorySize: 512,
       retryAttempts: 0,
@@ -145,6 +148,7 @@ export class RollbackServiceStack extends cdk.Stack {
         VERSIONS_TABLE_NAME: versionsTable.tableName,
         VERSIONS_TABLE_ARN: versionsTable.tableArn,
         ARTIFACTS_BUCKET_NAME: artifactsBucket.bucketName,
+        STACK_TEMPLATES_TABLE_NAME: stackTemplatesTable.tableName,
         ROLLBACK_COOLDOWN_MINUTES: String(LAMBDA_ROLLBACK_SETTINGS.cooldownMinutes),
         STABLE_AFTER_MINUTES: String(LAMBDA_ROLLBACK_SETTINGS.stableAfterMinutes),
         LIVE_ERRORS_LOOKBACK_MINUTES: String(LAMBDA_ROLLBACK_SETTINGS.liveErrorsLookbackMinutes),
@@ -221,6 +225,23 @@ export class RollbackServiceStack extends cdk.Stack {
       resources: [this.formatArn({ service: 'cloudfront', region: '', resource: 'distribution', resourceName: '*' })],
     }));
     dynamodb.TableV2.fromTableName(this, 'FrontendDeploymentsTable', name('frontend-deployments')).grantReadWriteData(this.service);
+
+    // --- CloudFormation manager (restores an archived template, chosen on the dashboard) -----
+    const restorable = restorableStacks(env)
+      .map((stackName) => this.formatArn({ service: 'cloudformation', resource: 'stack', resourceName: `${stackName}/*` }));
+    this.service.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudformation:DescribeStacks', 'cloudformation:UpdateStack'],
+      resources: restorable,
+    }));
+    // The update runs as the stack's own service role, the CDK execution role (it changes the stack's
+    // resources; this function can't). CloudFormation reads the template from S3 as this function.
+    this.service.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:PassRole'],
+      resources: [`arn:${cdk.Aws.PARTITION}:iam::${cdk.Aws.ACCOUNT_ID}:role/cdk-*-cfn-exec-role-${cdk.Aws.ACCOUNT_ID}-${cdk.Aws.REGION}`],
+      conditions: { StringEquals: { 'iam:PassedToService': 'cloudformation.amazonaws.com' } },
+    }));
+    stackTemplatesBucket.grantRead(this.service);
+    stackTemplatesTable.grantReadWriteData(this.service);
 
     // --- Lambda manager ---------------------------------------------------------------------
     // The service's own role has no Lambda, S3 or DynamoDB permissions for the registered functions.

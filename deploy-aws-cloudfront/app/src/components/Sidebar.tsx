@@ -6,6 +6,7 @@ const services: Array<{ label: string; href: string; icon: IconName; tint?: stri
   { label: 'API Gateway', href: '#api-gateways', icon: 'apiGateway', tint: 'tint-api', active: true },
   { label: 'Lambda', href: '#lambda-functions', icon: 'lambda', tint: 'tint-lambda' },
   { label: 'CloudFront', href: '#cloudfront-distributions', icon: 'globe', tint: 'tint-cloudfront' },
+  { label: 'CloudFormation', href: '#cloudformation-stacks', icon: 'stack', tint: 'tint-cloudformation' },
   { label: 'Rollbacks', href: '#rollbacks', icon: 'rollback', tint: 'tint-rollback' },
 ];
 

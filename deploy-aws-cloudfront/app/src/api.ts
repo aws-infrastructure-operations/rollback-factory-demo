@@ -272,6 +272,61 @@ export const fetchDistributionMetrics = (id: string, signal?: AbortSignal) =>
 export const restoreDistributionRelease = (id: string, deployedAt: string, reason?: string) =>
   postJson<StartedOperation>(distributionUrl(id, '/restore'), { deployedAt, ...(reason && { reason }) });
 
+// --- CloudFormation stacks: the templates deploy-test-rollback.yml archives ---------------------
+
+/** Same shape as StackSummary in lambda/dashboard-api/cloudformation-stacks.ts. */
+export interface CloudFormationStack {
+  name: string;
+  env: string;
+  /** api-gateway | lambda */
+  project: string;
+  /** absent when the stack isn't deployed */
+  status?: string;
+  lastUpdated?: string;
+}
+
+/** Same shape as ArchivedTemplate in lambda/dashboard-api/cloudformation-stacks.ts. */
+export interface ArchivedTemplate {
+  /** what a restore names */
+  deployedAt: string;
+  /** baseline | cicd | rollback | restore */
+  source: string;
+  actor?: string;
+  commit?: string;
+  runUrl?: string;
+  description?: string;
+  /** s3:// URL of the template */
+  template: string;
+  templateHash: string;
+  /** the stack runs this template now */
+  running: boolean;
+  /** the integration tests passed on it */
+  stable: boolean;
+  rolledBack: boolean;
+  restoredFrom?: string;
+}
+
+/** Same shape as StackDetails in lambda/dashboard-api/cloudformation-stacks.ts. */
+export interface CloudFormationStackDetails extends CloudFormationStack {
+  statusReason?: string;
+  /** false when the stack runs a template that was never archived (another workflow deployed it) */
+  runningArchived: boolean;
+  /** newest first, the latest 25 */
+  templates: ArchivedTemplate[];
+  configuration: Array<{ label: string; value: string }>;
+  outputs: Array<{ key: string; value: string; description?: string }>;
+}
+
+const stackUrl = (name: string, sub = '') => `/api/cloudformation-stacks/${encodeURIComponent(name)}${sub}`;
+
+export const fetchStacks = (signal?: AbortSignal) => getJson<{ stacks: CloudFormationStack[] }>('/api/cloudformation-stacks', signal);
+
+export const fetchStackDetails = (name: string, signal?: AbortSignal) => getJson<CloudFormationStackDetails>(stackUrl(name), signal);
+
+/** Updates the stack back to an archived template (the rollback service waits for CloudFormation). */
+export const restoreStackTemplate = (name: string, deployedAt: string, reason?: string) =>
+  postJson<StartedOperation>(stackUrl(name, '/restore'), { deployedAt, ...(reason && { reason }) });
+
 // --- Operations: restores and alias moves the rollback service runs ----------------------------
 
 /** What a restore or alias move answers: the rollback service runs it; follow it with fetchOperation. */
@@ -282,7 +337,7 @@ export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'skipped' | '
 /** Same shape as OperationView in lambda/dashboard-api/operations.ts. */
 export interface OperationView {
   id: string;
-  kind: 'apigateway-restore' | 'cloudfront-restore' | 'lambda-point-alias';
+  kind: 'apigateway-restore' | 'cloudfront-restore' | 'lambda-point-alias' | 'cloudformation-restore';
   status: OperationStatus;
   /** 0..100 */
   progress: number;

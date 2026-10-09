@@ -1,9 +1,10 @@
 // The dashboard's API, behind the distributions at /api/* (Lambda function URL with Origin Access
-// Control, so only CloudFront can call it). Read-only but for one action: restoring a recorded
-// deployment of an API this project deploys, which the rollback service carries out.
+// Control, so only CloudFront can call it). Reads, plus the changes the rollback service carries out:
+// restoring a recorded API deployment, CloudFront release or CloudFormation template, and moving aliases.
 // Every call but GET /api/auth/config needs a signed-in user of the dashboard's user pool (auth.ts).
 import { APIGatewayClient, GetRestApiCommand } from '@aws-sdk/client-api-gateway';
 import { ApiGatewayV2Client } from '@aws-sdk/client-apigatewayv2';
+import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -23,6 +24,7 @@ import {
   getLambdaFunctionDetails, getLambdaFunctionMetrics, isFunctionName, listLambdaFunctions,
 } from './lambda-functions.js';
 import { getOperation } from './operations.js';
+import { getStackDetails, isRestorableStack, listStacks, restoreStackTemplate } from './cloudformation-stacks.js';
 import { listArchivedVersions } from './lambda-archive.js';
 import { listRollbacks } from './rollbacks.js';
 import { authConfig, authenticate, cognitoVerifier, type User, type VerifyIdToken } from './auth.js';
@@ -58,6 +60,8 @@ const cloudwatchIn = perRegion((region) => new CloudWatchClient(inRegion(region)
 /** The dashboard's own region: deployment records, rollbacks and the rollback services are here. */
 const home = () => process.env.AWS_REGION ?? '';
 const cloudfront = new CloudFrontClient({});
+// the stacks whose templates are archived: in the dashboard's own region
+const cfn = new CloudFormationClient({});
 // CloudFront metrics only exist in us-east-1
 const edgeCloudwatch = new CloudWatchClient({ region: 'us-east-1' });
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -76,6 +80,7 @@ const json = (statusCode: number, body: unknown): FunctionUrlResult => ({
 const API_TYPES: ApiType[] = ['REST', 'HTTP', 'WEBSOCKET'];
 const RESOURCE_NAMES: Record<string, string> = {
   'api-gateways': 'API Gateways', 'lambda-functions': 'Lambda functions', 'cloudfront-distributions': 'CloudFront distributions',
+  'cloudformation-stacks': 'CloudFormation stacks',
 };
 
 /**
@@ -121,6 +126,10 @@ export const handler = createHandler(() => (verifier ??= cognitoVerifier(authCon
  * GET /api/cloudfront-distributions/<id>: one distribution's release history and configuration.
  * GET /api/cloudfront-distributions/<id>/invalidations: its latest invalidations.
  * GET /api/cloudfront-distributions/<id>/metrics: its last 24 hours of metrics.
+ * GET /api/cloudformation-stacks: the stacks whose templates deploy-test-rollback.yml archives (API and Lambda, dev and prod).
+ * GET /api/cloudformation-stacks/<name>: one stack's archived templates (which it runs now), status and outputs.
+ * POST /api/cloudformation-stacks/<name>/restore {"deployedAt": "...", "reason"?: "..."}: updates the stack
+ *   to an archived template (the rollback service's CloudFormation manager; takes minutes).
  * GET /api/rollbacks: every rollback of the APIs, Lambda functions and sites, dev and prod, newest first.
  */
 export async function route(event: FunctionUrlEvent, user?: User): Promise<FunctionUrlResult> {
@@ -131,25 +140,28 @@ export async function route(event: FunctionUrlEvent, user?: User): Promise<Funct
   if (event.rawPath === '/api/regions') {
     return method === 'GET' || method === 'HEAD' ? json(200, regionList(home())) : json(405, { message: 'Method not allowed' });
   }
-  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
+  const route = /^\/api\/(api-gateways|lambda-functions|cloudfront-distributions|cloudformation-stacks)(?:\/([^/]+)(?:\/(metrics|invalidations|restore|point-alias|spec))?)?$/.exec(event.rawPath);
   if (!route) return json(404, { message: 'Not found' });
   const [, resource, id, sub] = route;
-  const restore = sub === 'restore' && (resource === 'api-gateways' || resource === 'cloudfront-distributions');
+  const restore = sub === 'restore' && (resource === 'api-gateways' || resource === 'cloudfront-distributions' || resource === 'cloudformation-stacks');
   const point = sub === 'point-alias' && resource === 'lambda-functions';
   const write = restore || point;
   if (write ? method !== 'POST' : method !== 'GET' && method !== 'HEAD') return json(405, { message: 'Method not allowed' });
   try {
     if (restore && resource === 'api-gateways') return await restoreApiDeployment(id!, event, actor);
+    if (restore && resource === 'cloudformation-stacks') return await restoreStack(id!, event, actor);
     if (restore) return await restoreDistributionRelease(id!, event, actor);
     if (point) return await pointLambdaAlias(id!, event, actor);
     if (resource === 'api-gateways') return await apiGateways(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
+    if (resource === 'cloudformation-stacks') return await stacks(id, sub);
     if (resource === 'lambda-functions') return await lambdaFunctions(id, sub, new URLSearchParams(event.rawQueryString ?? ''));
     return await distributions(id, sub);
   } catch (err) {
     // details stay in the logs; the page only needs to know the data isn't available
     console.error(`${write ? 'Changing' : 'Reading'} ${event.rawPath} failed`, err);
     if (point) return json(502, { message: 'Could not point the alias' });
-    return json(502, { message: restore ? `Could not restore the ${resource === 'api-gateways' ? 'deployment' : 'release'}` : `Could not read the ${RESOURCE_NAMES[resource]}` });
+    const restored = { 'api-gateways': 'deployment', 'cloudfront-distributions': 'release', 'cloudformation-stacks': 'template' }[resource];
+    return json(502, { message: restore ? `Could not restore the ${restored}` : `Could not read the ${RESOURCE_NAMES[resource]}` });
   }
 }
 
@@ -276,6 +288,21 @@ async function pointLambdaAlias(name: string, event: FunctionUrlEvent, actor: st
   const outcome = await pointAlias(lambda, registered, process.env.PROJECT_NAME!, name, {
     aliasName: body!.aliasName as string, version: body!.version as number, actor,
   });
+  return outcome.ok ? json(202, { operationId: outcome.operationId }) : json(outcome.status, { message: outcome.message });
+}
+
+async function stacks(name: string | undefined, sub: string | undefined) {
+  if (!name) return json(200, { stacks: await listStacks(cfn) });
+  if (sub) return json(404, { message: 'Not found' });
+  if (!isRestorableStack(name)) return json(400, { message: 'Expected deploy-aws-api-gateway-<env> or deploy-aws-lambda-<env>' });
+  const details = await getStackDetails(cfn, dynamo, process.env.PROJECT_NAME!, name);
+  return details ? json(200, details) : json(404, { message: `No stack ${name}` });
+}
+
+async function restoreStack(name: string, event: FunctionUrlEvent, actor: string) {
+  const body = restoreBody(event);
+  if (!isRestorableStack(name) || !body) return json(400, { message: `Expected deploy-aws-api-gateway-<env> or deploy-aws-lambda-<env> and ${RESTORE_BODY}` });
+  const outcome = await restoreStackTemplate(cfn, dynamo, lambda, process.env.PROJECT_NAME!, name, { ...body, actor });
   return outcome.ok ? json(202, { operationId: outcome.operationId }) : json(outcome.status, { message: outcome.message });
 }
 

@@ -231,7 +231,7 @@ test('gives the dashboard API read access to the APIs, their stages and deployme
   assert.doesNotMatch(resources, /::[^"]*\*/, 'no wildcard that crosses into deeper paths');
 });
 
-test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, deployment history, metrics) and invoke the rollback service only', () => {
+test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, CloudFormation, deployment history, metrics) and invoke the rollback service only', () => {
   const t = synth('dev');
   const [roleId] = Object.keys(t.findResources('AWS::IAM::Role')).filter((id) => id.startsWith('DashboardApi'));
   const statements = Object.values(t.findResources('AWS::IAM::Policy'))
@@ -239,12 +239,12 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
     .flatMap((policy: any) => policy.Properties.PolicyDocument.Statement);
   const actions = statements.flatMap((s: any) => [s.Action].flat()).sort();
   assert.deepEqual(actions, [
-    'apigateway:GET', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
+    'apigateway:GET', 'cloudformation:DescribeStacks', 'cloudformation:GetTemplate', 'cloudfront:GetDistribution', 'cloudfront:GetInvalidation', 'cloudfront:ListDistributions',
     'cloudfront:ListInvalidations', 'cloudwatch:GetMetricData', 'dynamodb:Query', 'dynamodb:Query',
     'lambda:InvokeFunction', 'lambda:ListAliases', 'lambda:ListFunctions', 'lambda:ListVersionsByFunction', 'logs:FilterLogEvents', 's3:GetObject',
   ]);
   const query = statements.find((s: any) => s.Action === 'dynamodb:Query' && !s.Condition);
-  assert.equal(query.Resource.length, 2);
+  assert.equal(query.Resource.length, 3);
   // the rollback service's version archives, only the registered functions' items
   const archive = statements.find((s: any) => s.Action === 'dynamodb:Query' && s.Condition);
   assert.ok(JSON.stringify(archive.Resource).includes(':table/rollback-factory-demo-lambda-archive-*"'), 'the version archives');
@@ -253,6 +253,13 @@ test('lets the dashboard API list and read (API Gateway, Lambda, CloudFront, dep
   ]);
   assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-frontend-deployments-\*"/, 'the frontend deployments tables');
   assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-deployments-\*"/, 'the API deployments tables');
+  assert.match(JSON.stringify(query.Resource), /:table\/rollback-factory-demo-stack-templates-\*"/, 'the CloudFormation template archives');
+  // reads (no updates) of the four stacks whose templates are archived, not the PR environments' stacks
+  const stacks = statements.find((s: any) => [s.Action].flat().includes('cloudformation:GetTemplate'));
+  assert.equal(stacks.Resource.length, 4);
+  for (const name of ['deploy-aws-api-gateway-dev', 'deploy-aws-lambda-dev', 'deploy-aws-api-gateway-prod', 'deploy-aws-lambda-prod']) {
+    assert.ok(JSON.stringify(stacks.Resource).includes(`:stack/${name}/*"`), name);
+  }
   const invoke = statements.find((s: any) => s.Action === 'lambda:InvokeFunction');
   assert.match(JSON.stringify(invoke.Resource), /:function:rollback-factory-demo-rollback-service-\*"\]\]}$/, 'the rollback services only');
   const scoped = statements.find((s: any) => [s.Action].flat().includes('lambda:ListAliases'));
