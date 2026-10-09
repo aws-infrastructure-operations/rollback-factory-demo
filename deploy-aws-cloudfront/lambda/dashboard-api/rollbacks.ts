@@ -2,8 +2,11 @@
 // - API: <project>-deployments-<env>, records with source "rollback" (alarm) or "restore" (by hand)
 // - frontend: <project>-frontend-deployments-<env>, the same two sources
 // - Lambda: <project>-lambda-archive-<env>, the version items marked rolledBackAt (the version left)
+// - CloudFormation: <project>-stack-templates-<env>, records with source "rollback" (deploy-test-rollback.yml
+//   after failed tests) or "restore" (the dashboard), for deploy-aws-api-gateway-<env> and deploy-aws-lambda-<env>
 // For the environments CI deploys (dev, prod); a table that doesn't exist is skipped.
 import { DynamoDBDocumentClient, QueryCommand, type QueryCommandInput } from '@aws-sdk/lib-dynamodb';
+import { STACK_PROJECTS } from './cloudformation-stacks.js';
 import type { RegisteredFunction } from './registered-functions.js';
 
 export const ROLLBACK_ENVS = ['dev', 'prod'];
@@ -13,17 +16,20 @@ export const MAX_ROLLBACKS = 100;
 
 /** One rollback, as GET /api/rollbacks returns it (app/src/api.ts has the same shape). */
 export interface RollbackEntry {
-  kind: 'api' | 'lambda' | 'frontend';
+  kind: 'api' | 'lambda' | 'frontend' | 'stack';
   env: string;
-  /** api-user-dev, service-lambda-dev, frontend-user-dev, ... */
+  /** api-user-dev, service-lambda-dev, frontend-user-dev, deploy-aws-lambda-dev, ... */
   target: string;
   /** ISO 8601 */
   at: string;
-  /** an alarm fired, or someone restored / pointed back by hand (the dashboard, a workflow) */
-  trigger: 'alarm' | 'manual';
+  /**
+   * an alarm fired, integration tests failed (deploy-test-rollback.yml rolled a stack back), or someone
+   * restored / pointed back by hand (the dashboard, a workflow)
+   */
+  trigger: 'alarm' | 'tests' | 'manual';
   /** the alarm's name, or who did it */
   by: string;
-  /** what was replaced: a deployment id, a release id or vN */
+  /** what was replaced: a deployment id, a release id, vN or a template hash */
   from?: string;
   /** what it went back to */
   to?: string;
@@ -145,6 +151,48 @@ async function lambdaRollbacks(
   return perFunction.flat();
 }
 
+interface StackTemplateItem {
+  deployedAt: string;
+  templateSha256: string;
+  source: string;
+  actor?: string;
+  description?: string;
+  rolledBackFrom?: string;
+  /** restores: the template the stack ran before */
+  replacedTemplateSha256?: string;
+}
+
+/** "Restore to the template archived at <ISO>: reason" (rollback-service's CloudFormation manager) -> reason */
+const stackRestoreReason = (description?: string) => /^Restore to the template archived at \S+: (.+)$/.exec(description ?? '')?.[1];
+/** Templates are named by their hash, as the CloudFormation panel shows it. */
+const templateHash = (sha?: string) => sha?.slice(0, 12);
+
+async function stackRollbacks(dynamo: DynamoDBDocumentClient, project: string, env: string): Promise<RollbackEntry[]> {
+  const perStack = await Promise.all(STACK_PROJECTS.map(async (p) => {
+    const target = `deploy-aws-${p}-${env}`;
+    const records = await query<StackTemplateItem>(dynamo, newest(`${project}-stack-templates-${env}`, 'stackName', target));
+    const byAt = new Map(records.map((r) => [r.deployedAt, r]));
+    return records.flatMap((r): RollbackEntry[] => {
+      if (r.source !== 'rollback' && r.source !== 'restore') return [];
+      // a rollback names the record whose tests failed; a restore records the template it replaced
+      const from = r.rolledBackFrom ? byAt.get(r.rolledBackFrom)?.templateSha256 : r.replacedTemplateSha256;
+      return [{
+        kind: 'stack',
+        env,
+        target,
+        at: r.deployedAt,
+        trigger: r.source === 'rollback' ? 'tests' : 'manual',
+        by: byOf(r.actor),
+        ...(templateHash(from) && { from: templateHash(from) }),
+        ...(templateHash(r.templateSha256) && { to: templateHash(r.templateSha256) }),
+        ...(r.source === 'rollback' && { reason: 'integration tests failed' }),
+        ...(r.source === 'restore' && stackRestoreReason(r.description) && { reason: stackRestoreReason(r.description) }),
+      }];
+    });
+  }));
+  return perStack.flat();
+}
+
 /** The rollbacks of every environment and kind, newest first, at most MAX_ROLLBACKS. */
 export async function listRollbacks(
   dynamo: DynamoDBDocumentClient,
@@ -156,6 +204,7 @@ export async function listRollbacks(
     apiRollbacks(dynamo, project, env),
     frontendRollbacks(dynamo, project, env),
     lambdaRollbacks(dynamo, project, env, registered),
+    stackRollbacks(dynamo, project, env),
   ]));
   return all.flat().sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_ROLLBACKS);
 }

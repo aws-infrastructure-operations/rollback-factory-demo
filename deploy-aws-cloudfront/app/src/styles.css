@@ -334,6 +334,7 @@ td.date-wrap { white-space: normal; min-width: 90px; }
 }
 .rollback-kind-icon.tint-api, .rollback-kind-icon.tint-cloudfront { background: var(--api); }
 .rollback-kind-icon.tint-lambda { background: var(--lambda); }
+.rollback-kind-icon.tint-cloudformation { background: var(--cloudformation); }
 .rollback-change { display: inline-flex; align-items: center; gap: 4px; font: 12px ui-monospace, monospace; color: var(--muted); }
 .rollback-from { color: #b42318; text-decoration: line-through; text-decoration-color: #f5c2bd; }
 .rollback-to { color: var(--ok); font-weight: 600; }

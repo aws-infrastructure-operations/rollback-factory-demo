@@ -1,4 +1,4 @@
-// The rollback history: every rollback of the APIs, Lambda functions and sites, from the tables the
+// The rollback history: every rollback of the APIs, Lambda functions, sites and stacks, from the tables the
 // rollback service records them in (GET /api/rollbacks). Read-only: filter by service, search, refresh.
 import { useMemo, useState } from 'react';
 import { fetchRollbacks, type RollbackEntry } from '../api.js';
@@ -12,7 +12,13 @@ const KINDS: Array<{ kind: Kind; label: string; icon: IconName; tint: string }> 
   { kind: 'api', label: 'API Gateway', icon: 'apiGateway', tint: 'tint-api' },
   { kind: 'lambda', label: 'Lambda', icon: 'lambda', tint: 'tint-lambda' },
   { kind: 'frontend', label: 'CloudFront', icon: 'globe', tint: 'tint-cloudfront' },
+  { kind: 'stack', label: 'CloudFormation', icon: 'stack', tint: 'tint-cloudformation' },
 ];
+const TRIGGERS: Record<RollbackEntry['trigger'], { label: string; tag: string }> = {
+  alarm: { label: 'alarm', tag: 'tag-bad' },
+  tests: { label: 'tests failed', tag: 'tag-bad' },
+  manual: { label: 'manual', tag: 'tag-staging' },
+};
 const kindOf = (kind: Kind) => KINDS.find((k) => k.kind === kind)!;
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
@@ -50,7 +56,7 @@ export function RollbacksSection() {
     <ListPanel
       id="rollbacks" icon="rollback" tint="tint-rollback" title="Rollbacks" state={loadState(list)}
       count={list.data && (shown.length === rollbacks.length ? `${rollbacks.length}` : `${shown.length} of ${rollbacks.length}`)}
-      description="Every rollback the rollback service made, in dev and prod: by an alarm, or by hand from here or a workflow."
+      description="Every rollback in dev and prod: by an alarm, after failed tests (stacks), or by hand from here or a workflow."
       searchPlaceholder="Search rollbacks..." search={{ value: query, onChange: setQuery }}
       onRefresh={() => setReloads((n) => n + 1)} refreshing={list.loading}
     >
@@ -104,7 +110,7 @@ export function RollbacksSection() {
           header: 'Trigger',
           cell: (r) => (
             <div className="stacked">
-              <span className={`tag ${r.trigger === 'alarm' ? 'tag-bad' : 'tag-staging'}`}>{r.trigger === 'alarm' ? 'alarm' : 'manual'}</span>
+              <span className={`tag ${TRIGGERS[r.trigger].tag}`}>{TRIGGERS[r.trigger].label}</span>
               <span className="muted-text rollback-by" title={r.by}>{r.by}</span>
             </div>
           ),
