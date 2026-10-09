@@ -7,8 +7,9 @@
  *
  * The restore is not stable until the integration tests pass on it again (deploy-test-rollback.yml).
  */
+import { createHash } from 'node:crypto';
 import {
-  CloudFormationClient, DescribeStacksCommand, UpdateStackCommand, type Stack,
+  CloudFormationClient, DescribeStacksCommand, GetTemplateCommand, UpdateStackCommand, type Stack,
 } from '@aws-sdk/client-cloudformation';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
@@ -37,6 +38,8 @@ export interface StackTemplateRecord {
   rolledBackFrom?: string;
   /** for restores: the deployedAt of the record whose template was restored */
   restoredFrom?: string;
+  /** for restores: the hash of the template the stack ran before (it may never have been archived) */
+  replacedTemplateSha256?: string;
 }
 
 export interface StackRestoreRequest {
@@ -66,6 +69,27 @@ export const restorableStacks = (env: string) => [`deploy-aws-api-gateway-${env}
 const UPDATABLE = /^(CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|IMPORT_COMPLETE|IMPORT_ROLLBACK_COMPLETE)$/;
 
 const log = (msg: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ manager: 'cloudformation', msg, ...data }));
+
+/** JSON with every object's keys sorted, compact: what `jq -cS` prints. */
+function sortedJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(sortedJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${sortedJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * A template's hash as the archive records it: sha256 of the compact, key-sorted JSON plus jq's
+ * newline (.github/scripts/stack-templates.sh). Undefined for a template that isn't JSON.
+ */
+export function templateSha256(body: string): string | undefined {
+  try {
+    return createHash('sha256').update(`${sortedJson(JSON.parse(body))}\n`).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
 
 async function describe(cfn: CloudFormationClient, stackName: string): Promise<Stack> {
   const { Stacks } = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
@@ -100,6 +124,10 @@ export async function restore(deps: CloudFormationDeps, env: string, req: StackR
   const parameters = (JSON.parse(to.parameterKeys || '[]') as string[])
     .filter((key) => current.has(key))
     .map((ParameterKey) => ({ ParameterKey, UsePreviousValue: true }));
+
+  // what the stack runs now, so the restore records what it replaced
+  const { TemplateBody } = await cfn.send(new GetTemplateCommand({ StackName: req.stackName, TemplateStage: 'Original' }));
+  const replaced = TemplateBody ? templateSha256(TemplateBody) : undefined;
 
   const startedAt = now();
   try {
@@ -151,6 +179,7 @@ export async function restore(deps: CloudFormationDeps, env: string, req: StackR
     description,
     stable: false,
     restoredFrom: to.deployedAt,
+    ...(replaced && { replacedTemplateSha256: replaced }),
   };
   await ddb.send(new PutCommand({ TableName: table, Item: record, ConditionExpression: 'attribute_not_exists(deployedAt)' }));
   log('restore complete', { stackName: req.stackName, to: to.deployedAt, deployedAt: record.deployedAt });

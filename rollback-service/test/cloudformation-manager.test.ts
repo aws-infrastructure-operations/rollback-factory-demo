@@ -1,9 +1,12 @@
 // CloudFormation restore manager, with CloudFormation and DynamoDB stubbed.
 import { strict as assert } from 'node:assert';
 import { beforeEach, test } from 'node:test';
-import { CloudFormationClient, DescribeStacksCommand, UpdateStackCommand } from '@aws-sdk/client-cloudformation';
+import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand, UpdateStackCommand } from '@aws-sdk/client-cloudformation';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { restore, type CloudFormationDeps, type StackTemplateRecord } from '../lambda/managers/cloudformation/manager.js';
+import { createHash } from 'node:crypto';
+import {
+  restore, templateSha256, type CloudFormationDeps, type StackTemplateRecord,
+} from '../lambda/managers/cloudformation/manager.js';
 
 const STACK = 'deploy-aws-lambda-dev';
 const ROLE = 'arn:aws:iam::123456789012:role/cdk-hnb659fds-cfn-exec-role-123456789012-eu-central-1';
@@ -38,6 +41,8 @@ const deps = (): CloudFormationDeps => ({
         const status = statuses.length > 1 ? statuses.shift()! : statuses[0];
         return { Stacks: [{ StackName: STACK, StackStatus: status, RoleARN: ROLE, Parameters: [{ ParameterKey: 'BootstrapVersion' }] }] };
       }
+      // the template it runs now, pretty-printed like CDK writes it
+      if (command instanceof GetTemplateCommand) return { TemplateBody: JSON.stringify({ Resources: { b: 1, a: [2] } }, null, 1) };
       if (command instanceof UpdateStackCommand) {
         if (updateError) throw updateError;
         return { StackId: 'id' };
@@ -86,7 +91,14 @@ test('updates the stack to the archived template with its own role, waits, and r
     description: `Restore to the template archived at ${GOOD.deployedAt}: bad alarm`,
     stable: false,
     restoredFrom: GOOD.deployedAt,
+    replacedTemplateSha256: createHash('sha256').update('{"Resources":{"a":[2],"b":1}}\n').digest('hex'),
   });
+});
+
+test('hashes a template like jq -cS: compact, keys sorted, with a newline; not YAML', () => {
+  assert.equal(templateSha256('{ "b": {"d": 1, "c": [true, null]}, "a": "é" }'),
+    createHash('sha256').update('{"a":"é","b":{"c":[true,null],"d":1}}\n').digest('hex'));
+  assert.equal(templateSha256('Resources: {}'), undefined);
 });
 
 test('only restores the stacks deploy-test-rollback archives, of its own environment', async () => {
